@@ -1,5 +1,7 @@
 # pikuri-web
 
+[![status](https://ci.codeberg.org/api/badges/17299/status.svg)](https://ci.codeberg.org/repos/17299)
+
 Web front-end for [pikuri](https://codeberg.org/mvysny/pikuri) — a Ruby
 LLM agent framework. The browser sibling of
 [pikuri-tui](https://codeberg.org/mvysny/pikuri-tui): same agent, same
