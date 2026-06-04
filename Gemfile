@@ -2,7 +2,7 @@
 
 source 'https://rubygems.org'
 
-ruby '>= 3.4'
+ruby '>= 3.3'
 
 # Web framework. Modular style (Sinatra::Base subclass) so the app class
 # is an ordinary constant under lib/ and testable with rack-test without
