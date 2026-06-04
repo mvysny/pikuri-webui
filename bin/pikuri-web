@@ -1,0 +1,173 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Entry point for the web chat shell built on Pikuri::Agent — the browser
+# sibling of pikuri-tui's bin/pikuri-tui-chat, wiring the same agent /
+# tool set into a Sinatra app instead of a Tuile screen.
+#
+# Pin Bundler to this project's Gemfile so locked dependency versions win
+# and the script works when invoked via a symlink from any working
+# directory. `__dir__` resolves through symlinks, so this points at the
+# real checkout.
+ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __dir__)
+
+require 'bundler/setup'
+require 'optparse'
+
+# pikuri-web has no published gemspec yet, so its lib/ is not on
+# Bundler's load path. Adding it here lets `require 'pikuri_web'`
+# resolve through Zeitwerk.
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+require 'pikuri-core'
+require 'pikuri_web'
+
+server = 'http://localhost:8080'
+model  = 'unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M'
+api_key_env = 'OPENAI_API_KEY'
+port = 4567
+bind = '127.0.0.1'
+
+parser = OptionParser.new do |opts|
+  opts.banner = 'Usage: pikuri-web [options]'
+  opts.separator ''
+  opts.separator 'Options:'
+  opts.on('--server URL', "LLM server base URL (default: #{server})") { |v| server = v }
+  opts.on('--model NAME', "Model identifier (default: #{model})") { |v| model = v }
+  opts.on('--api-key-env VAR', "Env var holding the API key (default: #{api_key_env})") { |v| api_key_env = v }
+  opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
+  opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
+  opts.on('-h', '--help', 'Print this help and exit') do
+    puts opts
+    exit
+  end
+end
+
+begin
+  parser.parse!
+rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
+  warn e.message
+  warn parser
+  exit 2
+end
+
+server = server.chomp('/')
+openai_api_base = "#{server}/v1"
+
+api_key = ENV[api_key_env]
+api_key_missing = api_key.nil? || api_key.strip.empty?
+api_key = 'not-needed' if api_key_missing
+
+RubyLLM.configure do |c|
+  c.openai_api_base = openai_api_base
+  c.openai_api_key  = api_key
+end
+
+# llama.cpp exposes the server's launched +n_ctx+ at +/props+ on the base
+# host (not under +/v1+). Hand the derived URL to
+# +Pikuri::Agent::ContextWindowDetector+ so the cap is resolved against
+# the local server, which is unknown to ruby_llm's bundled model registry.
+llama_probe_url = "#{server}/props"
+
+# — the Pikuri-free plumbing —
+
+transcript = PikuriWeb::Transcript.new
+broadcaster = PikuriWeb::Broadcaster.new
+log_io = PikuriWeb::LogIO.new(broadcaster: broadcaster)
+
+# Route every diagnostic stream into the browser's log panel: pikuri's
+# per-subsystem loggers and PikuriWeb's own. The conversation transcript
+# and the log panel never cross (see AGENTS.md).
+Pikuri.log_io = log_io
+PikuriWeb.logger = Logger.new(log_io, progname: 'pikuri-web')
+
+# — the agent (same wiring as bin/pikuri-tui-chat, plus the Interloper) —
+
+cancel_flag = Pikuri::Agent::Control::Cancellable.new
+interloper = Pikuri::Agent::Control::Interloper.new
+
+system_prompt = Pikuri.prompt(:'pikuri-chat')
+system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
+
+# Constructed up front so the Agent's ListenerList and the AgentRunner
+# (for the status bar's token readout) see the same TokenLog instance.
+token_log = Pikuri::Agent::Listener::TokenLog.new
+
+sse_listener = PikuriWeb::SseListener.new(transcript: transcript, broadcaster: broadcaster)
+
+# Coalesce streaming delta chunks at 15 fps before they reach the
+# kramdown-rendering SseListener: a fast llama.cpp can emit dozens of
+# deltas per second and re-rendering + broadcasting every one is wasted
+# work the user can't perceive. flush_pending_on_non_delta: false because
+# the Assistant / Thinking bookend events re-render the authoritative
+# final content (see StreamingMessage#finalize), so emitting the trailing
+# 0–66 ms of buffered deltas right before that is pure waste.
+rate_limited_listener = Pikuri::Agent::Listener::RateLimited.new(
+  sse_listener,
+  fps: 15,
+  flush_pending_on_non_delta: false
+)
+
+agent = Pikuri::Agent.new(
+  transport: Pikuri::Agent::ChatTransport.new(
+    model: model,
+    provider: :openai,
+    assume_model_exists: true
+  ),
+  system_prompt: system_prompt,
+  step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
+  cancellable: cancel_flag,
+  interloper: interloper,
+  llama_probe_url: llama_probe_url,
+  streaming: true
+) do |c|
+  c.add_listener rate_limited_listener
+  c.add_listener token_log
+  c.add_tool Pikuri::Tool::WEB_SEARCH
+  c.add_tool Pikuri::Tool::CALCULATOR
+  c.add_tool Pikuri::Tool::WEB_SCRAPE
+  c.add_tool Pikuri::Tool::FETCH
+end
+
+runner = PikuriWeb::AgentRunner.new(
+  agent: agent,
+  interloper: interloper,
+  cancellable: cancel_flag,
+  broadcaster: broadcaster,
+  token_log: token_log
+)
+
+if api_key_missing
+  PikuriWeb.logger.warn(
+    "API key env var #{api_key_env} is blank or unset; falling back to \"not-needed\" " \
+    '(fine for local llama.cpp, will fail against authenticated remotes)'
+  )
+end
+
+# SSE heartbeat: a comment frame every 15 s. A write attempt is the only
+# way to notice a silently vanished browser, whose /events drain loop
+# would otherwise park a Puma thread forever.
+Thread.new do
+  loop do
+    sleep 15
+    broadcaster.broadcast_comment
+  end
+end
+
+PikuriWeb::App.set :transcript, transcript
+PikuriWeb::App.set :broadcaster, broadcaster
+PikuriWeb::App.set :runner, runner
+PikuriWeb::App.set :log_io, log_io
+PikuriWeb::App.set :environment, :production
+PikuriWeb::App.set :bind, bind
+PikuriWeb::App.set :port, port
+# Each connected EventSource parks one Puma thread in the /events drain
+# loop; leave headroom over the default pool for a handful of tabs.
+PikuriWeb::App.set :server_settings, { min_threads: 0, max_threads: 16 }
+PikuriWeb::App.set :server, :puma
+
+at_exit { broadcaster.unsubscribe_all }
+
+PikuriWeb::App.run! do
+  puts "pikuri-web listening on http://#{bind}:#{port} (agent: #{model} @ #{server})"
+end

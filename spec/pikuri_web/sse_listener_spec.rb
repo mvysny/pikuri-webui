@@ -1,0 +1,128 @@
+# frozen_string_literal: true
+
+# Exercises the listener through real Pikuri::Agent::Event variants
+# against a real Transcript + Broadcaster — the same surface the agent's
+# worker thread drives in production.
+RSpec.describe PikuriWeb::SseListener do
+  let(:transcript) { PikuriWeb::Transcript.new }
+  let(:broadcaster) { PikuriWeb::Broadcaster.new }
+  let(:listener) { described_class.new(transcript: transcript, broadcaster: broadcaster) }
+  let(:queue) { broadcaster.subscribe }
+
+  def event_types(frames)
+    frames.map { |f| f[/event: (\w+)/, 1] }
+  end
+
+  context 'UserTurn' do
+    it 'adds an escaped user block' do
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'a <b> & c', mid_loop: false))
+      block = transcript.to_a.fetch(0)
+      assert_equal :user, block.kind
+      assert_equal 'a &lt;b&gt; &amp; c', block.html
+    end
+
+    it 'broadcasts the block' do
+      queue # subscribe before the event
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
+      assert_equal %w[block], event_types(drain_frames(queue))
+    end
+  end
+
+  context 'assistant streaming' do
+    it 'opens one block on the first delta and rewrites it on each delta' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'Hello '))
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: '**world**'))
+      blocks = transcript.to_a
+      assert_equal 1, blocks.size
+      assert_equal :assistant, blocks.fetch(0).kind
+      assert_includes blocks.fetch(0).html, '<strong>world</strong>'
+    end
+
+    it 'finalizes with the authoritative bookend content' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'Helo wrold'))
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'Hello world'))
+      assert_includes transcript.to_a.fetch(0).html, 'Hello world'
+    end
+
+    it 'renders a non-streamed Assistant bookend directly' do
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: '# Title'))
+      assert_includes transcript.to_a.fetch(0).html, '<h1'
+    end
+
+    it 'starts a fresh block for the next streamed turn' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'one'))
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'one'))
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'two'))
+      assert_equal 2, transcript.to_a.size
+    end
+  end
+
+  context 'thinking streaming' do
+    it 'renders deltas into a thinking block, finalized by the bookend' do
+      listener.on_event(Pikuri::Agent::Event::ThinkingDelta.new(content: 'pondering'))
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'pondering hard'))
+      block = transcript.to_a.fetch(0)
+      assert_equal :thinking, block.kind
+      assert_includes block.html, 'pondering hard'
+    end
+
+    it 'renders a non-streamed Thinking bookend directly' do
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'hmm'))
+      assert_equal :thinking, transcript.to_a.fetch(0).kind
+    end
+
+    it 'does not render the bookend twice after a streamed turn' do
+      listener.on_event(Pikuri::Agent::Event::ThinkingDelta.new(content: 'x'))
+      # A ToolCall between deltas and bookend drops the thinking handle…
+      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'calc', arguments: {}))
+      # …so the bookend must not re-add the already-streamed content.
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'x'))
+      thinking_blocks = transcript.to_a.select { |b| b.kind == :thinking }
+      assert_equal 1, thinking_blocks.size
+    end
+  end
+
+  context 'mid-stream interruptions' do
+    it 'wipes an unfinished assistant preview when a ToolCall arrives' do
+      queue # subscribe before the events
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'partial'))
+      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'web_search', arguments: { query: 'x' }))
+      kinds = transcript.to_a.map(&:kind)
+      assert_equal [:tool_call], kinds
+      assert_includes event_types(drain_frames(queue)), 'remove'
+    end
+
+    it 'preserves the streamed preview on Cancelled' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'partial answer'))
+      listener.on_event(Pikuri::Agent::Event::Cancelled.new)
+      kinds = transcript.to_a.map(&:kind)
+      assert_equal %i[assistant error], kinds
+      assert_includes transcript.to_a.fetch(0).html, 'partial answer'
+    end
+  end
+
+  context 'tool events' do
+    it 'renders the call with inspected arguments' do
+      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'calc', arguments: { expr: '1+1' }))
+      assert_includes transcript.to_a.fetch(0).html, 'calc(expr=&quot;1+1&quot;)'
+    end
+
+    it 'truncates long tool results with a byte-count suffix' do
+      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: 'x' * 500))
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, '… (500 bytes total)'
+      refute_includes html, 'x' * 300
+    end
+  end
+
+  context 'silent events' do
+    it 'ignores Tokens' do
+      listener.on_event(
+        Pikuri::Agent::Event::Tokens.new(
+          input: 1, output: 2, cached: 0, cache_creation: 0, thinking: 0, model_id: 'm'
+        )
+      )
+      assert_empty transcript.to_a
+    end
+  end
+end

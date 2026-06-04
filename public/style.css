@@ -1,0 +1,173 @@
+/* Chat layout: a fixed-height column — scrolling transcript, composer,
+   status bar — with the log panel as an overlay above the status bar.
+   Block kinds mirror the TUI's visual language: user turns prefixed and
+   bordered, thinking in muted gray (the AnsiGrayscale equivalent), tool
+   lines in cyan monospace, notices yellow, errors red. */
+
+:root {
+  --bg: #1e1f22;
+  --bg-raised: #26282c;
+  --fg: #d8dade;
+  --fg-muted: #8a8f98;
+  --accent: #6aa3f8;
+  --tool: #4fc1c9;
+  --notice: #d9b04c;
+  --error: #e06c75;
+  --border: #3a3d42;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.5 system-ui, sans-serif;
+}
+
+/* — transcript — */
+
+#transcript {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  max-width: 52rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.block { margin-bottom: 0.75rem; }
+
+.block.user {
+  white-space: pre-wrap;
+  border-left: 3px solid var(--accent);
+  padding-left: 0.6rem;
+  color: var(--accent);
+}
+
+.block.thinking { color: var(--fg-muted); }
+
+.block.tool_call,
+.block.tool_result {
+  white-space: pre-wrap;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+  color: var(--tool);
+}
+
+.block.notice { color: var(--notice); }
+.block.error  { color: var(--error); }
+
+.block pre {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem;
+  overflow-x: auto;
+}
+
+.block code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+
+.block table { border-collapse: collapse; }
+.block th, .block td { border: 1px solid var(--border); padding: 0.25rem 0.5rem; }
+
+.block a { color: var(--accent); }
+
+/* — composer — */
+
+#composer {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  max-width: 52rem;
+  width: 100%;
+  margin: 0 auto;
+}
+
+#prompt {
+  flex: 1;
+  resize: none;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font: inherit;
+}
+
+#prompt:focus { outline: 1px solid var(--accent); }
+
+.composer-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+button {
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.35rem 0.9rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--accent); }
+
+#cancel { color: var(--error); }
+
+/* — status bar — */
+
+#status-bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.3rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
+
+#status-tokens { flex: 1; text-align: right; }
+
+#log-toggle { padding: 0.1rem 0.5rem; font-size: 1em; }
+#log-toggle kbd { color: var(--fg-muted); font-size: 0.85em; }
+
+#log-badge {
+  background: var(--error);
+  color: var(--bg);
+  border-radius: 8px;
+  padding: 0 0.4em;
+  margin-left: 0.3em;
+}
+
+/* — log panel — */
+
+#log-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 2.1rem;
+  height: 40vh;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  padding: 0.5rem 1rem;
+}
+
+#log-lines {
+  height: 100%;
+  margin: 0;
+  overflow-y: auto;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8em;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+}
