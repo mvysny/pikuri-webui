@@ -12,7 +12,7 @@ gem 'sinatra', '~> 4.1'
 # Rack server. Threaded: each open EventSource connection parks one
 # server thread in the SSE drain loop (see App#GET /events), so bin/
 # pikuri-web raises the thread pool above Puma's default.
-gem 'puma', '~> 7.0'
+gem 'puma', '~> 8.0'
 
 # Sinatra 4's run! resolves its server through the rackup handler API,
 # which lives in this gem since Rack 3 split it out.
