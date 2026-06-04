@@ -43,9 +43,6 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 # the deliberately raw transcript-block HTML.
 gem 'erubi', '~> 1.13'
 
-# Task runner for the Rakefile (spec/run tasks).
-gem 'rake', '~> 13.3'
-
 group :test do
   # Test runner. We use the rspec-core describe/it harness but write
   # assertions in minitest style — see AGENTS.md. Matches pikuri's

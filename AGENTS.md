@@ -130,7 +130,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 
 - Tests: rspec-core `describe`/`it` harness with minitest-style
   assertions (`assert_equal`, `refute`, …) — same as pikuri /
-  pikuri-tui. `rake` runs the suite.
+  pikuri-tui. `bundle exec rspec` runs the suite — no Rakefile, same
+  as pikuri-tui.
 - Library exceptions are logged, our bugs raise: kramdown failures
   degrade to escaped text, `run_loop` failures log and return the UI
   to idle; but contract violations (double finalize, bad flush mode)

@@ -67,5 +67,5 @@ message while the agent is mid-turn injects it via pikuri's
 ## Test
 
 ```sh
-rake
+bundle exec rspec
 ```
