@@ -26,8 +26,8 @@ gem 'zeitwerk', '~> 2.7'
 # The pikuri-core gem — Agent, Tool, prompts, listeners. Same wiring as
 # pikuri-tui's chat shell: bin/pikuri-web binds Pikuri::Agent +
 # Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
-gem 'pikuri-core', '~> 0.0.5'
-gem 'pikuri-pdf', '~> 0.0.5'
+gem 'pikuri-core', '~> 0.0.6'
+gem 'pikuri-pdf', '~> 0.0.6'
 
 # Server-side Markdown → HTML for assistant/thinking content. The web
 # analogue of the TUI's TTY::Markdown: rendering happens on the server
