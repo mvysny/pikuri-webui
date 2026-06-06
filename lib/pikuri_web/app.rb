@@ -10,7 +10,6 @@ module PikuriWeb
   #   PikuriWeb::App.set :transcript,  transcript
   #   PikuriWeb::App.set :broadcaster, broadcaster
   #   PikuriWeb::App.set :runner,      runner
-  #   PikuriWeb::App.set :log_io,      log_io
   #
   # Pikuri-free by design (the seam rule): routes speak only ids, kinds,
   # HTML strings and status hashes. Everything Pikuri-shaped sits behind
@@ -29,19 +28,18 @@ module PikuriWeb
     # dev-mode path rewriting interferes with rack-test assertions.
     disable :show_exceptions, :static_cache_control
 
-    # The page shell: transcript snapshot, status bar state and log-panel
-    # replay rendered server-side, so a fresh load (or reload mid-turn)
-    # shows the full current state before the EventSource connects.
+    # The page shell: transcript snapshot and status bar state rendered
+    # server-side, so a fresh load (or reload mid-turn) shows the full
+    # current state before the EventSource connects.
     get '/' do
       erb :index, locals: {
         blocks: settings.transcript.to_a,
-        status: settings.runner.status_data,
-        log_lines: settings.log_io.lines
+        status: settings.runner.status_data
       }
     end
 
-    # SSE feed of transcript deltas (+block+ / +remove+), +status+ and
-    # +log+ events. The drain loop blocks on the subscribed queue until
+    # SSE feed of transcript deltas (+block+ / +remove+) and +status+
+    # events. The drain loop blocks on the subscribed queue until
     # the client goes away (write raises) or the broadcaster shuts down
     # (nil sentinel).
     get '/events' do

@@ -6,8 +6,8 @@ A Sinatra-based web front-end wrapping the
 [pikuri](https://codeberg.org/mvysny/pikuri) library — the browser
 sibling of [pikuri-tui](../pikuri-tui/). `bin/pikuri-web` binds the
 same `Pikuri::Agent` and the same `Pikuri::Tool` set as the TUI's chat
-shell; the conversation pane / log pane / input field / status bar
-become a server-rendered page kept live over one SSE connection.
+shell; the conversation pane / input field / status bar become a
+server-rendered page kept live over one SSE connection.
 
 All LLM transport, tool execution, agent loop control, prompts: that's
 all pikuri. We own the web shell only.
@@ -40,17 +40,17 @@ boot script, specs. Not yet exercised against a live llama.cpp server.
   converge on the same state with no client-side bookkeeping. Never
   introduce client-only conversation state.
 
-- **Two panes, two purposes.** The transcript shows the LLM
-  conversation — assistant Markdown, reasoning, tool-call lines, tool
-  observations — driven by our pikuri listener. The collapsible log
-  panel shows internal diagnostics — pikuri's per-subsystem loggers
-  via `Pikuri.log_io=`, PikuriWeb's own logger — both routed through
-  one {LogIO}. Never cross the streams.
+- **The browser shows the conversation; diagnostics go to stderr.**
+  The transcript shows the LLM conversation — assistant Markdown,
+  reasoning, tool-call lines, tool observations — driven by our pikuri
+  listener. Internal diagnostics — pikuri's per-subsystem loggers,
+  PikuriWeb's own logger — stay on their default stderr sinks and never
+  reach the page. Never cross the streams.
 
 - **The seam.** All `Pikuri::*` references stay inside `bin/pikuri-web`
   (boot/wiring) and the small adapter set under `lib/pikuri_web/`
   ({SseListener}, {AgentRunner}). {Transcript}, {Broadcaster},
-  {StreamingMessage}, {LogIO}, {MarkdownRenderer} and {App} are
+  {StreamingMessage}, {MarkdownRenderer} and {App} are
   Pikuri-free — they speak ids, kinds, HTML strings and queues. Same
   fork-or-swap rationale as the TUI: if pikuri's surface shifts, the
   cost is rewriting two files.
@@ -115,9 +115,6 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   StreamingMarkdownBuffer.
 - `lib/pikuri_web/markdown_renderer.rb` — kramdown (GFM) → HTML with
   escaped-text fallback; HTML-escape helper for plain-text blocks.
-- `lib/pikuri_web/log_io.rb` — IO-shaped diagnostic sink: ring buffer
-  for page-load replay + `log` SSE events. CountingLogIO's descendant
-  (error counting moved client-side).
 - `views/index.erb` — the page shell; server-rendered snapshot.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror

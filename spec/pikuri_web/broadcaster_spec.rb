@@ -36,7 +36,7 @@ RSpec.describe PikuriWeb::Broadcaster do
     it 'stops delivery to the removed queue' do
       queue = broadcaster.subscribe
       broadcaster.unsubscribe(queue)
-      broadcaster.broadcast(event: :log, data: { line: 'x' })
+      broadcaster.broadcast(event: :status, data: { busy: false })
       assert_empty drain_frames(queue)
       assert_equal 0, broadcaster.size
     end

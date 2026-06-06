@@ -8,9 +8,9 @@ LLM agent framework. The browser sibling of
 tools, rendered as a server-driven chat page instead of a terminal.
 
 Pikuri owns the agent loop, tool execution, and LLM transport. This
-project owns nothing but the web shell: a transcript, a collapsible
-diagnostic log panel, an input field, and a status bar — Sinatra +
-server-side Markdown + one SSE stream. JavaScript is a single
+project owns nothing but the web shell: a transcript, an input field,
+and a status bar — Sinatra + server-side Markdown + one SSE stream.
+Diagnostic logs go to stderr. JavaScript is a single
 dependency-free `public/app.js`; there is no Node, no bundler, no build
 step.
 
@@ -57,14 +57,14 @@ bin/pikuri-web --server http://localhost:8082 --model my-model --port 9292
 │ Input (Enter to send;            │
 │   sending mid-turn injects)      │
 ├──────────────────────────────────┤
-│ status · tokens · log [Ctrl+L]   │
+│ status · tokens                  │
 └──────────────────────────────────┘
 ```
 
-`Ctrl+L` (or the `log` button) toggles the diagnostic log panel
-(pikuri internals, library errors, agent-loop diagnostics). Sending a
-message while the agent is mid-turn injects it via pikuri's
+Sending a message while the agent is mid-turn injects it via pikuri's
 `Control::Interloper` — it's delivered at the next tool boundary.
+Diagnostics (pikuri internals, library errors, agent-loop diagnostics)
+are printed to stderr.
 
 ## Test
 

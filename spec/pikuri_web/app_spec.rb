@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 # Drives the Sinatra app in-process with rack-test. The runner is a fake
-# (no agent, no threads); transcript / broadcaster / log_io are real
-# except where the SSE route needs a pre-loaded queue to avoid blocking
-# the synchronous rack-test body read.
+# (no agent, no threads); transcript / broadcaster are real except where
+# the SSE route needs a pre-loaded queue to avoid blocking the
+# synchronous rack-test body read.
 RSpec.describe PikuriWeb::App do
   include Rack::Test::Methods
 
@@ -45,7 +45,6 @@ RSpec.describe PikuriWeb::App do
   let(:transcript) { PikuriWeb::Transcript.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
   let(:runner) { FakeRunner.new }
-  let(:log_io) { PikuriWeb::LogIO.new(broadcaster: broadcaster) }
 
   def app = described_class
 
@@ -56,7 +55,6 @@ RSpec.describe PikuriWeb::App do
     described_class.set :transcript, transcript
     described_class.set :broadcaster, broadcaster
     described_class.set :runner, runner
-    described_class.set :log_io, log_io
   end
 
   context 'GET /' do
@@ -73,12 +71,6 @@ RSpec.describe PikuriWeb::App do
       get '/'
       assert_includes last_response.body, 'idle'
       assert_includes last_response.body, '12.3k in / 4.5k out'
-    end
-
-    it 'replays retained log lines into the log panel' do
-      log_io.write("WARN something odd\n")
-      get '/'
-      assert_includes last_response.body, 'WARN something odd'
     end
   end
 

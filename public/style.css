@@ -1,5 +1,5 @@
 /* Chat layout: a fixed-height column — scrolling transcript, composer,
-   status bar — with the log panel as an overlay above the status bar.
+   status bar.
    Block kinds mirror the TUI's visual language: user turns prefixed and
    bordered, thinking in muted gray (the AnsiGrayscale equivalent), tool
    lines in cyan monospace, notices yellow, errors red. */
@@ -137,37 +137,3 @@ button:hover { border-color: var(--accent); }
 }
 
 #status-tokens { flex: 1; text-align: right; }
-
-#log-toggle { padding: 0.1rem 0.5rem; font-size: 1em; }
-#log-toggle kbd { color: var(--fg-muted); font-size: 0.85em; }
-
-#log-badge {
-  background: var(--error);
-  color: var(--bg);
-  border-radius: 8px;
-  padding: 0 0.4em;
-  margin-left: 0.3em;
-}
-
-/* — log panel — */
-
-#log-panel {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 2.1rem;
-  height: 40vh;
-  background: var(--bg-raised);
-  border-top: 1px solid var(--border);
-  padding: 0.5rem 1rem;
-}
-
-#log-lines {
-  height: 100%;
-  margin: 0;
-  overflow-y: auto;
-  font-family: ui-monospace, monospace;
-  font-size: 0.8em;
-  color: var(--fg-muted);
-  white-space: pre-wrap;
-}

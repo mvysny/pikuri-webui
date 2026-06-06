@@ -4,7 +4,7 @@ require 'json'
 
 module PikuriWeb
   # Fan-out of SSE frames to every connected EventSource client. Producers
-  # (SseListener, AgentRunner, LogIO) call {#broadcast} from any thread;
+  # (SseListener, AgentRunner) call {#broadcast} from any thread;
   # each +GET /events+ connection holds one subscribed +Thread::Queue+ and
   # blocks popping frames off it (see App). Pikuri-free by design.
   #
@@ -40,7 +40,7 @@ module PikuriWeb
     # Format one SSE frame and push it to every subscriber.
     #
     # @param event [String, Symbol] SSE event type (the browser-side
-    #   +addEventListener+ name): +block+, +remove+, +status+, +log+
+    #   +addEventListener+ name): +block+, +remove+, +status+
     # @param data [Hash] JSON-serialized into the frame's +data:+ line
     # @return [void]
     def broadcast(event:, data:)

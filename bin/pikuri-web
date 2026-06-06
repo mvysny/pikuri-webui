@@ -76,13 +76,10 @@ llama_probe_url = "#{server}/props"
 
 transcript = PikuriWeb::Transcript.new
 broadcaster = PikuriWeb::Broadcaster.new
-log_io = PikuriWeb::LogIO.new(broadcaster: broadcaster)
 
-# Route every diagnostic stream into the browser's log panel: pikuri's
-# per-subsystem loggers and PikuriWeb's own. The conversation transcript
-# and the log panel never cross (see AGENTS.md).
-Pikuri.log_io = log_io
-PikuriWeb.logger = Logger.new(log_io, progname: 'pikuri-web')
+# Diagnostics go to stderr — pikuri's per-subsystem loggers and
+# PikuriWeb's own logger both default there. The browser shows the
+# conversation transcript only (see AGENTS.md).
 
 # — the agent (same wiring as bin/pikuri-tui-chat, plus the Interloper) —
 
@@ -160,7 +157,6 @@ end
 PikuriWeb::App.set :transcript, transcript
 PikuriWeb::App.set :broadcaster, broadcaster
 PikuriWeb::App.set :runner, runner
-PikuriWeb::App.set :log_io, log_io
 PikuriWeb::App.set :environment, :production
 PikuriWeb::App.set :bind, bind
 PikuriWeb::App.set :port, port

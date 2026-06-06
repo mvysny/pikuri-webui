@@ -1,6 +1,6 @@
 <!DOCTYPE html>
-<!-- The page shell. Server-rendered snapshot of the transcript, status
-     bar and log replay; public/app.js then connects an EventSource and
+<!-- The page shell. Server-rendered snapshot of the transcript and
+     status bar; public/app.js then connects an EventSource and
      applies deltas. Block divs are addressed by their transcript id —
      the SSE `block` event upserts by id, `remove` deletes by id. -->
 <html lang="en">
@@ -30,13 +30,7 @@
     <span id="status-state"><%= status[:busy] ? 'busy' : 'idle' %></span>
     <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
     <span id="status-tokens"><%= status[:tokens] %></span>
-    <button type="button" id="log-toggle">log <kbd>Ctrl+L</kbd> <span id="log-badge" hidden></span></button>
   </footer>
-
-  <aside id="log-panel" hidden>
-    <pre id="log-lines"><% log_lines.each do |line| %><%= line %>
-<% end %></pre>
-  </aside>
 
   <script src="/app.js"></script>
 </body>

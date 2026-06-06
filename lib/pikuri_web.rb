@@ -11,9 +11,8 @@ require 'logger'
 # a request).
 module PikuriWeb
   class << self
-    # Project-internal logger. Defaults to $stderr; bin/pikuri-web rewires
-    # it to a {LogIO} so PikuriWeb's diagnostics land in the browser's log
-    # panel alongside pikuri's own (which arrive via +Pikuri.log_io=+).
+    # Project-internal logger. Writes to $stderr, next to pikuri's own
+    # diagnostic loggers — the browser shows the conversation only.
     #
     # @return [Logger]
     def logger
@@ -25,12 +24,6 @@ module PikuriWeb
   end
 
   loader = Zeitwerk::Loader.for_gem
-  # The default camelizer would resolve +log_io.rb+ to +LogIo+; the
-  # all-caps +LogIO+ reads naturally next to Ruby's own +IO+ (and next to
-  # the TUI sibling's +CountingLogIO+). Zeitwerk's inflector matches the
-  # whole basename rather than per-segment, so the mapping spells the
-  # full word.
-  loader.inflector.inflect('log_io' => 'LogIO')
   loader.setup
   loader.eager_load
 end
