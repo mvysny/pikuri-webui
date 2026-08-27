@@ -57,10 +57,11 @@ describe PikuriWeb::Config do
       assert_empty c.mcp
     end
 
-    it 'leaves both search provider keys nil' do
+    it 'leaves both search provider keys nil, and the engine selection unset' do
       c = load_bare
       assert_nil c.search.brave_key
       assert_nil c.search.exa_key
+      assert_nil c.search.engines
     end
   end
 
@@ -213,6 +214,14 @@ describe PikuriWeb::Config do
         c = described_class.load(env: env_for(home))
         assert_equal 'BSA-123', c.search.brave_key
         assert_equal 'exa-456', c.search.exa_key
+      end
+    end
+
+    it 'reads the engine selection from the [search] table' do
+      with_dirs do |home, _|
+        write_config(home, "[search]\nbrave_key = \"BSA-123\"\nengines = [\"brave\"]")
+        c = described_class.load(env: env_for(home))
+        assert_equal %w[brave], c.search.engines
       end
     end
 
@@ -435,6 +444,16 @@ describe PikuriWeb::Config do
     it 'rejects a non-string search key' do
       e = expect_error("[search]\nbrave_key = 42")
       assert_includes e.message, 'must be a string'
+    end
+
+    it 'rejects a non-array engine selection' do
+      e = expect_error("[search]\nengines = \"brave\"")
+      assert_includes e.message, 'must be an array of strings'
+    end
+
+    it 'rejects an engine selection holding a non-string' do
+      e = expect_error("[search]\nengines = [\"brave\", 3]")
+      assert_includes e.message, 'must be an array of strings'
     end
 
     it 'rejects [search] declared as an array of tables' do

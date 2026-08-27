@@ -151,10 +151,18 @@ model = "grok-4"
 api_key = "xai-…"
 context_window = 2000000   # for a server the llama.cpp /props probe can't reach
 
-[search]                   # optional; without them web_search runs DuckDuckGo-only
+[search]                   # optional; omit it and web_search runs DuckDuckGo-only
 brave_key = "BSA…"
 exa_key = "…"
+engines = ["brave"]        # who gets searched, out of duckduckgo / brave / exa;
+                           # omit for DuckDuckGo + every keyed provider
 ```
+
+`engines` is a *set*, not a preference order — pikuri picks at random per
+query, so `["brave", "duckduckgo"]` splits your traffic between the two
+rather than trying Brave first. List `brave` alone to keep every query away
+from DuckDuckGo (and so from Bing, which fulfils its web results). Naming an
+engine whose key you did not set aborts at boot.
 
 `chmod 600` it — pikuri-web logs an advisory at boot if a file holding a
 literal key is group/other-readable. The first `[[llm]]` is the boot

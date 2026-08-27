@@ -8,7 +8,7 @@ module PikuriWeb
   #
   #   config = PikuriWeb::Config.load(overrides: { model: cli_model })
   #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
-  #   config.search        # => Search(brave_key:, exa_key:)
+  #   config.search        # => Search(brave_key:, exa_key:, engines:)
   #
   # Every load failure — unreadable file, malformed TOML, schema
   # violation — raises {Error}, naming the offending key.
@@ -20,6 +20,7 @@ module PikuriWeb
   #
   #   [search]
   #   brave_key = "BSA…"
+  #   engines = ["brave"]
   #
   # == Precedence
   #
@@ -119,16 +120,27 @@ module PikuriWeb
       def http? = !url.nil?
     end
 
-    # The web-search provider keys. Both are +nil+ when omitted; pikuri's
-    # search cascade then runs DuckDuckGo-only and the paid provider stays
-    # out. There is nowhere else to put them — pikuri reads no provider key
-    # from +ENV+.
+    # The web-search selection: which engines to search with, and the keys
+    # the paid ones need. Every field is +nil+ when omitted, leaving pikuri's
+    # own default — DuckDuckGo plus whichever key was configured. There is
+    # nowhere else to put the keys — pikuri reads no provider key from +ENV+.
     #
     # @!attribute [r] brave_key
     #   @return [String, nil] Brave Search API key, or +nil+ when unset.
     # @!attribute [r] exa_key
     #   @return [String, nil] Exa API key, or +nil+ when unset.
-    Search = Data.define(:brave_key, :exa_key)
+    # @!attribute [r] engines
+    #   @return [Array<String>, nil] the engines to search with — any of
+    #     +duckduckgo+, +brave+, +exa+ — or +nil+ to derive the set from the
+    #     keys. A *set*, not a preference order: pikuri shuffles per query, so
+    #     +["brave", "duckduckgo"]+ splits traffic between the two rather than
+    #     preferring Brave. Only the shape is checked here — an unknown name
+    #     or an engine named without its key is pikuri's refusal.
+    Search = Data.define(:brave_key, :exa_key, :engines) do
+      def initialize(brave_key: nil, exa_key: nil, engines: nil)
+        super(brave_key: brave_key, exa_key: exa_key, engines: engines&.freeze)
+      end
+    end
 
     # @return [String] display name of the synthetic default connection.
     DEFAULT_LLM_NAME = 'Local Qwen 3.6'
@@ -301,17 +313,25 @@ module PikuriWeb
     end
 
     # Build the {Search} value object from the +[search]+ table (or +nil+
-    # when the section is absent — both keys then default to +nil+).
-    # Rejects unknown keys and non-string values.
+    # when the section is absent — every field then defaults to +nil+).
+    #
+    # Shape only, deliberately: *which* engine names are valid, and which of
+    # them need a key, is pikuri's to say. Re-deciding it here would copy
+    # pikuri's engine list into this Pikuri-free class, to rot the next time
+    # a provider lands.
     def self.build_search(table)
       table ||= {}
-      unknown = table.keys - %w[brave_key exa_key]
+      unknown = table.keys - %w[brave_key exa_key engines]
       raise Error, "search: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
       %w[brave_key exa_key].each do |k|
         raise Error, "search.#{k} must be a string" if table[k] && !table[k].is_a?(String)
       end
+      engines = table['engines']
+      if engines && !(engines.is_a?(Array) && engines.all?(String))
+        raise Error, 'search.engines must be an array of strings, e.g. engines = ["brave"]'
+      end
 
-      Search.new(brave_key: table['brave_key'], exa_key: table['exa_key'])
+      Search.new(brave_key: table['brave_key'], exa_key: table['exa_key'], engines: engines)
     end
 
     def self.validate_code!(code)

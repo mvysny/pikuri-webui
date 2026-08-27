@@ -74,7 +74,11 @@ end
 # is a plain warn + exit rather than a server that serves a broken agent.
 begin
   config = PikuriWeb::Config.load(overrides: { server: cli_server, model: cli_model })
-rescue PikuriWeb::Config::Error => e
+  # Asked here rather than left to WebSearch.build below, so an unusable
+  # [search] selection exits like any other config error instead of a
+  # backtrace out of the agent wiring.
+  Pikuri::Tool::Search::Engines.resolve(**config.search.to_h)
+rescue PikuriWeb::Config::Error, ArgumentError => e
   warn "config error: #{e.message}"
   exit 2
 end
@@ -157,7 +161,7 @@ agent = Pikuri::Agent.new(
 ) do |c|
   c.add_listener rate_limited_listener
   c.add_listener token_log
-  c.add_tool Pikuri::Tool::WebSearch.build(brave_key: config.search.brave_key, exa_key: config.search.exa_key)
+  c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
   c.add_tool Pikuri::Tool::CALCULATOR
   c.add_tool Pikuri::Tool::WEB_SCRAPE
   c.add_tool Pikuri::Tool::FETCH
