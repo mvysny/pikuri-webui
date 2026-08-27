@@ -156,13 +156,11 @@ module PikuriWeb
       add_block(:notice, MarkdownRenderer.escape("⊕ #{text}"))
     end
 
-    # Empty the transcript and tell every browser to do the same — a new
-    # conversation replacing the old one.
+    # Empty the transcript and tell every browser to do the same.
     #
-    # The streaming handles are dropped rather than flushed: their blocks are
-    # already gone, so +flush_assistant+ would broadcast a +remove+ for an id
-    # no tab still has. {AgentRunner#new_conversation} refuses while a turn is
-    # in flight, so there is normally nothing open to drop.
+    # Streaming handles are dropped rather than flushed: the blocks they point
+    # at go with everything else a line later, so +flush_assistant+ would
+    # broadcast a +remove+ for an id every tab is about to forget anyway.
     #
     # @return [void]
     def reset_transcript

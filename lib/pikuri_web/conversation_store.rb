@@ -16,58 +16,48 @@ module PikuriWeb
   #   agent.export_history.save(conversation.dir)    # pikuri writes history.json
   #   store.write_meta(conversation)                 # our envelope, and the commit point
   #
-  # A conversation directory holds both halves of that split, and each side
-  # writes only its own files:
+  # Both halves land in the one directory, and each side writes only its own:
   #
   #   2026-08-27T12-03-51Z-3f9a/
   #       history.json   pikuri's — Pikuri::Agent::History#save
-  #       attachments/   pikuri's — content-addressed, present only if there are any
-  #       meta.json      ours — title, timestamps, and which shell/model wrote it
+  #       attachments/   pikuri's — content-addressed, only if there are any
+  #       meta.json      ours — title, timestamps, shell and model
   #
-  # Sharing one directory is safe by upstream contract, not by luck:
-  # +History#save+ never deletes and never enumerates the folder it writes into
-  # (pikuri +DECISIONS.md+ +D_history_attachments+), so +meta.json+ is not at
-  # risk from a save. In the other direction this class only ever touches
-  # +meta.json+.
-  #
-  # Pikuri-free by design (the seam rule in AGENTS.md): this class deals in
-  # paths and plain hashes, never a +Pikuri::Agent::History+. That is what
-  # +History#save+ taking a *directory* buys — {AgentRunner} holds the history,
-  # this holds the folder.
+  # Pikuri-free by design (the seam rule in AGENTS.md): this deals in paths and
+  # plain hashes, never a +Pikuri::Agent::History+ — which is what
+  # +History#save+ taking a *directory* buys.
   #
   # == Implementation details
   #
-  # {#create} deliberately writes nothing. A "New conversation" click that
-  # created a directory would litter the root with empty conversations, so a
-  # conversation reaches disk only once it has something in it.
+  # Co-tenancy in one directory is safe by upstream contract rather than by
+  # luck: +History#save+ never deletes and never enumerates the folder it
+  # writes into (pikuri +DECISIONS.md+ +D_history_attachments+).
   #
   # Directories are created 0700: a conversation holds everything the user
-  # typed plus whatever the tools scraped, unencrypted. That covers
-  # +attachments/+ too — pikuri creates it with the default mode, but an
-  # unreadable parent is what actually blocks traversal.
+  # typed plus whatever the tools fetched, unencrypted. That covers
+  # +attachments/+, which pikuri creates with the default mode — an unreadable
+  # parent is what actually blocks traversal.
   #
-  # Thread-safe: stateless past its constructor arguments. Which conversation
-  # is *live* is deliberately not here — {AgentRunner} owns that, since it owns
-  # the agent whose history it is.
+  # Thread-safe: stateless past its constructor arguments.
   class ConversationStore
-    # Basename of the envelope this class owns. +history.json+ next to it is
-    # pikuri's and is never read or written here.
+    # Basename of the envelope this class owns. The +history.json+ beside it is
+    # pikuri's, and is never read or written here.
     META_FILE = 'meta.json'
 
     # +meta.json+'s format version. Bumped only for a change an old reader
-    # could not survive; a sidebar meeting a higher one should grey the row out
-    # rather than crash.
+    # could not survive; a reader meeting a higher one should refuse that one
+    # conversation rather than crash.
     SCHEMA = 1
 
-    # One conversation's identity and where it lives. Carries no history — that
-    # is on disk under {#dir}, and in the agent when this conversation is live.
+    # One conversation's identity and where it lives; no history of its own —
+    # that is +history.json+ under +dir+.
     #
     # @!attribute [r] id
     #   @return [String] the directory basename, e.g. +"2026-08-27T12-03-51Z-3f9a"+
     # @!attribute [r] dir
     #   @return [Pathname] the conversation's directory; may not exist yet
     # @!attribute [r] title
-    #   @return [String] display title; a local-time stamp until v2 retitles it
+    #   @return [String] display title — the local-time start stamp
     # @!attribute [r] created_at
     #   @return [Time]
     Conversation = Data.define(:id, :dir, :title, :created_at)
@@ -87,7 +77,9 @@ module PikuriWeb
     # @return [Pathname] the conversations root
     attr_reader :root
 
-    # Mint a new conversation, writing nothing.
+    # Mint a new conversation. Writes nothing — a directory per click would
+    # litter the root with empty conversations, so a conversation reaches disk
+    # only once it has something in it.
     #
     #   store.create.id     # => "2026-08-27T12-03-51Z-3f9a"
     #   store.create.title  # => "2026-08-27 14:03"
@@ -110,10 +102,9 @@ module PikuriWeb
 
     # Write +meta.json+, creating the conversation's directory if needed.
     #
-    # Call it *after* the history is written: +history.json+ is the
-    # conversation, +meta.json+ is what says it is worth listing, so an
-    # interrupted save leaves an unlisted conversation rather than a listed
-    # empty one.
+    # Call it *after* the history: +history.json+ is the conversation,
+    # +meta.json+ is what says it is worth listing, so an interrupted save
+    # leaves an unlisted conversation rather than a listed empty one.
     #
     # @param conversation [Conversation]
     # @param updated_at [Time] last-activity stamp; the sidebar's sort key
@@ -144,7 +135,7 @@ module PikuriWeb
     end
 
     # Sibling temp file plus rename, so a reader never sees a half-written
-    # +meta.json+ — the same shape +History#save+ uses for its own files.
+    # +meta.json+.
     def atomic_write(path, content)
       tmp = path.dirname / ".#{path.basename}.tmp"
       tmp.write(content)

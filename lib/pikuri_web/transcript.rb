@@ -71,11 +71,10 @@ module PikuriWeb
       nil
     end
 
-    # Drop every block — a new conversation starting over
-    # (+Pikuri::Agent::Event::Reset+).
+    # Drop every block.
     #
     # The id counter is deliberately *not* reset: a browser tab that has not
-    # yet applied the reset would otherwise see a fresh +b1+ and upsert it into
+    # yet applied the clear would otherwise see a fresh +b1+ and upsert it into
     # the block it still has on screen.
     #
     # @return [void]

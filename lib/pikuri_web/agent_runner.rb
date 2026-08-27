@@ -34,18 +34,15 @@ module PikuriWeb
   #
   # == Persistence
   #
-  # This class also owns *which conversation is live*, because it owns the
-  # agent whose history that is. The division of labour with
-  # {ConversationStore} follows from +History#save+ taking a directory: the
-  # store hands out folders, this hands it a saved history.
+  # This class owns *which* conversation is live, because it owns the agent
+  # whose history that is:
   #
   #   runner.new_conversation   # => :started — saved, cleared, fresh id minted
   #
-  # Saves happen at *turn end*, from {#run_turn}'s ensure, so the history is
-  # never exported mid-+complete+. The cost is that a process killed mid-turn
-  # loses that turn — acceptable while nothing loads these files back;
-  # +ideas/multiple-conversations.md+ +Q_write_shape+ argues for per-message
-  # saves once something does.
+  # Saves happen at *turn end*, from the worker thread's ensure, so a history
+  # is never exported mid-+complete+ and {#busy?} staying true until the save
+  # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
+  # loses that turn.
   #
   # Part of the Pikuri seam: this class and SseListener are the only
   # lib/ files that reference +Pikuri::*+.
@@ -124,19 +121,18 @@ module PikuriWeb
       @mutex.synchronize { @conversation }
     end
 
-    # Save the live conversation, clear the agent, and mint a fresh one — the
-    # +/clear+ this shell never had, with the old conversation kept on disk.
+    # Save the live conversation, clear the agent, and mint a fresh one.
     #
-    # +clear_conversation+ emits +Event::Reset+, which is what empties the
-    # transcript and every open tab (see {SseListener}); nothing here touches
-    # the transcript directly.
+    # The transcript is not touched here: +clear_conversation+ emits
+    # +Event::Reset+, and {SseListener} is what empties the transcript and
+    # every open tab.
     #
-    # @return [:started, :busy, :empty] +:busy+ when a turn is in flight —
-    #   pikuri's +clear_conversation+ is explicitly not safe against a running
-    #   +run_loop+, and silently discarding someone's turn because they
-    #   clicked a button is worse than refusing. +:empty+ when the
-    #   conversation has no messages yet, so there is nothing to save and
-    #   nothing to clear.
+    # Refuses while a turn is in flight — pikuri's +clear_conversation+ is
+    # explicitly not safe against a running +run_loop+, and discarding
+    # someone's turn because they clicked a button is worse than refusing.
+    #
+    # @return [:started, :busy, :empty] +:empty+ when the conversation holds no
+    #   messages: nothing to save, nothing to clear.
     def new_conversation
       outcome = @mutex.synchronize { switch_conversation }
       # TokenLog zeroes its context readout on Reset, so the status bar is
@@ -178,10 +174,9 @@ module PikuriWeb
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      # Save *before* releasing the handle, so {#busy?} stays true until the
-      # turn is on disk: "idle" then means saved, and a {#new_conversation}
-      # cannot slip in between and re-point @conversation at a fresh folder
-      # for this save to land in.
+      # Save before releasing the handle: a #new_conversation slipping into the
+      # gap would re-point @conversation, and this save would then land the
+      # finished turn in the fresh conversation's folder.
       @mutex.synchronize do
         persist
         @thread = nil if @thread == Thread.current
@@ -204,20 +199,16 @@ module PikuriWeb
       :started
     end
 
-    # Write the live conversation to disk, history first: +history.json+ is
-    # the conversation, +meta.json+ is what makes it listable.
+    # Write the live conversation to disk: pikuri's +history.json+, then our
+    # +meta.json+.
     #
-    # A cancelled turn is saved like any other — the user message is in the
-    # history either way, and a dangling tool call is legal in the file and
-    # repaired on load (pikuri +D_history_load_repairs+).
+    # Filesystem failures are logged, not raised — a full disk must not take
+    # the conversation down with it, and this runs inside the worker thread's
+    # ensure, where a raise would escape.
     #
-    # Filesystem failures are logged, not raised: a full disk must not take
-    # the conversation down with it, and this runs inside {#run_turn}'s
-    # ensure, where a raise would escape onto the worker thread.
-    #
-    # @param history [Pikuri::Agent::History] the snapshot to write; passed in
-    #   by a caller that already has one, since exporting copies attachment
-    #   bytes
+    # @param history [Pikuri::Agent::History] the snapshot to write; a
+    #   parameter because exporting copies attachment bytes, so a caller
+    #   holding one already must not make a second
     # @return [void]
     def persist(history = @agent.export_history)
       return if history.messages.empty?

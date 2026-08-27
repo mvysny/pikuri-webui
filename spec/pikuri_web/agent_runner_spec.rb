@@ -187,7 +187,7 @@ RSpec.describe PikuriWeb::AgentRunner do
 
     it 'logs a save failure instead of killing the worker thread' do
       agent.history = history_of('hi')
-      # A file where the conversations root has to be a directory.
+      # Force the save to fail: a plain file where the root must be a directory.
       @root.dirname.mkpath
       @root.write('not a directory')
 

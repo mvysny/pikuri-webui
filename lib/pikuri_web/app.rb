@@ -92,12 +92,12 @@ module PikuriWeb
       status 204
     end
 
-    # Save the current conversation and start a fresh one. The browser needs
-    # no answer beyond the status code: the transcript is emptied by the
-    # +reset+ SSE event the agent's own +Event::Reset+ produces.
+    # Save the current conversation and start a fresh one. No body: the
+    # transcript is emptied by the +reset+ SSE event that the agent's own
+    # +Event::Reset+ produces.
     #
-    # 409 while a turn is in flight — the runner refuses rather than throw
-    # the turn away, and app.js disables the button on the same signal.
+    # 409 while a turn is in flight — the runner refuses rather than throw the
+    # turn away.
     post '/conversations' do
       halt 409, 'a turn is in flight' if settings.runner.new_conversation == :busy
       status 204
