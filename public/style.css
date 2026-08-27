@@ -2,18 +2,63 @@
    status bar.
    Block kinds mirror the TUI's visual language: user turns prefixed and
    bordered, thinking in muted gray (the AnsiGrayscale equivalent), tool
-   lines in cyan monospace, notices yellow, errors red. */
+   lines in cyan monospace, notices yellow, errors red.
+
+   Theming: both palettes are declared once as `--dark-*` / `--light-*`,
+   and the rest of the file only ever reads the nine semantic tokens
+   (--bg, --fg, …). Dark is the default; `data-theme="light"` on <html>
+   — rendered server-side from the `theme` cookie, flipped in place by
+   app.js — remaps the same nine. Adding a themed color means adding it
+   to both palettes and both mappings, nowhere else. */
 
 :root {
-  --bg: #1e1f22;
-  --bg-raised: #26282c;
-  --fg: #d8dade;
-  --fg-muted: #8a8f98;
-  --accent: #6aa3f8;
-  --tool: #4fc1c9;
-  --notice: #d9b04c;
-  --error: #e06c75;
-  --border: #3a3d42;
+  /* Dark palette: the TUI's colors. */
+  --dark-bg: #1e1f22;
+  --dark-bg-raised: #26282c;
+  --dark-fg: #d8dade;
+  --dark-fg-muted: #8a8f98;
+  --dark-accent: #6aa3f8;
+  --dark-tool: #4fc1c9;
+  --dark-notice: #d9b04c;
+  --dark-error: #e06c75;
+  --dark-border: #3a3d42;
+
+  /* Light palette: the same roles, darkened enough to carry their
+     meaning on paper-white (all ≥ 4.5:1 against --light-bg). */
+  --light-bg: #fbfbfa;
+  --light-bg-raised: #f0f0ed;
+  --light-fg: #1f2124;
+  --light-fg-muted: #63696f;
+  --light-accent: #1d5fd0;
+  --light-tool: #0f7178;
+  --light-notice: #86620b;
+  --light-error: #c0343f;
+  --light-border: #d7d7d2;
+
+  /* Default mapping. */
+  color-scheme: dark;
+  --bg: var(--dark-bg);
+  --bg-raised: var(--dark-bg-raised);
+  --fg: var(--dark-fg);
+  --fg-muted: var(--dark-fg-muted);
+  --accent: var(--dark-accent);
+  --tool: var(--dark-tool);
+  --notice: var(--dark-notice);
+  --error: var(--dark-error);
+  --border: var(--dark-border);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: var(--light-bg);
+  --bg-raised: var(--light-bg-raised);
+  --fg: var(--light-fg);
+  --fg-muted: var(--light-fg-muted);
+  --accent: var(--light-accent);
+  --tool: var(--light-tool);
+  --notice: var(--light-notice);
+  --error: var(--light-error);
+  --border: var(--light-border);
 }
 
 * { box-sizing: border-box; }
@@ -137,3 +182,15 @@ button:hover { border-color: var(--accent); }
 }
 
 #status-tokens { flex: 1; text-align: right; }
+
+/* A status-bar control, not a composer button: no chrome until hovered. */
+#theme-toggle {
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 0.1rem 0.4rem;
+  color: inherit;
+  font: inherit;
+}
+
+#theme-toggle:hover { color: var(--fg); background: var(--bg); }

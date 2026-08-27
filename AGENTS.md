@@ -114,6 +114,19 @@ Tuile churn this project doesn't share.
   {AgentRunner}/{Transcript} ownership, not a patch — out of scope
   until there's a concrete need.
 
+- **Theme is a cookie, not state.** Dark (the TUI's palette) and light
+  are two mappings of the same nine semantic CSS tokens; the whole
+  theme lives in `public/style.css` plus a `theme` cookie. `GET /`
+  resolves the cookie and renders `data-theme` onto `<html>` so a
+  light-theme user never sees a dark first paint, and app.js flips the
+  attribute + rewrites the cookie in place — no `POST /theme`, because
+  a reload for a color change costs an SSE reconnect. The cookie is a
+  browser preference, deliberately outside {Transcript}: it is the one
+  piece of per-browser state, and it stays presentational so
+  "the transcript is server-authoritative" keeps meaning what it says.
+  A new themed color means adding it to both palettes and both
+  mappings; nothing outside style.css reads a raw color.
+
 - **One config file for every pikuri shell.** {Config} reads the same
   layered `~/.config/pikuri/config.toml` as pikuri-tui's
   `Shared::Config`, and carries the *whole* schema — `[code]`,

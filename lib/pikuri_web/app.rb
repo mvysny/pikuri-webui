@@ -28,13 +28,28 @@ module PikuriWeb
     # dev-mode path rewriting interferes with rack-test assertions.
     disable :show_exceptions, :static_cache_control
 
+    # The two themes style.css knows about. The `theme` cookie is
+    # attacker-free (app.js is its only writer) but user-editable, so an
+    # unknown value falls back to the default rather than reaching the
+    # `data-theme` attribute.
+    THEMES = %w[dark light].freeze
+    DEFAULT_THEME = 'dark'
+
     # The page shell: transcript snapshot and status bar state rendered
     # server-side, so a fresh load (or reload mid-turn) shows the full
     # current state before the EventSource connects.
+    #
+    # The theme is resolved here too — rendering `data-theme` into the
+    # markup is what keeps a light-theme user from a dark first paint;
+    # a JS-applied class would flash. There is no matching route: the
+    # toggle writes the cookie client-side (see public/app.js), because
+    # a POST + reload would cost an SSE reconnect for a color change.
     get '/' do
+      cookie = request.cookies['theme']
       erb :index, locals: {
         blocks: settings.transcript.to_a,
-        status: settings.runner.status_data
+        status: settings.runner.status_data,
+        theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME
       }
     end
 

@@ -72,6 +72,25 @@ RSpec.describe PikuriWeb::App do
       assert_includes last_response.body, 'idle'
       assert_includes last_response.body, '12.3k in / 4.5k out'
     end
+
+    it 'defaults to the dark theme with no cookie' do
+      get '/'
+      assert_includes last_response.body, '<html lang="en" data-theme="dark">'
+      assert_includes last_response.body, '☀ light'
+    end
+
+    it 'honours a light theme cookie' do
+      set_cookie 'theme=light'
+      get '/'
+      assert_includes last_response.body, '<html lang="en" data-theme="light">'
+      assert_includes last_response.body, '☾ dark'
+    end
+
+    it 'falls back to the default theme for an unknown cookie value' do
+      set_cookie 'theme=neon'
+      get '/'
+      assert_includes last_response.body, '<html lang="en" data-theme="dark">'
+    end
   end
 
   context 'GET /events' do

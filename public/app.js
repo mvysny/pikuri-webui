@@ -11,6 +11,7 @@ const cancelBtn = document.getElementById('cancel');
 const statusState = document.getElementById('status-state');
 const statusPending = document.getElementById('status-pending');
 const statusTokens = document.getElementById('status-tokens');
+const themeToggle = document.getElementById('theme-toggle');
 
 // Stick to the bottom only when the user is already there — scrolling up
 // to re-read must survive streaming updates.
@@ -66,3 +67,17 @@ promptEl.addEventListener('keydown', (e) => {
 });
 
 cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
+
+// Theme toggle. The cookie is the store — the server reads it back on
+// the next GET / and renders `data-theme` into the shell, so this only
+// has to flip the live page. Label and title name the theme the button
+// switches *to*, matching what index.erb rendered.
+themeToggle.addEventListener('click', () => {
+  const root = document.documentElement;
+  const theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+  const other = theme === 'dark' ? 'light' : 'dark';
+  root.dataset.theme = theme;
+  themeToggle.textContent = theme === 'dark' ? '☀ light' : '☾ dark';
+  themeToggle.title = themeToggle.ariaLabel = `Switch to the ${other} theme`;
+  document.cookie = `theme=${theme}; path=/; max-age=31536000; samesite=lax`;
+});
