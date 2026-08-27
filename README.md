@@ -71,6 +71,33 @@ Then open <http://localhost:4567>. Defaults to the LLM server at
 bin/pikuri-web-chat --server http://localhost:8082 --model my-model --port 9292
 ```
 
+Ctrl+C stops it. Open browser tabs don't delay the exit.
+
+## Develop
+
+```sh
+bin/pikuri-web-chat --dev
+```
+
+`--dev` runs Sinatra in development mode: `views/*.erb` is re-read per
+request, and an exception renders in the browser instead of only on
+stderr. `public/app.js` and `public/style.css` are read off disk on every
+request in either mode — a browser reload picks them up.
+
+Ruby under `lib/` is the exception: nothing reloads it, in either mode.
+The agent, its listener stack and the runner's worker thread are
+long-lived instances wired once in the boot script, so a class change
+lands only in a fresh process — which is also a fresh transcript. Let a
+watcher restart it:
+
+```sh
+find bin lib views -type f | entr -r bin/pikuri-web-chat --dev
+# or: rerun --dir bin,lib,views -- bin/pikuri-web-chat --dev
+```
+
+Both restart by signalling the process, which takes the same path as
+Ctrl+C — about a second, tabs open or not.
+
 ## Configure
 
 Connections and API keys come from `~/.config/pikuri/config.toml` — the

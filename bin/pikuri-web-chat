@@ -20,6 +20,10 @@ ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __dir__)
 require 'bundler/setup'
 require 'optparse'
 
+# Only for the :after_stopped hook wired below; Sinatra's run! loads the
+# rest of Puma through the rackup handler.
+require 'puma/events'
+
 # pikuri-web has no published gemspec yet, so its lib/ is not on
 # Bundler's load path. Adding it here lets `require 'pikuri_web'`
 # resolve through Zeitwerk.
@@ -38,6 +42,7 @@ cli_server = nil
 cli_model  = nil
 port = 4567
 bind = '127.0.0.1'
+dev = false
 
 parser = OptionParser.new do |opts|
   opts.banner = 'Usage: pikuri-web-chat [options]'
@@ -47,6 +52,7 @@ parser = OptionParser.new do |opts|
   opts.on('--model NAME', "Model identifier (default: #{PikuriWeb::Config::DEFAULT_MODEL})") { |v| cli_model = v }
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
+  opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
     exit
@@ -169,15 +175,41 @@ end
 PikuriWeb::App.set :transcript, transcript
 PikuriWeb::App.set :broadcaster, broadcaster
 PikuriWeb::App.set :runner, runner
-PikuriWeb::App.set :environment, :production
+# Development mode buys template reloading (views/*.erb re-read per
+# request) and in-browser exception pages. Ruby under lib/ is reloaded in
+# neither mode: the agent, its listener stack and the runner's worker
+# thread are long-lived instances wired above, so a class change needs a
+# fresh process — see README, "Develop".
+PikuriWeb::App.set :environment, dev ? :development : :production
+PikuriWeb::App.set :show_exceptions, dev
 PikuriWeb::App.set :bind, bind
 PikuriWeb::App.set :port, port
-# Each connected EventSource parks one Puma thread in the /events drain
-# loop; leave headroom over the default pool for a handful of tabs.
-PikuriWeb::App.set :server_settings, { min_threads: 0, max_threads: 16 }
-PikuriWeb::App.set :server, :puma
 
-at_exit { broadcaster.unsubscribe_all }
+# Ctrl+C hangs without this hook. Every open EventSource parks one Puma
+# thread in the /events drain loop; Puma's graceful stop then waits for
+# in-flight requests with no deadline, and the heartbeat above keeps
+# those parked writes succeeding — so the wait lasts as long as a tab
+# stays open. Puma's server thread fires :state, :stop immediately before
+# it starts waiting, which makes it the hook that can still release the
+# drain loops; Events#after_stopped and Sinatra's own INT trap both run
+# on the far side of the wait, and Puma overwrites Sinatra's trap anyway.
+puma_events = Puma::Events.new
+puma_events.register(:state) do |state|
+  broadcaster.close if %i[stop restart].include?(state)
+end
+
+PikuriWeb::App.set :server_settings, {
+  # Each connected EventSource parks one Puma thread in the /events
+  # drain loop; leave headroom over the default pool for a few tabs.
+  min_threads: 0,
+  max_threads: 16,
+  events: puma_events,
+  # Backstop for a request thread the sentinel can't reach: an SSE write
+  # blocked on a socket whose peer vanished without a reset, or a :state
+  # hook that a future Puma renames out from under us.
+  force_shutdown_after: 5
+}
+PikuriWeb::App.set :server, :puma
 
 PikuriWeb::App.run! do
   puts "pikuri-web listening on http://#{bind}:#{port} (agent: #{llm.model} @ #{llm.server})"

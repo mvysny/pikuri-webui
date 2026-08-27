@@ -70,6 +70,16 @@ Tuile churn this project doesn't share.
   thread draining one subscribed queue. There is no UI thread and no
   marshaling — thread-safety lives in the sinks, not the callers.
 
+  Shutdown is where that bites. A parked drain loop is an in-flight
+  request as far as Puma is concerned, its graceful stop waits for
+  one with no deadline, and the 15 s heartbeat keeps those writes
+  healthy — so Ctrl+C hangs for as long as a browser tab stays open.
+  The boot script closes {Broadcaster} from Puma's `:state, :stop`
+  event, the last hook that runs before that wait, and leaves
+  `force_shutdown_after` as the backstop. Nothing in the exit path
+  may rely on `at_exit` or on Sinatra's own INT trap: both are on
+  the far side of the wait.
+
 - **Mid-loop input goes through `Control::Interloper`** (which the TUI
   deferred). {AgentRunner#submit} starts a turn when idle and injects
   when busy; the injection renders through the normal listener path as
@@ -173,10 +183,12 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/style.css` — hand-written chat layout; block kinds mirror
   the TUI's visual language (muted thinking, cyan tool lines).
 - `bin/pikuri-web-chat` — boot script: config load, agent + tools +
-  Interloper wiring, the trifecta report, Puma start. Same flags as the
-  TUI plus `--port` / `--bind`. No `--api-key` flag, ever: a secret on
-  the command line is visible in `ps` and shell history, so keys come
-  only from the config file.
+  Interloper wiring, the trifecta report, Puma start (server settings and
+  the shutdown hook). Same flags as the TUI plus `--port` / `--bind` /
+  `--dev` — the last one only flips Sinatra into development mode, since
+  no amount of reloading re-wires the live agent. No `--api-key` flag,
+  ever: a secret on the command line is visible in `ps` and shell
+  history, so keys come only from the config file.
 
 ## Conventions
 

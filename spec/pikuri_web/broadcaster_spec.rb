@@ -42,11 +42,24 @@ RSpec.describe PikuriWeb::Broadcaster do
     end
   end
 
-  context '#unsubscribe_all' do
+  context '#close' do
     it 'pushes the nil shutdown sentinel and drops all subscribers' do
       queue = broadcaster.subscribe
-      broadcaster.unsubscribe_all
+      broadcaster.close
       assert_nil queue.pop
+      assert_equal 0, broadcaster.size
+    end
+
+    it 'hands a late subscriber a queue holding only the sentinel' do
+      broadcaster.close
+      queue = broadcaster.subscribe
+      assert_nil queue.pop
+      assert_equal 0, broadcaster.size
+    end
+
+    it 'is idempotent' do
+      broadcaster.close
+      broadcaster.close
       assert_equal 0, broadcaster.size
     end
   end

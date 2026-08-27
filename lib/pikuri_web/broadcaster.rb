@@ -10,22 +10,25 @@ module PikuriWeb
   #
   # Frames are formatted here (one place knows the wire format); the SSE
   # route just pops ready-to-write strings. A +nil+ in a queue is the
-  # shutdown sentinel — {#unsubscribe_all} pushes it so drain loops can
-  # exit cleanly on server stop.
+  # shutdown sentinel — {#close} pushes it so drain loops can exit
+  # cleanly on server stop.
   class Broadcaster
     def initialize
       @mutex = Mutex.new
       @queues = []
+      @closed = false
     end
 
     # Register a new client. The caller owns the returned queue's drain
     # loop and must {#unsubscribe} it when the connection closes.
     #
     # @return [Thread::Queue] frames (Strings) to write to the client;
-    #   +nil+ means "stop draining"
+    #   +nil+ means "stop draining". After {#close} the queue holds
+    #   nothing but that sentinel, so a connection that slips in during
+    #   shutdown drains immediately instead of parking forever.
     def subscribe
       queue = Thread::Queue.new
-      @mutex.synchronize { @queues << queue }
+      @mutex.synchronize { @closed ? queue.push(nil) : @queues << queue }
       queue
     end
 
@@ -58,10 +61,18 @@ module PikuriWeb
       each_queue { |q| q.push(": #{text}\n\n") }
     end
 
-    # Push the +nil+ shutdown sentinel to every subscriber and drop them.
+    # Push the +nil+ shutdown sentinel to every subscriber, drop them all,
+    # and refuse further ones. Idempotent.
+    #
+    # Every drain loop returns, which is what lets the server's graceful
+    # stop finish: it waits for in-flight requests, and a parked +/events+
+    # thread is one. Call it from the server's stop hook, not +at_exit+ —
+    # by then the wait has already happened.
+    #
     # @return [void]
-    def unsubscribe_all
+    def close
       @mutex.synchronize do
+        @closed = true
         @queues.each { |q| q.push(nil) }
         @queues.clear
       end
