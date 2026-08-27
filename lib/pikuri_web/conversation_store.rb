@@ -12,9 +12,12 @@ module PikuriWeb
   # steps, because the history itself is written by pikuri in between:
   #
   #   store = ConversationStore.new(root: dir, shell: 'pikuri-web-chat', model: 'qwen3.6')
-  #   conversation = store.create                    # mints an id; writes nothing
+  #   conversation = store.create                    # mints an id; no folder yet
   #   agent.export_history.save(conversation.dir)    # pikuri writes history.json
   #   store.write_meta(conversation)                 # our envelope, and the commit point
+  #
+  # The root exists from construction; a conversation's own directory appears
+  # with its first save.
   #
   # Both halves land in the one directory, and each side writes only its own:
   #
@@ -62,9 +65,12 @@ module PikuriWeb
     #   @return [Time]
     Conversation = Data.define(:id, :dir, :title, :created_at)
 
+    # Creates +root+ if it is not there — so the folder exists from boot,
+    # rather than appearing on whichever later event happens to save first.
+    #
     # @param root [String, Pathname] directory holding one subdirectory per
-    #   conversation, e.g. +~/.local/state/pikuri/conversations+; created on
-    #   first write, not here
+    #   conversation, e.g.
+    #   +~/.local/state/pikuri/pikuri-web-chat/conversations+
     # @param shell [String] which binary is writing these, recorded in
     #   +meta.json+ so a later picker can say "saved by a different harness"
     # @param model [String] the model this conversation is talking to
@@ -72,14 +78,15 @@ module PikuriWeb
       @root = Pathname(root)
       @shell = shell
       @model = model
+      mkdir_private(@root)
     end
 
     # @return [Pathname] the conversations root
     attr_reader :root
 
-    # Mint a new conversation. Writes nothing — a directory per click would
-    # litter the root with empty conversations, so a conversation reaches disk
-    # only once it has something in it.
+    # Mint a new conversation. No directory yet — a folder per click would
+    # litter the root with conversations nothing was ever said in, so one
+    # appears when there is something to put in it.
     #
     #   store.create.id     # => "2026-08-27T12-03-51Z-3f9a"
     #   store.create.title  # => "2026-08-27 14:03"
@@ -91,16 +98,20 @@ module PikuriWeb
     # @param at [Time] the conversation's start time
     # @return [Conversation]
     def create(at: Time.now)
-      id = "#{at.utc.strftime('%Y-%m-%dT%H-%M-%SZ')}-#{SecureRandom.hex(2)}"
+      # #getutc / #getlocal, not #utc / #localtime: the destructive pair would
+      # convert the caller's own Time object as a side effect.
+      id = "#{at.getutc.strftime('%Y-%m-%dT%H-%M-%SZ')}-#{SecureRandom.hex(2)}"
       Conversation.new(
         id: id,
         dir: @root / id,
-        title: at.localtime.strftime('%Y-%m-%d %H:%M'),
+        title: at.getlocal.strftime('%Y-%m-%d %H:%M'),
         created_at: at
       )
     end
 
-    # Write +meta.json+, creating the conversation's directory if needed.
+    # Write +meta.json+, creating the conversation's directory if pikuri has
+    # not already — and re-asserting 0700 either way, since +History#save+
+    # creates it with the default mode.
     #
     # Call it *after* the history: +history.json+ is the conversation,
     # +meta.json+ is what says it is worth listing, so an interrupted save
@@ -110,7 +121,6 @@ module PikuriWeb
     # @param updated_at [Time] last-activity stamp; the sidebar's sort key
     # @return [Pathname] the file written
     def write_meta(conversation, updated_at: Time.now)
-      mkdir_private(@root)
       mkdir_private(conversation.dir)
       path = conversation.dir / META_FILE
       atomic_write(path, "#{JSON.pretty_generate(

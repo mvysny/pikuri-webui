@@ -107,6 +107,13 @@ the alternatives that were rejected, live one entry per slug in
   nothing outside `style.css` reads a raw color.
   See `D_theme_cookie`.
 
+- **All state under one folder named after the shell.**
+  `~/.local/state/pikuri/pikuri-web-chat/`, derived once in the boot
+  script as `state_root`; anything new this shell persists goes beside
+  `conversations/`, never straight into `Pikuri::Paths.state`. A shared
+  path is the last step of cross-shell interop, not the first — the
+  *format* is what travels. See `D_per_shell_state_root`.
+
 - **One config file for every pikuri shell, and secrets live only
   there.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
   schema, including sections this host never reads. No `--api-key`

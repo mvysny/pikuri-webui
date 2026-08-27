@@ -177,19 +177,19 @@ RSpec.describe PikuriWeb::AgentRunner do
     end
 
     it 'writes nothing for a turn that left no messages' do
+      dir = runner.conversation.dir
       runner.submit('hello')
       wait_until { runner.busy? }
       agent.release
       wait_until { !runner.busy? }
 
-      refute @root.exist?
+      refute dir.exist?
+      assert_empty @root.children
     end
 
     it 'logs a save failure instead of killing the worker thread' do
       agent.history = history_of('hi')
-      # Force the save to fail: a plain file where the root must be a directory.
-      @root.dirname.mkpath
-      @root.write('not a directory')
+      def conversations.write_meta(*) = raise(Errno::ENOSPC)
 
       log = capture_log do
         runner.submit('hi')
@@ -230,7 +230,7 @@ RSpec.describe PikuriWeb::AgentRunner do
 
       assert_equal 0, agent.clears
       assert_equal before.id, runner.conversation.id
-      refute @root.exist?
+      assert_empty @root.children
     end
 
     it 'refuses while a turn is in flight' do

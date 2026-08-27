@@ -211,6 +211,48 @@ attacker-chosen URL. The boot-time trifecta report stays the *checkable*
 answer for whatever tools a script actually wired, so a sibling script
 does not need this entry re-argued — it needs its own report.
 
+## D_per_shell_state_root — Every shell keeps its state under one folder named after itself (2026-08-27)
+
+**Status:** Accepted, shipped 2026-08-27. Reverses the layout the first
+conversation-store commit shipped the same day, which put `conversations/`
+directly under `Pikuri::Paths.state`.
+
+**Context.** `Pikuri::Paths.state` is shared: pikuri writes there, and so
+will pikuri-tui and every sibling script AGENTS.md anticipates
+(`D_chat_only_entry_point` — a new capability is a new script, not a new
+tool). Conversations are the first thing this shell persists, and the
+first commit named the folder after its *contents*, on the theory that a
+future pikuri-tui `/resume` should read the same files.
+
+**Decision.** One folder per shell, named after the script, and
+**everything that shell persists goes inside it**:
+
+```
+~/.local/state/pikuri/pikuri-web-chat/conversations/<id>/
+```
+
+`bin/pikuri-web-chat` derives a single `state_root` local and composes
+every path from it, so the next thing worth persisting lands beside
+`conversations/` rather than in a second place. The root is created by
+{ConversationStore} at construction — the folder exists from boot, not
+from whichever later event happens to save first.
+
+**Rejected: a shared `conversations/` for cross-shell resume.** The
+attractive end state is "start a conversation in the TUI, finish it in the
+browser", and a shared folder looks like the cheap way there. It isn't:
+the *format* is what makes that possible (pikuri's `history.json` plus a
+documented envelope), and the format travels regardless of where the files
+sit. Meanwhile a shared folder means two shells writing one directory with
+no agreement about who owns it, no way to tell whose conversations these
+are, and `rm -r` on it destroying more than the shell you meant. Path
+sharing is the *last* step of interop, not the first.
+
+**Consequences.** Cross-shell resume now needs a deliberate location — a
+shared subfolder both shells opt into, or a pikuri-level store — and
+whatever it is, it is a decision rather than an accident of layout. This
+folder is also the reset: `rm -r` on it returns the shell to first-run
+state and touches nothing else.
+
 ## D_schema_complete_config — One config file for every pikuri shell, whole schema, secrets nowhere else (2026-08-27)
 
 **Status:** Accepted, shipped 2026-08-27 as {Config}, a port of

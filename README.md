@@ -80,9 +80,11 @@ page — the `/clear` this shell used to lack. It is refused (and the button
 disabled) while the agent is mid-turn: a click must not throw a running
 turn away.
 
-Each conversation becomes a directory under
-`~/.local/state/pikuri/conversations/` (`$XDG_STATE_HOME` if you set it),
-named for when it started:
+Everything this shell persists lives under
+`~/.local/state/pikuri/pikuri-web-chat/` (`$XDG_STATE_HOME` if you set
+it), so `rm -r` on that folder is a complete reset. Each conversation
+becomes a directory under its `conversations/`, named for when it
+started:
 
 ```
 2026-08-27T12-03-51Z-3f9a/
@@ -91,10 +93,13 @@ named for when it started:
     meta.json      title, timestamps, which shell and model wrote it
 ```
 
-Turns are saved as they finish, so quitting keeps the conversation — but
-**nothing reads these back yet**: a restart still starts you empty, and the
-saved conversations just accumulate. Loading them, and a sidebar to pick
-from, is what `ideas/multiple-conversations.md` plans.
+The `conversations/` folder is there from boot; a conversation's own
+directory appears with its first completed turn, so a session you never
+said anything in leaves nothing behind. Turns are saved as they finish, so
+quitting keeps the conversation — but **nothing reads these back yet**: a
+restart still starts you empty, and the saved conversations just
+accumulate. Loading them, and a sidebar to pick from, is what
+`ideas/multiple-conversations.md` plans.
 
 Nothing is encrypted. These files hold everything you typed and everything
 the tools fetched, so the directories are created `0700` and that is the

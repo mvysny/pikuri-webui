@@ -166,7 +166,7 @@ portable enough for XDG_DATA_HOME (logs, history, layout)" — i.e. `~/.local/st
 `mkdir_p`s itself. So:
 
 ```
-~/.local/state/pikuri/conversations/
+~/.local/state/pikuri/pikuri-web-chat/conversations/
     2026-08-27T12-03-51Z-3f9a/
         meta.json      # ours: title, created_at, updated_at, model, shell, schema version
         history.json   # pikuri's: History#save, rewritten atomically per turn
@@ -190,16 +190,20 @@ Choices baked into that sketch, each arguable:
 - **The sidebar reads only `meta.json` per conversation** — N tiny reads, fine into the hundreds;
   revisit with an index file only if it ever isn't (and note that an index is a cache that can
   drift, so not in v1).
-- **Shared folder, not web-specific.** `conversations/`, not `web-conversations/`, so a future
-  pikuri-tui `/resume` or a pikuri-level store can read the same files. The attractive end state
-  is "start a conversation in the TUI, finish it in the browser."
+- ~~**Shared folder, not web-specific.**~~ **REVERSED — `D_per_shell_state_root`.** Everything
+  this shell persists lives under `<state>/pikuri-web-chat/`. The "start in the TUI, finish in the
+  browser" end state is still the goal, but it is carried by the *format* (pikuri's `history.json`
+  plus a documented envelope), which travels wherever the files sit; a shared path would just mean
+  two shells writing one directory with no agreement about who owns it. Cross-shell resume now
+  needs a deliberate shared location rather than inheriting one by accident.
 
 **`Q_folder_ownership` — SETTLED, and upstream drew the line.** `D_history_value_type`: title,
 timestamps and conversation ordering are "the shell's envelope wraps ours". pikuri owns
 `history.json` and `attachments/`; we own the folder, its name, and `meta.json`. pikuri ships no
 conversation *store* and pikuri-tui has not adopted the history yet, so there is nothing to
 collide with — and if a shared store ever lands, the per-conversation folder is already the unit it
-would want.
+would want. Where that folder *sits* is now `D_per_shell_state_root`: under this shell's own state
+root, not a shared one.
 
 **`Q_write_shape` — near-settled by upstream's own measurement.** `D_history_container` measured the
 whole-file atomic rewrite `save` performs: **1.9 ms** for 200 messages (0.39 MB), **15.7 ms** for
@@ -444,9 +448,12 @@ wait for. The order that keeps each stage shippable:
    - **"Idle" means "saved".** `#busy?` stays true until the turn's save lands, because a
      `new_conversation` slipping into the gap would re-point the live conversation and the save
      would land in the fresh folder. The save runs under the same mutex as the submit decision.
-   - **`Q_new_conversation_litter` and `Q_perms` are implemented as leaned**: `#create` writes
-     nothing, the button is a no-op (`:empty`) on a conversation with no messages, and directories
-     are 0700.
+   - **`Q_new_conversation_litter` and `Q_perms` are implemented as leaned**: `#create` mints
+     without writing, the button is a no-op (`:empty`) on a conversation with no messages, and
+     directories are 0700. The split that fell out: the *root* is created eagerly, at store
+     construction, so the folder is visible from boot rather than appearing on the first save —
+     "where does this go?" should not need a completed turn to answer. Conversation folders stay
+     lazy.
    - **`Q_switch_while_busy`'s refusal is already live** for the clear case: `POST /conversations`
      answers 409 while a turn is in flight, and the button renders `disabled`.
 2. **Sidebar, read-only list** — titles + relative time, current one highlighted, no switching.

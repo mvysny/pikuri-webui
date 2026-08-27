@@ -14,6 +14,15 @@ RSpec.describe PikuriWeb::ConversationStore do
     JSON.parse((conversation.dir / 'meta.json').read)
   end
 
+  context 'construction' do
+    it 'creates the root 0700, so it is there from boot' do
+      store
+      assert @root.directory?
+      assert_equal '700', (@root.stat.mode & 0o777).to_s(8)
+      assert_empty @root.children
+    end
+  end
+
   context '#create' do
     it 'mints a lexically sortable UTC id with a random suffix' do
       conversation = store.create(at: at)
@@ -29,14 +38,32 @@ RSpec.describe PikuriWeb::ConversationStore do
       refute_equal store.create(at: at).id, store.create(at: at).id
     end
 
-    it 'writes nothing — an unsaved conversation must not litter the root' do
-      store.create(at: at)
-      refute @root.exist?
+    it 'creates no directory — that waits for something to put in it' do
+      refute store.create(at: at).dir.exist?
+    end
+
+    it 'leaves the caller its own Time, unconverted' do
+      given = Time.utc(2026, 8, 27, 12, 3, 51)
+      store.create(at: given)
+      assert given.utc?, 'create converted the caller\'s Time in place'
     end
   end
 
   context '#write_meta' do
-    it 'writes the envelope, creating the conversation directory' do
+    it 'creates the conversation directory 0700 on the way' do
+      conversation = store.create(at: at)
+      store.write_meta(conversation)
+      assert_equal '700', (conversation.dir.stat.mode & 0o777).to_s(8)
+    end
+
+    it 'tightens a directory History#save created with the default mode' do
+      conversation = store.create(at: at)
+      FileUtils.mkdir_p(conversation.dir.to_path, mode: 0o755)
+      store.write_meta(conversation)
+      assert_equal '700', (conversation.dir.stat.mode & 0o777).to_s(8)
+    end
+
+    it 'writes the envelope' do
       conversation = store.create(at: at)
       store.write_meta(conversation, updated_at: Time.utc(2026, 8, 27, 12, 41, 2))
 
@@ -52,13 +79,6 @@ RSpec.describe PikuriWeb::ConversationStore do
         },
         meta_of(conversation)
       )
-    end
-
-    it 'creates the root and the conversation directory 0700' do
-      conversation = store.create(at: at)
-      store.write_meta(conversation)
-      assert_equal '700', (@root.stat.mode & 0o777).to_s(8)
-      assert_equal '700', (conversation.dir.stat.mode & 0o777).to_s(8)
     end
 
     it 'rewrites in place on the next save, leaving no temp file behind' do
