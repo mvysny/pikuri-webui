@@ -39,15 +39,23 @@ the alternatives that were rejected, live one entry per slug in
   project's premise rather than a fork, so no `D_` entry.)
 
 - **The seam: `Pikuri::*` appears only in `bin/pikuri-web-chat`,
-  {SseListener} and {AgentRunner}.** {Transcript}, {Broadcaster},
-  {StreamingMessage}, {MarkdownRenderer}, {Config} and {App} are
-  Pikuri-free — they speak ids, kinds, HTML strings and queues.
-  See `D_pikuri_free_core`.
+  {SseListener}, {AgentRunner} and {HistoryReplay}.** {Transcript},
+  {Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
+  {ConversationStore}, {Config} and {App} are Pikuri-free — they speak
+  ids, kinds, HTML strings, paths and queues. A fourth adapter has to
+  argue for itself. See `D_pikuri_free_core`.
 
 - **The transcript is server-authoritative.** {Transcript} holds the
   rendered blocks; `GET /` renders the full snapshot and SSE carries
   only deltas. Never introduce client-only conversation state.
   See `D_server_authoritative_transcript`.
+
+- **A saved conversation is `history.json` plus our `meta.json`, and
+  nothing else.** Blocks are re-derived by replaying synthesized events
+  through {SseListener}, never stored — so old conversations get today's
+  renderer and today's CSS, and there is one transcript, rebuilt on load
+  rather than swapped. No rendered HTML on disk, no second renderer.
+  See `D_replay_from_history`.
 
 - **The threading rule.** The agent loop runs on a worker thread owned
   by {AgentRunner} — never on a Sinatra request thread. Thread-safety
@@ -142,7 +150,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   into the transcript + SSE. The TuileListener equivalent.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, owns
   the worker thread, the start-vs-inject (Interloper) decision and the
-  live conversation (saves at turn end); broadcasts status.
+  live conversation (saves at turn end, loads a stored one on request);
+  broadcasts status.
+- `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
+  saved `Agent::History` back into the events that produced it.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
   the conversations folder: mints ids, owns `meta.json`, lists what is
   saved. Pikuri-free.

@@ -39,7 +39,10 @@ module PikuriWeb
   #   {#render_system_injection}.
   # - +Reset+ empties the transcript and pushes one +reset+ SSE event, so
   #   every open tab drops its blocks without a page reload (and without
-  #   losing a half-typed message).
+  #   losing a half-typed message). Loading a saved conversation rides the
+  #   same arm: +Agent#load_history!+ resets first, and {HistoryReplay}
+  #   then refills the transcript through this listener — which is why
+  #   there is no second transcript to swap in.
   # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
   #   status bar reads +TokenLog#status_line+ via AgentRunner).
   class SseListener < Pikuri::Agent::Listener::Base
@@ -120,12 +123,13 @@ module PikuriWeb
         add_block(:error, MarkdownRenderer.escape('! cancelled'))
       in Pikuri::Agent::Event::Reset
         reset_transcript
+      in Pikuri::Agent::Event::HistoryLoaded
+        # Silent on purpose. The {HistoryReplay} that follows renders the
+        # restored conversation itself, and a "restored N messages" line would
+        # be the only block in the transcript that never came from the agent.
       else
         # Tokens / ContextCap: silent here (TokenLog consumes them).
         # ModelSwitched: unreachable — this shell has no model picker.
-        # HistoryLoaded: unreachable until conversations can be loaded back
-        # (this shell only ever starts fresh ones). Wiring either means
-        # adding an arm.
       end
     end
 

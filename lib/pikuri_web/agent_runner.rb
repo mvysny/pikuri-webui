@@ -37,15 +37,16 @@ module PikuriWeb
   # This class owns *which* conversation is live, because it owns the agent
   # whose history that is:
   #
-  #   runner.new_conversation   # => :started — saved, cleared, fresh id minted
+  #   runner.new_conversation                      # => :started — saved, cleared, fresh id
+  #   runner.load_conversation(store.list.first)   # => :loaded — saved, then replaced
   #
   # Saves happen at *turn end*, from the worker thread's ensure, so a history
   # is never exported mid-+complete+ and {#busy?} staying true until the save
   # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
   # loses that turn.
   #
-  # Part of the Pikuri seam: this class and SseListener are the only
-  # lib/ files that reference +Pikuri::*+.
+  # Part of the Pikuri seam: this class, SseListener and HistoryReplay are the
+  # only lib/ files that reference +Pikuri::*+.
   class AgentRunner
     # @param agent [Pikuri::Agent] fully wired agent (listeners, tools,
     #   interloper:, cancellable: — built in bin/pikuri-web-chat)
@@ -57,15 +58,20 @@ module PikuriWeb
     # @param conversations [ConversationStore] where turns get saved; the
     #   live conversation is minted from it here and re-minted by
     #   {#new_conversation}
+    # @param listener [SseListener] the transcript's renderer, fed directly
+    #   by {#load_conversation}'s replay — the agent's own listener stack
+    #   wraps it in a delta rate-limiter that a replay has nothing to say to
     # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when
     #   present, its +status_line+ rides along in every status event
     #   (the web status bar's token/context readout)
-    def initialize(agent:, interloper:, cancellable:, broadcaster:, conversations:, token_log: nil)
+    def initialize(agent:, interloper:, cancellable:, broadcaster:, conversations:, listener:,
+                   token_log: nil)
       @agent = agent
       @interloper = interloper
       @cancellable = cancellable
       @broadcaster = broadcaster
       @conversations = conversations
+      @listener = listener
       @token_log = token_log
       @mutex = Mutex.new
       @thread = nil
@@ -141,6 +147,37 @@ module PikuriWeb
       outcome
     end
 
+    # Save the live conversation and put a stored one in its place: the agent's
+    # history, and the transcript every browser is looking at.
+    #
+    #   runner.load_conversation(store.list.first)   # => :loaded
+    #
+    # The transcript is rebuilt rather than swapped: +load_history!+ emits
+    # +Event::Reset+, which empties it and every open tab, and {HistoryReplay}
+    # then refills it through the same {SseListener} a live turn renders
+    # through. So there is only ever one transcript, and a saved conversation
+    # comes back with today's Markdown renderer and today's CSS.
+    #
+    # Refuses while a turn is in flight, for the same reason
+    # {#new_conversation} does. The refusal is also what makes feeding the
+    # listener from a request thread safe: {SseListener} keeps unguarded
+    # per-turn streaming state, and nothing can be emitting into it while this
+    # holds the mutex and no loop is running.
+    #
+    # @param conversation [ConversationStore::Conversation] from
+    #   +ConversationStore#list+ — a listed conversation rather than an id, so
+    #   no caller ever turns user input into a path
+    # @return [:loaded, :busy, :current, :failed] +:current+ when it is
+    #   already live (nothing to do); +:failed+ when the stored history could
+    #   not be read, in which case the live conversation is untouched
+    def load_conversation(conversation)
+      outcome = @mutex.synchronize { switch_to(conversation) }
+      # TokenLog reseeds its context readout from Event::HistoryLoaded, so the
+      # status bar is stale until this lands.
+      broadcast_status if outcome == :loaded
+      outcome
+    end
+
     # Status payload shared by SSE +status+ events and +GET /+'s initial
     # render.
     #
@@ -197,6 +234,37 @@ module PikuriWeb
       @agent.clear_conversation
       @conversation = @conversations.create
       :started
+    end
+
+    # {#load_conversation}'s body; the caller holds @mutex.
+    #
+    # @param conversation [ConversationStore::Conversation]
+    # @return [:loaded, :busy, :current, :failed]
+    def switch_to(conversation)
+      return :busy if busy?
+      return :current if conversation.id == @conversation.id
+
+      # Read before writing: a corrupt or missing history.json must leave the
+      # live conversation exactly as it was, not half-swapped.
+      history = stored_history(conversation)
+      return :failed if history.nil?
+
+      persist
+      @agent.load_history!(history)
+      HistoryReplay.events(history).each { |event| @listener.on_event(event) }
+      @conversation = conversation
+      :loaded
+    end
+
+    # @param conversation [ConversationStore::Conversation]
+    # @return [Pikuri::Agent::History, nil] nil when the folder cannot be read
+    #   — a file someone edited or a half-written save is the library's to
+    #   report and ours to survive, unlike a raise from the load itself
+    def stored_history(conversation)
+      Pikuri::Agent::History.load(conversation.dir)
+    rescue Pikuri::Agent::History::Error, SystemCallError => e
+      PikuriWeb.logger.error("loading conversation #{conversation.id} failed (#{e.class}: #{e.message})")
+      nil
     end
 
     # Write the live conversation to disk: pikuri's +history.json+, then our

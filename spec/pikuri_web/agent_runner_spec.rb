@@ -11,13 +11,14 @@ RSpec.describe PikuriWeb::AgentRunner do
   # until the spec releases it, and serves a real History (so #persist
   # exercises pikuri's own save rather than a stub).
   class FakeAgent
-    attr_reader :messages, :clears
+    attr_reader :messages, :clears, :loaded
     attr_accessor :history
 
     def initialize
       @gate = Thread::Queue.new
       @messages = []
       @clears = 0
+      @loaded = []
       @history = Pikuri::Agent::History.new(messages: [])
     end
 
@@ -33,7 +34,23 @@ RSpec.describe PikuriWeb::AgentRunner do
       @history = Pikuri::Agent::History.new(messages: [])
     end
 
+    # As the real one: clears, then adopts what it was handed.
+    def load_history!(history)
+      clear_conversation
+      @loaded << history
+      @history = history
+      history.messages.size
+    end
+
     def release = @gate.push(:go)
+  end
+
+  # Stands in for SseListener: records what the replay fed it.
+  class FakeListener
+    attr_reader :events
+
+    def initialize = @events = []
+    def on_event(event) = @events << event
   end
 
   # A one-message History — enough to be non-empty, which is what the
@@ -57,10 +74,11 @@ RSpec.describe PikuriWeb::AgentRunner do
   let(:conversations) do
     PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'qwen3.6')
   end
+  let(:listener) { FakeListener.new }
   let(:runner) do
     described_class.new(
       agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations
+      broadcaster: broadcaster, conversations: conversations, listener: listener
     )
   end
 
@@ -241,6 +259,65 @@ RSpec.describe PikuriWeb::AgentRunner do
       assert_equal :busy, runner.new_conversation
 
       assert_equal 0, agent.clears
+    end
+  end
+
+  context '#load_conversation' do
+    # A conversation on disk to switch to. Written the way the runner writes
+    # one: pikuri's history, then our envelope.
+    def saved(text)
+      conversation = conversations.create(at: Time.now - 3600)
+      history_of(text).save(conversation.dir)
+      conversations.write_meta(conversation)
+      conversation
+    end
+
+    it 'saves what is live, hands the stored history to the agent, and replays it' do
+      target = saved('older question')
+      agent.history = history_of('current question')
+      leaving = runner.conversation
+
+      assert_equal :loaded, runner.load_conversation(target)
+
+      assert_equal target.id, runner.conversation.id
+      assert (leaving.dir / 'history.json').file?, 'left without saving the outgoing conversation'
+      assert_equal ['older question'], agent.loaded.flat_map { |h| h.messages.map(&:content) }
+      assert_equal ['older question'], listener.events.map(&:content)
+    end
+
+    it 'broadcasts status, since HistoryLoaded reseeds the token readout' do
+      queue = broadcaster.subscribe
+      runner.load_conversation(saved('older question'))
+      assert_equal %w[status], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+    end
+
+    it 'refuses while a turn is in flight, leaving the transcript to the running turn' do
+      target = saved('older question')
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+
+      assert_equal :busy, runner.load_conversation(target)
+
+      assert_empty agent.loaded
+      assert_empty listener.events
+    end
+
+    it 'does nothing when asked for the conversation already live' do
+      assert_equal :current, runner.load_conversation(runner.conversation)
+      assert_empty agent.loaded
+    end
+
+    it 'leaves the live conversation alone when the stored history is unreadable' do
+      target = saved('older question')
+      (target.dir / 'history.json').write('not json')
+      agent.history = history_of('current question')
+
+      log = capture_log { assert_equal :failed, runner.load_conversation(target) }
+
+      assert_includes log, "loading conversation #{target.id} failed"
+      refute_equal target.id, runner.conversation.id
+      assert_empty agent.loaded
+      assert_empty listener.events
     end
   end
 

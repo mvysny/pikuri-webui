@@ -18,6 +18,18 @@ RSpec.describe 'saving a conversation and starting a new one' do
     PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'fake-model')
   end
 
+  # Extensions own the public route to Agent#append_reference_block: a String
+  # back from on_user_message is what the agent wraps in <system-reminder> and
+  # emits as SystemInjected.
+  class SkillInjector
+    include Pikuri::Agent::Extension
+
+    def on_user_message(_ctx, _content) = '<skill name="writing-rdoc">the whole SKILL.md body</skill>'
+  end
+
+  let(:listener) { PikuriWeb::SseListener.new(transcript: transcript, broadcaster: broadcaster) }
+  let(:extensions) { [] }
+
   let(:agent) do
     transport = Pikuri::Testing.fake_transport do |llm|
       llm.tool_call('calculator', expression: '2 + 2')
@@ -30,15 +42,16 @@ RSpec.describe 'saving a conversation and starting a new one' do
       cancellable: cancellable,
       interloper: interloper
     ) do |c|
-      c.add_listener PikuriWeb::SseListener.new(transcript: transcript, broadcaster: broadcaster)
+      c.add_listener listener
       c.add_tool Pikuri::Tool::CALCULATOR
+      extensions.each { |extension| c.add_extension extension }
     end
   end
 
   let(:runner) do
     PikuriWeb::AgentRunner.new(
       agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations
+      broadcaster: broadcaster, conversations: conversations, listener: listener
     )
   end
 
@@ -80,6 +93,123 @@ RSpec.describe 'saving a conversation and starting a new one' do
     assert_includes drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }, 'reset'
     assert_empty agent.export_history.messages
     assert_equal 4, Pikuri::Agent::History.load(saved.dir).messages.size
+  end
+
+  # What Q_store_format (b) rests on: the file holds only messages, and the
+  # blocks are re-derived. These are the specs that catch a drift between what
+  # the agent emits live and what HistoryReplay synthesizes — including the
+  # <system-reminder> envelope, whose tag is a private constant upstream that
+  # HistoryReplay has to mirror.
+  context 'replaying a saved conversation' do
+    def rendered(store) = store.to_a.map { |b| [b.kind, b.html] }
+
+    # A listener with nowhere to broadcast, fed only from disk.
+    def replay_into(transcript, dir)
+      listener = PikuriWeb::SseListener.new(transcript: transcript, broadcaster: PikuriWeb::Broadcaster.new)
+      PikuriWeb::HistoryReplay.events(Pikuri::Agent::History.load(dir)).each { |e| listener.on_event(e) }
+    end
+
+    it 'rebuilds the transcript the live turn produced, block for block' do
+      dir = runner.conversation.dir
+      run_turn('What is 2 + 2?')
+
+      restored = PikuriWeb::Transcript.new
+      replay_into(restored, dir)
+
+      assert_equal rendered(transcript), rendered(restored)
+    end
+
+    context 'with an extension injecting a reference block' do
+      let(:extensions) { [SkillInjector.new] }
+
+      it 'renders it as the one-line notice, not the wrapped body' do
+        dir = runner.conversation.dir
+        run_turn('What is 2 + 2?')
+
+        restored = PikuriWeb::Transcript.new
+        replay_into(restored, dir)
+
+        assert_includes rendered(transcript).map(&:last).join, 'loaded skill: writing-rdoc'
+        assert_equal rendered(transcript), rendered(restored)
+      end
+    end
+
+    it 'round-trips the folder unchanged' do
+      dir = runner.conversation.dir
+      run_turn('What is 2 + 2?')
+      before = (dir / 'history.json').read
+
+      agent.load_history!(Pikuri::Agent::History.load(dir))
+      agent.export_history.save(dir)
+
+      assert_equal before, (dir / 'history.json').read
+    end
+  end
+
+  context '#load_conversation' do
+    it 'brings back the transcript and the history of a conversation left behind' do
+      first = runner.conversation
+      run_turn('What is 2 + 2?')
+      was_rendered = transcript.to_a.map { |b| [b.kind, b.html] }
+      runner.new_conversation
+      run_turn('Hello again')
+
+      saved = conversations.list.find { |c| c.id == first.id }
+      assert_equal :loaded, runner.load_conversation(saved)
+
+      assert_equal first.id, runner.conversation.id
+      assert_equal was_rendered, transcript.to_a.map { |b| [b.kind, b.html] }
+      assert_equal Pikuri::Agent::History.load(first.dir), agent.export_history
+    end
+
+    it 'saves the conversation it is leaving' do
+      first = runner.conversation
+      run_turn('What is 2 + 2?')
+      runner.new_conversation
+      second = runner.conversation
+      run_turn('Hello again')
+
+      runner.load_conversation(conversations.list.find { |c| c.id == first.id })
+
+      assert_equal %w[user assistant], Pikuri::Agent::History.load(second.dir).messages.map(&:role)
+    end
+
+    it 'tells every tab to empty before the restored blocks arrive' do
+      first = runner.conversation
+      run_turn('What is 2 + 2?')
+      runner.new_conversation
+      queue = broadcaster.subscribe
+
+      runner.load_conversation(conversations.list.find { |c| c.id == first.id })
+
+      events = drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+      assert_equal 'reset', events.first
+      assert_equal 4, events.count('block')
+    end
+
+    it 'is a no-op on the conversation already live' do
+      run_turn('What is 2 + 2?')
+      rendered_before = transcript.to_a.map(&:id)
+      saved = conversations.list.find { |c| c.id == runner.conversation.id }
+
+      assert_equal :current, runner.load_conversation(saved)
+      assert_equal rendered_before, transcript.to_a.map(&:id)
+    end
+
+    it 'leaves the live conversation alone when the stored history is unreadable' do
+      first = runner.conversation
+      run_turn('What is 2 + 2?')
+      runner.new_conversation
+      run_turn('Hello again')
+      (first.dir / 'history.json').write('{"version": 1, "messages": ')
+
+      saved = conversations.list.find { |c| c.id == first.id }
+      log = capture_log { assert_equal :failed, runner.load_conversation(saved) }
+
+      assert_includes log, 'loading conversation'
+      assert_equal %w[user assistant], agent.export_history.messages.map(&:role)
+      assert_equal :assistant, transcript.to_a.last.kind
+    end
   end
 
   it 'saves the next turn into the new conversation, leaving the old alone' do

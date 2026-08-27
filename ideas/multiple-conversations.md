@@ -1,10 +1,11 @@
 # Multiple conversations
 
-Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slices 1 and 2
-below have shipped, so conversations are saved to disk and listed in a left sidebar — but nothing
-loads one back, so a restart still lands you in an empty transcript with the old conversations
-sitting on disk, visible and unreachable. This idea: **many conversations, persisted on disk,
-picked from a left sidebar** — roughly Web Claude's shape, minus multi-user.
+Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slices 1–3
+below have shipped: conversations are saved to disk, listed in a left sidebar, and
+`AgentRunner#load_conversation` can put one back — but **nothing calls it yet**, so the sidebar
+rows are still inert and a restart still lands you in an empty transcript. Step 4 is the click.
+This idea: **many conversations, persisted on disk, picked from a left sidebar** — roughly Web
+Claude's shape, minus multi-user.
 
 Scope-wise this reopens `D_single_shared_conversation`, but *not* the part it rejected. That entry
 rejected **per-session** conversations (a conversation per browser tab / visitor), which is a
@@ -80,82 +81,18 @@ that free: **the store deals in paths, {AgentRunner} deals in `History`.** The s
 enumerates directories and owns `meta.json`; the runner — already inside the seam — is the only
 thing that calls `export_history.save` / `History.load`.
 
-**New work this creates:** `SseListener`'s `else` arm documented `Reset` / `ModelSwitched` as
-*unreachable*. Slice 1 made `Reset` reachable and gave it an arm (clear the transcript, push a
-`reset` frame). `HistoryLoaded` still has none — it is where a "restored N messages" notice would
-go, if we want one — and becomes reachable the moment step 3 lands.
+**Done in slices 1 and 3:** `SseListener`'s `else` arm documented `Reset` / `ModelSwitched` as
+*unreachable*. `Reset` got an arm (clear the transcript, push a `reset` frame); `HistoryLoaded` got
+one too, and it is deliberately silent. Only `ModelSwitched` is left in the `else`.
 
 ---
 
-## What gets stored, exactly — the fork, narrowed
+## What gets stored, exactly
 
-The model half is settled: `history.json`, written by `History#save`, and we don't get a vote on its
-contents. What's left is the **render** half — `Transcript` blocks (kinds, ids, rendered HTML) — and
-whether it needs an artifact of its own at all.
-
-| layer | what it is | who needs it | who owns it |
-| --- | --- | --- | --- |
-| model | messages, tool calls, results, thinking, attachments | the agent, to continue | pikuri (`history.json`) |
-| render | `Transcript` blocks | the browser, to show what happened | us — open question |
-
-Three candidates, re-scored against what actually shipped upstream:
-
-- **(a) Store rendered blocks verbatim** (`blocks.json` beside `history.json`). Exact reload, zero
-  replay logic. Still costs what it cost before: HTML strings on disk, so a `MarkdownRenderer` or
-  `style.css` fix never reaches old conversations, and two representations of one conversation that
-  can disagree. **Dead** — the long lifetime makes the frozen-HTML problem worse than it is today.
-- **(b) Store nothing extra; re-derive blocks from `history.json`.** The original objection was that
-  this needs "a second renderer that has to guess", *"since `Event::ThinkingDelta` content isn't in
-  the history at all"*. **That objection is now factually wrong.** `History::Message` carries
-  `thinking` (text + signature), `tool_calls` (name + arguments), `tool_call_id`, full untruncated
-  tool-result content, and `kind: "reference"` marking exactly what `SystemInjected` collapses. The
-  block kinds map mechanically, one message to one-or-two blocks:
-
-  | history | blocks |
-  | --- | --- |
-  | `role: user, kind: user` | `:user` |
-  | `role: user, kind: reference` | `:notice` (the skill one-liner) |
-  | `role: assistant` with `thinking` | `:thinking`, then `:assistant` |
-  | `role: assistant` with `tool_calls` | `:tool_call` per call |
-  | `role: tool` | `:tool_result` (truncate at render, as today) |
-
-- **(c) Append an event log** (`log.jsonl`, source text not HTML) beside `history.json`, and replay
-  it through the real `SseListener` on load.
-
-**Lean flips to (b).** Two reasons, and the second is the real one:
-
-1. It is one artifact plus our envelope, not two artifacts that can disagree — and (b) keeps the
-   "old conversations get today's renderer and today's CSS" property that was (c)'s whole selling
-   point over (a).
-2. **(c) couples us to pikuri's event set; (b) couples us to a versioned file format.** An
-   `Event <-> Hash` codec must cover every variant `SseListener` matches on and stay in step as
-   pikuri adds variants — and pikuri adds them steadily (`Transient` and `HistoryLoaded` both landed
-   in the same unreleased cycle as the history itself). `History` is the opposite: written down,
-   `version:`-stamped, additive-only by decision, with unknown keys ignored so a file from a newer
-   pikuri still loads. Betting a persistence format on the stable one is not close.
-
-**What (b) actually loses**, stated plainly, because it isn't nothing:
-
-- `:error` blocks — `! cancelled`, and a `run_loop` failure notice. Never messages, so gone on
-  reload.
-- `FallbackNotice` lines.
-- The partial assistant text that cancel deliberately *preserves* (`flush_assistant(:preserve)`).
-  Cancel raises out of `Chat#ask`, so that text never became a message — the reloaded conversation
-  shows the user turn with no reply under it. Honest, and arguably a better record than a fragment,
-  but it is a visible difference between "the tab I have open" and "the tab after a reload".
-
-That is session ephemera plus one real case. If it turns out to matter, (c) is the answer — and the
-fallback is cheap to reach, because nothing about (b) forecloses adding `log.jsonl` later.
-
-**`Q_store_format` — lean (b), pending a sanity check that the losses above are acceptable.**
-
-**Sub-question, and it's the same one either way:** does the rebuild go through the real
-`SseListener` (with the `Broadcaster` swapped for a null sink) fed *synthesized* events, or through
-a separate `History → blocks` builder? (Lean: **synthesize events**. A `HistoryReplay` that turns
-each message into the `UserTurn` / `Thinking` / `Assistant` / `ToolCall` / `ToolResult` /
-`SystemInjected` events that produced it means there is still exactly **one** renderer and one
-event→kind mapping, and the trifecta in *Conventions* — SseListener / index.erb / style.css — stays
-a trifecta. A separate builder is a second place block kinds are decided.)
+**`Q_store_format` — SETTLED (b), shipped, graduated.** Only `history.json` (pikuri's) plus our
+`meta.json`; the render half is re-derived by replaying synthesized events through the real
+`SseListener`. The argument, the two rejected alternatives and what (b) loses now live in
+`DECISIONS.md` `D_replay_from_history` — don't re-argue them here.
 
 ---
 
@@ -244,36 +181,19 @@ the earliest, and deleting the *currently open* conversation needs a rule.
 
 ## The switch: what happens in-process
 
-`AgentRunner` owns **the** worker thread and **the** agent; `Transcript` owns **the** block list;
-`Broadcaster` fans out to every tab. A conversation switch therefore means:
+**SETTLED and shipped in step 3** — `AgentRunner#load_conversation`. The switch is: read the
+history from disk, save the outgoing conversation, `load_history!` (which clears and emits `Reset`,
+then `HistoryLoaded`), replay through `SseListener`, re-point the live conversation.
 
-1. Flush the current conversation's store (should already be current per `Q_write_shape`).
-2. `agent.load_history!(History.load(dir))` — which runs `clear_conversation` itself (history,
-   controls, interloper queue, re-assembled system prompt, `Event::Reset`), then restores and emits
-   `Event::HistoryLoaded`. For a *new* conversation it's `agent.clear_conversation` alone.
-3. Swap in a fresh `Transcript` rebuilt from the store (per `Q_store_format`).
-4. Tell every tab to re-snapshot.
+The two hazards this section worried about both dissolved:
 
-Note the ordering hazard in step 2→3: `load_history!` emits `Reset` and `HistoryLoaded` **into the
-live `SseListener`**, which is about to have its transcript swapped underneath it. Either swap the
-transcript first, or have the `Reset` arm be what clears it — but it has to be decided, not
-discovered. (Lean: swap first, and let `Reset`'s arm be a no-op on an already-empty transcript.)
-
-Step 3 is the one that pokes the architecture: `App` holds its collaborators in **class-level
-settings** (`App.set :transcript, …`), set once at boot. Either the setting becomes a
-`ConversationSession` object whose `#transcript` is swapped behind it (one indirection, routes
-unchanged), or `App` learns to ask a `ConversationStore` for "the current transcript" on each
-request. (Lean: the former — routes keep calling `settings.transcript.to_a`, and the swap is one
-mutex-guarded assignment in the thing that owns both.)
-
-Step 4 is nearly free, and **slice 1 already built it**: a `reset` SSE event, whose handler is
-`transcript.replaceChildren()`. The earlier lean was to reuse app.js's existing
-`location.reload()` reconnect path, and that was wrong for one reason found while building —
-**a reload throws away a half-typed message** in every open tab, including tabs whose user is not
-the one who clicked. Emptying in place costs one more line of JS and no client state, so
-`D_no_js_build_step` and `D_server_authoritative_transcript` hold either way. A *switch* (as
-opposed to a clear) needs blocks to arrive as well as leave, so it either follows the `reset` with
-the new snapshot's blocks or reuses the reload after all — decide that in step 3, not here.
+- **No transcript swap, so no ordering hazard.** `Reset`'s arm empties the transcript *and* every
+  tab; the replay refills both. The `ConversationSession` indirection behind `App.set :transcript`
+  is not needed for v1 — only for v2's N resident transcripts.
+- **No re-snapshot needed either.** The blocks arrive as ordinary `block` SSE frames behind the
+  `reset` frame, which is what slice 1's in-place emptying already made possible (a
+  `location.reload()` would throw away a half-typed message in every open tab, including tabs whose
+  user is not the one who clicked).
 
 **`Q_switch_while_busy` — SETTLED.** The agent is mid-turn and the user clicks another
 conversation. **v1: refuse** — sidebar rows disabled while busy, with a `title` explaining why.
@@ -291,9 +211,10 @@ on v1 — it pulls in, roughly in dependency order:
   gains a topic. This is the "fan-out stops being a broadcast" cost `D_single_shared_conversation`
   named; ~20 lines, but it's the invariant that entry rests on, so it needs its own `D_` entry
   rather than a quiet edit. The heartbeat and the `close` sentinel stay global.
-- **N transcripts resident in memory**, not one swapped behind an indirection — which means the
-  `conversation_session` shape from step 3 above is a v1-only stepping stone, not the end state.
-  Worth building it so it doesn't fight this later.
+- **N transcripts resident in memory** — the one genuinely new structure. v1 has exactly one,
+  emptied and refilled in place, so this is where a `ConversationSession`-shaped thing would finally
+  earn itself; nothing built so far assumes there can only be one, but nothing provides for two
+  either.
 - **A "busy elsewhere" affordance** in the sidebar: the row of a conversation with a live turn
   needs a spinner or a dot, or the feature is invisible until the user goes looking.
 - **Still one live turn at a time.** Background ≠ parallel: `AgentRunner` owns one agent whose
@@ -416,23 +337,19 @@ untouched by any of this and still ours.
   belongs to `Q_retention`.
 - ~~`lib/pikuri_web/conversation.rb`~~ — **not a file.** `ConversationStore::Conversation` is a
   `Data` nested in the store, which is the only thing that mints or reads one.
-- `lib/pikuri_web/conversation_session.rb` (name TBD) — holds the *current* transcript + store
-  handle, does the switch under a mutex; what `App.set :transcript` becomes.
-- `lib/pikuri_web/history_replay.rb` — `Pikuri::Agent::History` → the events that produced it, fed
-  to a real `SseListener` with a null broadcaster (per `Q_store_format`'s sub-question). Under (c)
-  this is an `event_codec.rb` instead. Either way it's a **fourth file inside the Pikuri seam**, so
-  `D_pikuri_free_core`'s "only three files" invariant needs amending — and `AgentRunner` is where
-  `export_history.save` / `History.load` are called from.
+- ~~`lib/pikuri_web/conversation_session.rb`~~ — **not a file, and not one in v1 at all.** See
+  **The switch** above; it comes back only if v2's resident transcripts do.
+- ~~`lib/pikuri_web/history_replay.rb`~~ — **done**, and it did cost `D_pikuri_free_core` an
+  amendment (three adapters in the seam, not two).
 - ~~`lib/pikuri_web/relative_time.rb`~~ — **done**, and it did earn its own file: `App` is the
   routes, not a helper drawer, and a pure function of two Times is trivially spec'd on its own.
 - ~~`views/_sidebar.erb`, plus `index.erb` gaining the two-column shell.~~ — **done.**
 - Routes: ~~`POST /conversations` (new)~~, ~~`GET /conversations` (the list fragment)~~,
   `POST /conversations/:id/select`, later `DELETE`/`PATCH` for delete/rename.
-- Specs: store round-trip against a stubbed `XDG_STATE_HOME` (`Paths.state` reads env at call time,
-  deliberately, so stubbing works); a replay spec building a `History` in Ruby (its constructor is
-  public — no fixture file needed), replaying it, and asserting the rebuilt blocks. Note
-  `Pikuri::Testing.fake_transport` exists for driving a real `Agent` end-to-end with no server, so
-  a save→load→save fixpoint spec is cheap.
+- ~~Specs.~~ **done** — `history_replay_spec.rb` builds Histories in Ruby for the mapping, and
+  `conversation_flow_spec.rb` renders one conversation live and again from disk over a
+  `Pikuri::Testing.fake_transport` agent and demands the same blocks. That last one is the spec
+  that matters: it is what catches an upstream event reorder or a renamed `<system-reminder>` tag.
 
 ---
 
@@ -489,9 +406,32 @@ wait for. The order that keeps each stage shippable:
      why `#conversation_rows` asks the runner first and the store second.
    - **Rows are `<li>`, not links or forms**, so `Q_get_side_effects` doesn't come due until
      step 4.
-3. **Loading** — `History.load` + the replay path (`Q_store_format`) + `HistoryLoaded`'s arm. This is
-   the only genuinely new engineering left, and it's worth doing as a spec-first fixpoint
-   (save → load → save produces an identical folder) before any route touches it.
+3. ~~**Loading.**~~ **SHIPPED** — `HistoryReplay`, `AgentRunner#load_conversation`,
+   `HistoryLoaded`'s arm. Graduated to `D_replay_from_history` + a **Scope decisions** invariant;
+   `Q_store_format` is settled there, not here. Nothing calls `#load_conversation` yet — step 4 is
+   the UI on top of it. What it settled beyond the plan:
+
+   - **No `conversation_session.rb`, in this step or the next.** The transcript is *rebuilt*, not
+     swapped: `load_history!` emits `Reset`, whose arm (slice 1) already empties the transcript and
+     every open tab, and the replay refills it through the same listener. So the "one indirection
+     behind `App.set :transcript`" idea is dead for v1 — it only comes back for v2's *resident*
+     transcripts, where the point is N of them, not a swap.
+   - **The replay feeds `SseListener` directly, not the agent's listener list**, which wraps it in
+     the 15 fps delta rate-limiter a replay has nothing to say to. That is why `AgentRunner` gained
+     a `listener:` — and why the busy-refusal is load-bearing beyond politeness: `SseListener` keeps
+     unguarded per-turn streaming state, and the mutex plus "no loop is running" is what makes
+     feeding it from a *request* thread safe.
+   - **`load_conversation` takes a listed `Conversation`, never an id.** Resolving the id against
+     `store.list` is step 4's job, which means no route ever turns user input into a path.
+   - **Read before write.** `History.load` runs before the outgoing conversation is saved and before
+     `load_history!` clears anything, so a corrupt `history.json` returns `:failed` with the live
+     conversation untouched rather than half-swapped.
+   - **`HistoryLoaded` renders nothing.** The replay shows the conversation; a "restored N messages"
+     line would be the only block in the transcript that never came from the agent. `Q_token_readout`
+     still holds — `TokenLog` reseeds off the event, and the status broadcast happens after
+     `load_history!` returns.
+   - **The interrupted-tool-call repair is replayed, not skipped**, so the transcript shows the
+     `[Tool execution was interrupted]` observation the model is actually looking at.
 4. **Switching** (`Q_switch_while_busy`, `Q_selection_scope`) — the UI on top of a load path that
    already works.
 5. **v2 auto-title**, or manual rename first if `Q_title_length` says the sidebar wants short

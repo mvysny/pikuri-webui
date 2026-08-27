@@ -83,8 +83,16 @@ turn away.
 The sidebar lists every conversation you have had, newest first, with when
 each started. The order is by start time, so a conversation stays where it
 is however long you keep talking in it. The rows don't do anything yet —
-clicking one to open it is the next step. A row greyed out as *unsupported
-format* was written by a version this one can't read.
+clicking one to open it is the next step, and the machinery behind it is
+already in place. A row greyed out as *unsupported format* was written by
+a version this one can't read.
+
+What comes back when a conversation is reopened is the conversation
+itself: what you asked, what the model thought and answered, which tools
+it ran and what they returned. What does not is anything that never
+became part of the conversation — a `! cancelled` marker, a fallback
+notice, or the half-written answer a cancel left on screen. A turn you
+cancelled mid-answer reads as your message with no reply under it.
 
 Everything this shell persists lives under
 `~/.local/state/pikuri/pikuri-web-chat/` (`$XDG_STATE_HOME` if you set
@@ -102,10 +110,13 @@ started:
 The `conversations/` folder is there from boot; a conversation's own
 directory appears with its first completed turn, so a session you never
 said anything in leaves nothing behind. Turns are saved as they finish, so
-quitting keeps the conversation — but **nothing loads one back yet**: a
-restart still starts you empty, with the old conversations listed in the
-sidebar and not yet openable. Loading them is what
+quitting keeps the conversation — but a restart still starts you empty
+until the sidebar rows become clickable, which is what
 `ideas/multiple-conversations.md` plans next.
+
+Only `history.json` is stored; what you see on screen is rebuilt from it
+each time, so a rendering or styling fix reaches every old conversation
+too.
 
 Nothing is encrypted. These files hold everything you typed and everything
 the tools fetched, so the directories are created `0700` and that is the

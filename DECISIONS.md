@@ -84,6 +84,61 @@ design or the invariant.
 
 ---
 
+## D_replay_from_history — Store only pikuri's history; re-derive the transcript by replaying synthesized events (2026-08-27)
+
+**Status:** Accepted, shipped 2026-08-27 as {HistoryReplay}.
+
+**Context.** A saved conversation has two layers: the *model* half
+(messages, tool calls, results, thinking, attachments — `history.json`,
+written by `Pikuri::Agent::History#save`, whose contents we do not get a
+vote on) and the *render* half ({Transcript} blocks: kinds, ids, HTML).
+Loading a conversation back means producing the second from something on
+disk.
+
+**Decision.** Store nothing beyond `history.json` and our `meta.json`,
+and rebuild the blocks by turning each message back into the
+`Agent::Event`s that produced it, fed through the real {SseListener}. The
+transcript is *rebuilt, not swapped*: `Agent#load_history!` emits
+`Event::Reset`, whose existing arm empties the transcript and every open
+tab, and the replay refills it — so there is still exactly one
+transcript, one renderer, and one event→kind mapping.
+
+**Rejected: store the rendered blocks** (`blocks.json` beside
+`history.json`). Exact reload, zero replay logic — and HTML strings on
+disk, so a {MarkdownRenderer} or `style.css` fix never reaches an old
+conversation, plus two representations of one conversation that can
+disagree. The longer these files live, the worse frozen HTML gets.
+
+**Rejected: append an event log** (`log.jsonl`, source text not HTML)
+and replay it. It keeps the today's-renderer property, but it prices
+persistence on pikuri's *event set*: an `Event ↔ Hash` codec must cover
+every variant {SseListener} matches on and stay in step as pikuri adds
+more — and pikuri adds them steadily (`Transient` and `HistoryLoaded`
+both landed in one unreleased cycle). `History` is the opposite: written
+down, `version:`-stamped, additive-only by decision, unknown keys
+ignored. Betting the format on the stable one is not close. Nothing here
+forecloses adding `log.jsonl` later if the losses below start to matter.
+
+**Rejected: a `History → blocks` builder** instead of synthesized events.
+Same output, one more place block kinds are decided — the
+SseListener / `index.erb` / `style.css` trifecta would stop being one.
+
+**Consequences.** Only messages are stored, so what never became one is
+gone on reload: `! cancelled` and run-loop failure blocks,
+`FallbackNotice` lines, and the partial assistant text a cancel
+deliberately preserves (it raises out of `Chat#ask` before the message
+lands) — a cancelled turn reloads as a user message with no reply under
+it. Two couplings are the price of re-deriving: the replay must emit
+events in the order the *agent* emits them rather than the order messages
+sit in (a batch's `ToolResult` follows its own `ToolCall`), and it must
+strip the `<system-reminder>` envelope `Agent#append_reference_block`
+adds, whose tag is a private constant upstream. Both are held by an
+end-to-end spec in `conversation_flow_spec.rb` that renders one
+conversation live and again from disk and demands the same blocks — the
+canary for a rename or a reordering upstream.
+
+---
+
 ## D_shutdown_on_state_stop — Close the Broadcaster from Puma's `:state, :stop`, the last hook before the graceful wait (2026-08-27)
 
 **Status:** Accepted, shipped 2026-08-27 in `bin/pikuri-web-chat`.
@@ -399,17 +454,25 @@ it. The boundary itself is pikuri's decision, not ours — as of 0.0.7 it
 moved off `after_tool_result` to tool-batch completion, and AGENTS.md's
 documented caveat had to be corrected to match.
 
-## D_pikuri_free_core — All `Pikuri::*` references live in two adapters plus the boot script (2026-06-04)
+## D_pikuri_free_core — All `Pikuri::*` references live in three adapters plus the boot script (2026-06-04)
 
-**Status:** Accepted, shipped 2026-06-04.
+**Status:** Accepted, shipped 2026-06-04; widened from two adapters to
+three on 2026-08-27, when {HistoryReplay} joined to turn a saved
+`Agent::History` back into the `Agent::Event` stream. The count is not
+the invariant — "translation happens at named boundaries, and nowhere
+else" is — but each addition should have to argue for itself, as that
+one did: the alternative was a `History → blocks` builder, which puts
+block kinds in a second place (`D_rerender_and_replace`'s trifecta
+would stop being one).
 
 **Context.** This project tracks pikuri master (`D_track_pikuri_master`),
 so pikuri's surface moves under it by design.
 
 **Decision.** `Pikuri::*` appears only in `bin/pikuri-web-chat`
-(boot/wiring) and in the two adapters — {SseListener} and {AgentRunner}.
-{Transcript}, {Broadcaster}, {StreamingMessage}, {MarkdownRenderer} and
-{App} are Pikuri-free: they speak ids, kinds, HTML strings and queues.
+(boot/wiring) and in the adapters — {SseListener}, {AgentRunner} and
+{HistoryReplay}. {Transcript}, {Broadcaster}, {StreamingMessage},
+{MarkdownRenderer}, {ConversationStore} and {App} are Pikuri-free: they
+speak ids, kinds, HTML strings, paths and queues.
 
 **Rejected: letting Pikuri types spread to whatever needs them.** Passing
 a `Pikuri::Agent::Event` into {Transcript} is the shortest path and it
