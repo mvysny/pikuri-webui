@@ -35,7 +35,7 @@ module PikuriWeb
   # lib/ files that reference +Pikuri::*+.
   class AgentRunner
     # @param agent [Pikuri::Agent] fully wired agent (listeners, tools,
-    #   interloper:, cancellable: — built in bin/pikuri-web)
+    #   interloper:, cancellable: — built in bin/pikuri-web-chat)
     # @param interloper [Pikuri::Agent::Control::Interloper] the same
     #   instance passed to the agent's +interloper:+ kwarg
     # @param cancellable [Pikuri::Agent::Control::Cancellable] the same

@@ -4,7 +4,7 @@
 
 A Sinatra-based web front-end wrapping the
 [pikuri](https://codeberg.org/mvysny/pikuri) library — the browser
-sibling of [pikuri-tui](../pikuri-tui/). `bin/pikuri-web` binds the
+sibling of [pikuri-tui](../pikuri-tui/). `bin/pikuri-web-chat` binds the
 same `Pikuri::Agent` and the same `Pikuri::Tool` set as the TUI's chat
 shell; the conversation pane / input field / status bar become a
 server-rendered page kept live over one SSE connection.
@@ -54,8 +54,9 @@ Tuile churn this project doesn't share.
   PikuriWeb's own logger — stay on their default stderr sinks and never
   reach the page. Never cross the streams.
 
-- **The seam.** All `Pikuri::*` references stay inside `bin/pikuri-web`
-  (boot/wiring) and the small adapter set under `lib/pikuri_web/`
+- **The seam.** All `Pikuri::*` references stay inside
+  `bin/pikuri-web-chat` (boot/wiring) and the small adapter set under
+  `lib/pikuri_web/`
   ({SseListener}, {AgentRunner}). {Transcript}, {Broadcaster},
   {StreamingMessage}, {MarkdownRenderer} and {App} are
   Pikuri-free — they speak ids, kinds, HTML strings and queues. Same
@@ -89,6 +90,22 @@ Tuile churn this project doesn't share.
   finalizes with authoritative content (fast-path when equal), dead
   after finalize. Delta coalescing stays in pikuri
   (`Listener::RateLimited`, 15 fps) — don't reimplement it here.
+
+- **The chat script stays chat-only; new capability means a new
+  script.** `bin/pikuri-web-chat` wires `web_search`, `web_scrape`,
+  `fetch` and `calculator` — nothing that reads the disk, runs a
+  command or edits a repo, even though pikuri ships `pikuri-os` /
+  `pikuri-code` / `pikuri-workspace` right there in the same checkout.
+  The absence of the trifecta's *private data* leg is what the README
+  sells as the reason you can chat freely, and that promise is attached
+  to this entry point — hence the `-chat` suffix in the script's name:
+  growing an OS or code shell later is a legitimate direction, but it
+  lands as a *separate* boot script with its own tool set and its own
+  trifecta report, never as extra tools bolted into this one. Adding a
+  disk- or shell-touching tool here silently breaks a guarantee a user
+  has already read. The shared plumbing
+  ({AgentRunner}, {SseListener}, {Transcript}, {App}) is tool-set
+  agnostic and is the part such a sibling script would reuse.
 
 - **Single shared conversation, loopback by default.** One agent, one
   transcript, in-process — the TUI's model rendered in a browser. No
@@ -142,7 +159,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror
   the TUI's visual language (muted thinking, cyan tool lines).
-- `bin/pikuri-web` — boot script: config load, agent + tools +
+- `bin/pikuri-web-chat` — boot script: config load, agent + tools +
   Interloper wiring, the trifecta report, Puma start. Same flags as the
   TUI plus `--port` / `--bind`. No `--api-key` flag, ever: a secret on
   the command line is visible in `ps` and shell history, so keys come

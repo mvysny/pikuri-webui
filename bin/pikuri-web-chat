@@ -5,6 +5,12 @@
 # sibling of pikuri-tui's bin/pikuri-tui-chat, wiring the same agent /
 # tool set into a Sinatra app instead of a Tuile screen.
 #
+# The `-chat` suffix is load-bearing: this script's tool set holds no
+# disk, shell or repo tool, and the README sells that absence as the
+# reason you can talk to it freely. An OS or code shell would be a
+# sibling script reusing the same Pikuri-free plumbing — never extra
+# tools added below. See AGENTS.md, "The chat script stays chat-only".
+#
 # Pin Bundler to this project's Gemfile so locked dependency versions win
 # and the script works when invoked via a symlink from any working
 # directory. `__dir__` resolves through symlinks, so this points at the
@@ -34,7 +40,7 @@ port = 4567
 bind = '127.0.0.1'
 
 parser = OptionParser.new do |opts|
-  opts.banner = 'Usage: pikuri-web [options]'
+  opts.banner = 'Usage: pikuri-web-chat [options]'
   opts.separator ''
   opts.separator 'Options:'
   opts.on('--server URL', "LLM server base URL (default: #{PikuriWeb::Config::DEFAULT_SERVER})") { |v| cli_server = v }

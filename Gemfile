@@ -24,7 +24,7 @@ gem 'rackup', '~> 2.2'
 gem 'zeitwerk', '~> 2.7'
 
 # The pikuri-core gem — Agent, Tool, prompts, listeners. Same wiring as
-# pikuri-tui's chat shell: bin/pikuri-web binds Pikuri::Agent +
+# pikuri-tui's chat shell: bin/pikuri-web-chat binds Pikuri::Agent +
 # Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
 #
 # A path dependency on the sibling checkout, not a released version: this

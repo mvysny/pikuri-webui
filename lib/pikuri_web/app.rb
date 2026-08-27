@@ -5,7 +5,7 @@ require 'sinatra/base'
 module PikuriWeb
   # The Sinatra app: four routes around the {Transcript} / {Broadcaster}
   # / {AgentRunner} trio, which the host injects via class-level settings
-  # before boot (see bin/pikuri-web; specs inject fakes the same way):
+  # before boot (see bin/pikuri-web-chat; specs inject fakes the same way):
   #
   #   PikuriWeb::App.set :transcript,  transcript
   #   PikuriWeb::App.set :broadcaster, broadcaster
@@ -18,7 +18,7 @@ module PikuriWeb
   # Threading: +GET /events+ parks the serving thread in a queue-drain
   # loop for the lifetime of the EventSource connection — one server
   # thread per connected browser tab. Fine for a single-user localhost
-  # tool; bin/pikuri-web raises Puma's thread pool to make room.
+  # tool; bin/pikuri-web-chat raises Puma's thread pool to make room.
   class App < Sinatra::Base
     set :root, File.expand_path('../..', __dir__)
     # Auto-escape <%= %> in templates; pre-rendered transcript HTML is

@@ -14,9 +14,37 @@ Diagnostic logs go to stderr. JavaScript is a single
 dependency-free `public/app.js`; there is no Node, no bundler, no build
 step.
 
+## It's a chat, not an agent with hands on your machine
+
+The whole tool set is `web_search`, `web_scrape`, `fetch` and
+`calculator` — search the web, read a page, download a payload, do
+arithmetic. That's the entire surface.
+
+It cannot read your disk, run a shell command, edit a file, or touch a
+repository. Pikuri ships gems for all of that — `pikuri-os`,
+`pikuri-code`, `pikuri-workspace` — and this shell wires none of them.
+In pikuri's lethal-trifecta terms the tool set holds the *untrusted
+content* and *egress* legs and **not** the *private data* leg.
+
+That's what makes it somewhere to think out loud. No approval prompts,
+no "which directory did I start this in", no wondering what the model
+just read — there is nothing on your machine for it to read.
+
+This is a property of the boot script, not a phase the project is
+passing through. Should pikuri-web ever grow OS or code capability, it
+arrives as a *separate* script with its own tool set and its own
+trifecta report; this one stays chat-only.
+
+The boundary that does remain: everything *you type* still goes to the
+LLM server you configured, and the agent reaches the network on its own
+— a page it scrapes can try to talk it into fetching an attacker-chosen
+URL. Untrusted-in, egress-out is a real pair, so don't paste a secret
+into the conversation. What this shell gives you is that the agent can't
+go *find* one.
+
 ## Prerequisites
 
-- Ruby ≥ 3.4
+- Ruby ≥ 3.3
 - A local LLM server (e.g. [llama.cpp](https://github.com/ggerganov/llama.cpp) `server`)
 - A [pikuri](https://codeberg.org/mvysny/pikuri) checkout at `../pikuri`
   — this shell tracks pikuri master, so `pikuri-core` and `pikuri-pdf`
@@ -31,7 +59,7 @@ bundle install
 ## Run
 
 ```sh
-bin/pikuri-web
+bin/pikuri-web-chat
 ```
 
 Then open <http://localhost:4567>. Defaults to the LLM server at
@@ -40,7 +68,7 @@ Then open <http://localhost:4567>. Defaults to the LLM server at
 `--model`, `--port` and `--bind`:
 
 ```sh
-bin/pikuri-web --server http://localhost:8082 --model my-model --port 9292
+bin/pikuri-web-chat --server http://localhost:8082 --model my-model --port 9292
 ```
 
 ## Configure
