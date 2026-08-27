@@ -20,132 +20,102 @@ boot script, specs. Not yet exercised against a live llama.cpp server.
 Tracks pikuri **master**, not a release: `pikuri-core` / `pikuri-pdf` are
 path dependencies on `../pikuri`. Upgrades follow pikuri's `CHANGELOG.md`
 — its `**Breaking:**` entries carry the migration instructions, and
-pikuri-tui's HEAD is the worked example for anything ambiguous. Reading
-that changelog beats bisecting pikuri-tui's git history, which is mostly
-Tuile churn this project doesn't share.
+pikuri-tui's HEAD is the worked example for anything ambiguous. CI must
+clone `../pikuri` before bundling. See `DECISIONS.md`
+`D_track_pikuri_master`.
 
 ## Scope decisions
+
+The invariants — what a change here must not break. The reasoning, and
+the alternatives that were rejected, live one entry per slug in
+[`DECISIONS.md`](DECISIONS.md), which is deliberately not context-loaded;
+`grep '^## D_' DECISIONS.md` is its index.
 
 - **Reuse pikuri as runtime; this project owns the web shell.**
   `Pikuri::Agent` is the loop; `Pikuri::Tool::*` are the tools;
   `Pikuri::Agent::Event` is the stream we render. We add an SSE
-  listener (renders the event stream into the transcript + browsers),
-  an agent runner (worker thread + Interloper routing), and the
-  routes / templates / static files around them. Anything beyond that
-  is a bug or scope creep.
+  listener, an agent runner, and the routes / templates / static files
+  around them. Anything beyond that is a bug or scope creep. (The
+  project's premise rather than a fork, so no `D_` entry.)
 
-- **JavaScript is as minimal as possible.** One hand-written
-  `public/app.js` (~100 lines), zero JS dependencies, no Node, no
-  build step. All rendering is server-side (kramdown); the browser
-  receives ready-made HTML fragments over SSE and places them by
-  block id. If a change needs an npm package or a bundler, the answer
-  is to render it on the server instead.
+- **The seam: `Pikuri::*` appears only in `bin/pikuri-web-chat`,
+  {SseListener} and {AgentRunner}.** {Transcript}, {Broadcaster},
+  {StreamingMessage}, {MarkdownRenderer}, {Config} and {App} are
+  Pikuri-free — they speak ids, kinds, HTML strings and queues.
+  See `D_pikuri_free_core`.
 
 - **The transcript is server-authoritative.** {Transcript} holds the
   rendered blocks; `GET /` renders the full snapshot and SSE carries
-  only deltas. Page reload, second tabs, and EventSource reconnects
-  converge on the same state with no client-side bookkeeping. Never
-  introduce client-only conversation state.
+  only deltas. Never introduce client-only conversation state.
+  See `D_server_authoritative_transcript`.
+
+- **The threading rule.** The agent loop runs on a worker thread owned
+  by {AgentRunner} — never on a Sinatra request thread. Thread-safety
+  lives in the sinks ({Transcript}, {Broadcaster}), not in their
+  callers; there is no UI thread and no marshaling.
+  See `D_worker_thread_agent_loop`.
+
+- **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
+  trap** — both run on the far side of Puma's unbounded graceful wait,
+  which parked `GET /events` drain threads would otherwise never end.
+  {Broadcaster} is closed from Puma's `:state, :stop` event, and
+  `#close` must stay idempotent *and* keep refusing new subscribers.
+  See `D_shutdown_on_state_stop`.
 
 - **The browser shows the conversation; diagnostics go to stderr.**
-  The transcript shows the LLM conversation — assistant Markdown,
-  reasoning, tool-call lines, tool observations — driven by our pikuri
-  listener. Internal diagnostics — pikuri's per-subsystem loggers,
-  PikuriWeb's own logger — stay on their default stderr sinks and never
-  reach the page. Never cross the streams.
+  {SseListener} renders events, never log lines, and `PikuriWeb.logger`
+  is never pointed at the {Broadcaster}. Never cross the streams.
+  See `D_diagnostics_to_stderr`.
 
-- **The seam.** All `Pikuri::*` references stay inside
-  `bin/pikuri-web-chat` (boot/wiring) and the small adapter set under
-  `lib/pikuri_web/`
-  ({SseListener}, {AgentRunner}). {Transcript}, {Broadcaster},
-  {StreamingMessage}, {MarkdownRenderer} and {App} are
-  Pikuri-free — they speak ids, kinds, HTML strings and queues. Same
-  fork-or-swap rationale as the TUI: if pikuri's surface shifts, the
-  cost is rewriting two files.
+- **JavaScript is as minimal as possible.** One hand-written
+  `public/app.js` (~100 lines), zero JS dependencies, no Node, no build
+  step; all rendering is server-side. If a change needs an npm package
+  or a bundler, the answer is to render it on the server instead.
+  See `D_no_js_build_step`.
 
-- **The threading rule.** The agent loop blocks on the LLM and runs on
-  a worker thread owned by {AgentRunner} — never on a Sinatra request
-  thread. The listener writes into thread-safe sinks ({Transcript},
-  {Broadcaster}); each `GET /events` connection parks its serving
-  thread draining one subscribed queue. There is no UI thread and no
-  marshaling — thread-safety lives in the sinks, not the callers.
+- **Streaming is re-render-and-replace.** {StreamingMessage} re-renders
+  the whole accumulated source per (rate-limited) delta; the TUI's
+  `StreamingMarkdownBuffer` is deliberately not ported, and delta
+  coalescing stays in pikuri (`Listener::RateLimited`, 15 fps). Its
+  lifecycle contract is the TUI buffer's: deltas preview-only, the
+  bookend finalizes with authoritative content, dead after finalize.
+  See `D_rerender_and_replace`.
 
-  Shutdown is where that bites. A parked drain loop is an in-flight
-  request as far as Puma is concerned, its graceful stop waits for
-  one with no deadline, and the 15 s heartbeat keeps those writes
-  healthy — so Ctrl+C hangs for as long as a browser tab stays open.
-  The boot script closes {Broadcaster} from Puma's `:state, :stop`
-  event, the last hook that runs before that wait, and leaves
-  `force_shutdown_after` as the backstop. Nothing in the exit path
-  may rely on `at_exit` or on Sinatra's own INT trap: both are on
-  the far side of the wait.
-
-- **Mid-loop input goes through `Control::Interloper`** (which the TUI
-  deferred). {AgentRunner#submit} starts a turn when idle and injects
-  when busy; the injection renders through the normal listener path as
-  `UserTurn(mid_loop: true)`. Remember Interloper's boundary caveat:
-  injections are delivered at turn start and once each tool batch
-  completes, so one placed mid-response waits for that boundary — which
-  is why the input stays enabled while busy and the status bar shows the
-  queued count. The count is pushed by `Interloper#on_change`, so the
-  agent's own mid-loop drain updates the browser too.
-
-- **Streaming is re-render-and-replace.** The TUI's
-  `StreamingMarkdownBuffer` (block-cutter, committed-prefix
-  machinery) is deliberately *not* ported: it bounded per-token
-  TTY::Markdown cost on a terminal. Here {StreamingMessage} re-renders
-  the whole accumulated source through kramdown per (rate-limited)
-  delta and the browser replaces one div's innerHTML. Its lifecycle
-  contract is the TUI buffer's: deltas are preview-only, the bookend
-  finalizes with authoritative content (fast-path when equal), dead
-  after finalize. Delta coalescing stays in pikuri
-  (`Listener::RateLimited`, 15 fps) — don't reimplement it here.
+- **Mid-loop input goes through `Control::Interloper`, and the input
+  stays enabled while busy.** {AgentRunner#submit} starts a turn when
+  idle and injects when busy. Interloper delivers at turn start and at
+  tool-batch completion, so the status bar's queued count (pushed by
+  `Interloper#on_change`) exists to make that wait legible.
+  See `D_interloper_mid_loop_input`.
 
 - **The chat script stays chat-only; new capability means a new
-  script.** `bin/pikuri-web-chat` wires `web_search`, `web_scrape`,
-  `fetch` and `calculator` — nothing that reads the disk, runs a
-  command or edits a repo, even though pikuri ships `pikuri-os` /
-  `pikuri-code` / `pikuri-workspace` right there in the same checkout.
-  The absence of the trifecta's *private data* leg is what the README
-  sells as the reason you can chat freely, and that promise is attached
-  to this entry point — hence the `-chat` suffix in the script's name:
-  growing an OS or code shell later is a legitimate direction, but it
-  lands as a *separate* boot script with its own tool set and its own
-  trifecta report, never as extra tools bolted into this one. Adding a
-  disk- or shell-touching tool here silently breaks a guarantee a user
-  has already read. The shared plumbing
-  ({AgentRunner}, {SseListener}, {Transcript}, {App}) is tool-set
-  agnostic and is the part such a sibling script would reuse.
+  script.** A disk- or shell-touching tool added to
+  `bin/pikuri-web-chat` breaks a trifecta guarantee the README has
+  already made. An OS or code shell lands as a sibling script with its
+  own tool set and its own trifecta report.
+  See `D_chat_only_entry_point`.
 
 - **Single shared conversation, loopback by default.** One agent, one
-  transcript, in-process — the TUI's model rendered in a browser. No
-  sessions, no auth; `--bind` defaults to 127.0.0.1 and anything else
-  is the operator's risk. Per-session conversations are a rewrite of
-  {AgentRunner}/{Transcript} ownership, not a patch — out of scope
-  until there's a concrete need.
+  transcript, in-process. No sessions, no auth; `--bind` defaults to
+  127.0.0.1 and anything else is the operator's risk.
+  See `D_single_shared_conversation`.
 
-- **Theme is a cookie, not state.** Dark (the TUI's palette) and light
-  are two mappings of the same nine semantic CSS tokens; the whole
-  theme lives in `public/style.css` plus a `theme` cookie. `GET /`
-  resolves the cookie and renders `data-theme` onto `<html>` so a
-  light-theme user never sees a dark first paint, and app.js flips the
-  attribute + rewrites the cookie in place — no `POST /theme`, because
-  a reload for a color change costs an SSE reconnect. The cookie is a
-  browser preference, deliberately outside {Transcript}: it is the one
-  piece of per-browser state, and it stays presentational so
-  "the transcript is server-authoritative" keeps meaning what it says.
-  A new themed color means adding it to both palettes and both
-  mappings; nothing outside style.css reads a raw color.
+- **Theme is a presentational cookie, not transcript state.** Nine
+  semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
+  renders `data-theme` onto `<html>` and app.js rewrites the cookie in
+  place. A new themed color means both palettes and both mappings, and
+  nothing outside `style.css` reads a raw color.
+  See `D_theme_cookie`.
 
-- **One config file for every pikuri shell.** {Config} reads the same
-  layered `~/.config/pikuri/config.toml` as pikuri-tui's
-  `Shared::Config`, and carries the *whole* schema — `[code]`,
-  `[[code.mcp]]` and all — even though this host wires none of it.
-  Trimming the schema to what we read would reject a file the TUI
-  wrote, because loading raises on an unknown top-level key. Secrets
-  (`[[llm]].api_key`, `[search]` provider keys) live only there: never a
-  CLI flag (visible in `ps`), never `ENV` (inherited by every subprocess
-  pikuri spawns), never a project-local file (git-committable).
+- **One config file for every pikuri shell, and secrets live only
+  there.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
+  schema, including sections this host never reads. No `--api-key`
+  flag, ever; no `ENV`; no project-local file.
+  See `D_schema_complete_config`.
+
+- **`--dev` is Sinatra's development mode, not code reloading** — the
+  agent, its listener stack and the runner thread are wired once at
+  boot. See `D_dev_flag_no_reload`.
 
 ## Layout
 
@@ -175,9 +145,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/markdown_renderer.rb` — kramdown (GFM) → HTML with
   escaped-text fallback; HTML-escape helper for plain-text blocks.
 - `lib/pikuri_web/config.rb` — `PikuriWeb::Config`, the layered TOML
-  loader for `~/.config/pikuri/config.toml` (model connections, search
-  provider keys). Port of pikuri-tui's `Shared::Config`, schema-complete
-  so one file serves every pikuri shell; Pikuri-free.
+  loader for `~/.config/pikuri/config.toml`; port of pikuri-tui's
+  `Shared::Config`, schema-complete, Pikuri-free.
 - `views/index.erb` — the page shell; server-rendered snapshot.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror
@@ -185,10 +154,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `bin/pikuri-web-chat` — boot script: config load, agent + tools +
   Interloper wiring, the trifecta report, Puma start (server settings and
   the shutdown hook). Same flags as the TUI plus `--port` / `--bind` /
-  `--dev` — the last one only flips Sinatra into development mode, since
-  no amount of reloading re-wires the live agent. No `--api-key` flag,
-  ever: a secret on the command line is visible in `ps` and shell
-  history, so keys come only from the config file.
+  `--dev`; never an `--api-key`.
 
 ## Conventions
 
@@ -204,3 +170,33 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `:tool_result`, `:notice`, `:error`) are the contract between
   SseListener, index.erb and style.css — adding one means touching
   all three.
+
+## Ideas & their graduation
+
+Loose ideas live one per file in `ideas/`, named after what the idea
+*is*; `ls ideas/` is the index, so no index file. An idea file is a
+scratchpad, exempt from this project's doc quality rules, because it is
+going to be deleted. Details — including the same-stem sidecar folder
+for an idea that grows research — are in the `ideas-folder` skill.
+
+**An idea graduates the moment it is acted on, and graduation is not
+done until the file is gone** (sidecar folder included — read those too
+before deleting). Where the lasting nuggets go, in the order to try:
+
+- **The choice made and the alternatives rejected** → a `DECISIONS.md`
+  entry, plus a flat invariant + `See D_<slug>` in **Scope decisions**.
+  **No entry without a real fork.**
+- **Work deferred as a consequence of a logged decision** → that entry's
+  *Consequences*, not a surviving idea file.
+- **How one class works and why it is shaped that way** → its YARD
+  header. Contracts belong with the code, never in a second copy.
+- **A new file or a changed responsibility** → its **Layout** line:
+  path, name, ~10 words. A pointer, not a paste of the rdoc.
+- **A harness or style rule** → **Conventions** above.
+- **Anything a *user* must know** — a flag, the trifecta promise, how to
+  configure a model → `README.md`.
+
+There is no `CHANGELOG` here; don't create one for a graduated idea. A
+fork belonging to the *library* rather than the shell (the agent loop, a
+tool, Interloper's delivery boundary) is logged in
+`../pikuri/DECISIONS.md` — cite it, don't re-argue it here.
