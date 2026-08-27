@@ -183,6 +183,21 @@ RSpec.describe PikuriWeb::ConversationStore do
     end
   end
 
+  context '#find' do
+    it 'resolves a listed conversation' do
+      conversation = store.create(at: at)
+      store.write_meta(conversation)
+      assert_equal conversation.id, store.find(conversation.id).id
+    end
+
+    it 'answers nil for anything not in the listing, path-shaped ids included' do
+      store.write_meta(store.create(at: at))
+      assert_nil store.find('2026-08-27T12-03-51Z-ffff')
+      assert_nil store.find('../../etc')
+      assert_nil store.find('')
+    end
+  end
+
   context 'sharing the folder with pikuri' do
     it 'leaves history.json and attachments alone, and survives a save' do
       conversation = store.create(at: at)

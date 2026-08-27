@@ -41,8 +41,12 @@ const updateStatus = ({ busy, pending, tokens }) => {
   statusTokens.textContent = tokens;
   cancelBtn.hidden = !busy;
   // The server refuses a switch mid-turn (409); matching that here keeps the
-  // button from looking broken.
+  // controls from looking broken.
   newBtn.disabled = busy;
+  sidebar.querySelectorAll('.conversation').forEach((row) => {
+    row.disabled = busy;
+    row.title = busy ? 'the agent is mid-turn' : row.querySelector('.conversation-title').textContent;
+  });
 };
 
 const es = new EventSource('/events');
@@ -84,6 +88,15 @@ promptEl.addEventListener('keydown', (e) => {
 cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
 
 newBtn.addEventListener('click', () => fetch('/conversations', { method: 'POST' }));
+
+// Selecting a conversation. Delegated to the nav, so it survives the sidebar
+// being re-rendered from the server. `redirect: 'manual'` declines the 303 the
+// route owes a no-JS browser: what redraws the page here is the reset + block
+// frames the switch pushes to every tab, this one included.
+sidebar.addEventListener('submit', (e) => {
+  e.preventDefault();
+  fetch(e.target.action, { method: 'POST', redirect: 'manual' });
+});
 
 // Theme toggle. The cookie is the store — the server reads it back on
 // the next GET / and renders `data-theme` into the shell, so this only

@@ -103,10 +103,12 @@ the alternatives that were rejected, live one entry per slug in
   own tool set and its own trifecta report.
   See `D_chat_only_entry_point`.
 
-- **Single shared conversation, loopback by default.** One agent, one
-  transcript, in-process. No sessions, no auth; `--bind` defaults to
-  127.0.0.1 and anything else is the operator's risk.
-  See `D_single_shared_conversation`.
+- **One *live* conversation, loopback by default.** One agent, one
+  transcript, in-process; the sidebar switches which stored conversation
+  is live and every tab follows. Which one is selected is server state
+  changed by a POST — never a per-tab or per-URL view. No sessions, no
+  auth; `--bind` defaults to 127.0.0.1 and anything else is the
+  operator's risk. See `D_single_shared_conversation`.
 
 - **Theme is a presentational cookie, not transcript state.** Nine
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
@@ -143,8 +145,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/version.rb` — `PikuriWeb::VERSION`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
   `GET /` (page shell), `GET /events` (SSE), `POST /messages`,
-  `POST /cancel`, `GET`/`POST /conversations`. Collaborators injected
-  via class-level settings.
+  `POST /cancel`, `GET`/`POST /conversations`,
+  `POST /conversations/:id/select`. Collaborators injected via
+  class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.

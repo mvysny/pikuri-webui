@@ -137,6 +137,20 @@ module PikuriWeb
       @root.children.filter_map { |dir| row(dir) }.sort_by(&:id).reverse
     end
 
+    # One listed conversation by id, or nil.
+    #
+    #   store.find(params['id'])   # => Conversation, or nil for anything else
+    #
+    # Resolution goes *through the listing* rather than by building a path, so
+    # an id arriving from a URL can only ever name a conversation that is
+    # already there — no caller has to think about traversal.
+    #
+    # @param id [String]
+    # @return [Conversation, nil]
+    def find(id)
+      list.find { |conversation| conversation.id == id }
+    end
+
     # Write +meta.json+, creating the conversation's directory if pikuri has
     # not already — and re-asserting 0700 either way, since +History#save+
     # creates it with the default mode.

@@ -3,7 +3,7 @@
 require 'sinatra/base'
 
 module PikuriWeb
-  # The Sinatra app: six routes around the {Transcript} / {Broadcaster}
+  # The Sinatra app: seven routes around the {Transcript} / {Broadcaster}
   # / {AgentRunner} / {ConversationStore} quartet, which the host injects
   # via class-level settings before boot (see bin/pikuri-web-chat; specs
   # inject fakes the same way):
@@ -61,7 +61,7 @@ module PikuriWeb
     # server-rendered markup +GET /+ embeds, so no conversation state is ever
     # assembled in the browser.
     get '/conversations' do
-      erb :_sidebar, locals: { conversations: conversation_rows }
+      erb :_sidebar, locals: { conversations: conversation_rows, busy: settings.runner.status_data[:busy] }
     end
 
     # SSE feed of transcript deltas (+block+ / +remove+) and +status+
@@ -114,7 +114,32 @@ module PikuriWeb
       status 204
     end
 
+    # Make a stored conversation the live one.
+    #
+    # The 303 is for a browser with JavaScript off, which posted the sidebar
+    # row's form and needs a page back; app.js intercepts the same form and
+    # lets the +reset+ / +block+ SSE frames redraw every tab instead, since a
+    # reload would cost each of them a half-typed message.
+    post '/conversations/:id/select' do
+      conversation = resolve_conversation(params['id'])
+      halt 404, 'no such conversation' if conversation.nil?
+
+      case settings.runner.load_conversation(conversation)
+      when :busy then halt 409, 'a turn is in flight'
+      when :failed then halt 422, 'that conversation could not be read'
+      end
+      redirect to('/'), 303
+    end
+
     private
+
+    # @param id [String]
+    # @return [ConversationStore::Conversation, nil] the live conversation
+    #   included, since it is in the sidebar before it is on disk
+    def resolve_conversation(id)
+      live = settings.runner.conversation
+      live.id == id ? live : settings.conversations.find(id)
+    end
 
     # The sidebar's model: every saved conversation newest first, plus the
     # live one, which has no +meta.json+ until its first turn is saved and so

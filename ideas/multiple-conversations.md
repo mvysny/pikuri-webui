@@ -1,18 +1,21 @@
 # Multiple conversations
 
-Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slices 1–3
-below have shipped: conversations are saved to disk, listed in a left sidebar, and
-`AgentRunner#load_conversation` can put one back — but **nothing calls it yet**, so the sidebar
-rows are still inert and a restart still lands you in an empty transcript. Step 4 is the click.
-This idea: **many conversations, persisted on disk, picked from a left sidebar** — roughly Web
-Claude's shape, minus multi-user.
+**v1 is shipped** — steps 1–4 below. Conversations are saved to disk, listed in a left sidebar, and
+clicking one loads it back into every open tab. `D_single_shared_conversation` has been narrowed to
+"one *live* conversation" and `D_replay_from_history` written; everything v1 settled has been
+backported to `AGENTS.md`, `DECISIONS.md`, the YARD headers and `README.md`.
 
-Scope-wise this reopens `D_single_shared_conversation`, but *not* the part it rejected. That entry
-rejected **per-session** conversations (a conversation per browser tab / visitor), which is a
-multi-user feature in disguise. This is **one user, many conversations, one live at a time** — a
-different shape, and much cheaper. If this ships, `D_single_shared_conversation` needs an
-amendment ("one *live* conversation, no sessions, no auth") rather than a reversal, because the
-loopback / no-auth half of it is untouched.
+**What is left in this file is v2**: the LLM-generated title (step 5) and background turns
+(step 6), plus the open questions neither v1 nor a decision has closed — `Q_retention`,
+`Q_multi_process`, `Q_title_length`, `Q_conversation_count`. **This file is ripe for graduation:**
+the v1 material is duplicated in durable homes now, so the honest end state is to delete it and
+file what remains as one small idea per v2 feature.
+
+The original framing, kept because v2 still leans on it: **many conversations, persisted on disk,
+picked from a left sidebar** — roughly Web Claude's shape, minus multi-user. It reopened
+`D_single_shared_conversation` but *not* the part that entry rejected — **per-session**
+conversations (one per browser tab / visitor), which is a multi-user feature in disguise. This is
+**one user, many conversations, one live at a time**, and the loopback / no-auth half is untouched.
 
 Open questions get `Q_` slugs so the rest of the file can cite them.
 
@@ -195,11 +198,11 @@ The two hazards this section worried about both dissolved:
   `location.reload()` would throw away a half-typed message in every open tab, including tabs whose
   user is not the one who clicked).
 
-**`Q_switch_while_busy` — SETTLED.** The agent is mid-turn and the user clicks another
-conversation. **v1: refuse** — sidebar rows disabled while busy, with a `title` explaining why.
-It's honest (one conversation is live), and it's the only option that doesn't grow topics.
-Cancelling the turn (`Cancellable`, next tool boundary) is rejected outright: silently throwing
-away a turn because someone clicked a row is worse than not letting them click.
+**`Q_switch_while_busy` — SETTLED and shipped for v1: refuse.** Sidebar rows are disabled while
+busy, with a `title` explaining why. It's honest (one conversation is live), and it's the only
+option that doesn't grow topics. Cancelling the turn (`Cancellable`, next tool boundary) was
+rejected outright: silently throwing away a turn because someone clicked a row is worse than not
+letting them click.
 
 **v2: let the turn run in the background** while the user views another conversation. Not a patch
 on v1 — it pulls in, roughly in dependency order:
@@ -229,7 +232,9 @@ own conversation is nearly free — and B's "two panes, one accepts input" objec
 when background turns exist, because the other pane is genuinely alive. So v1 should pick A
 *without* baking the assumption that one transcript exists at a time into the routes.
 
-**`Q_selection_scope`** — where does "which conversation is selected" live?
+**`Q_selection_scope` — SETTLED and shipped: A (server-global).** Graduated to
+`D_single_shared_conversation`, which now carries the reasoning; B stays noted below as where this
+goes *if* v2's background turns land.
 
 - **A: server-global.** One selected conversation, all tabs show it, a switch broadcasts `reload`.
   `Broadcaster` untouched, one transcript in memory, matches "one live agent" exactly. Selection
@@ -241,11 +246,10 @@ when background turns exist, because the other pane is genuinely alive. So v1 sh
 
 (Lean: A for v1, and note that B is where this goes *if* parallel turns ever become a goal.)
 
-**`Q_get_side_effects`** — with A, a sidebar row must not be a plain `GET` link that switches
-server state: a prefetching browser would change the user's conversation. So each row is a
-`<form method="post">` styled as a list item (no JS, works everywhere), redirecting 303 to `/`.
-Slightly awkward CSS; correctness worth it. (With B, rows are honest links and this evaporates —
-which is B's real argument.)
+**`Q_get_side_effects` — SETTLED and shipped as leaned.** A row is a `<form method="post">` whose
+submit button *is* the row, so a prefetching browser cannot switch the user's conversation. The CSS
+to un-button a button was the predicted cost and it is about ten lines. (With B, rows would be
+honest links and this evaporates — which is B's real argument.)
 
 **`Q_new_conversation_litter`** — "New conversation" must appear and be selected immediately, but
 persisting an empty conversation per click litters the folder. (Lean: hold it unsaved in memory,
@@ -432,8 +436,25 @@ wait for. The order that keeps each stage shippable:
      `load_history!` returns.
    - **The interrupted-tool-call repair is replayed, not skipped**, so the transcript shows the
      `[Tool execution was interrupted]` observation the model is actually looking at.
-4. **Switching** (`Q_switch_while_busy`, `Q_selection_scope`) — the UI on top of a load path that
-   already works.
+4. ~~**Switching.**~~ **SHIPPED**, and with it all of v1. `ConversationStore#find`,
+   `POST /conversations/:id/select`, rows as forms, busy-disabling.
+   `D_single_shared_conversation` is narrowed to "one *live* conversation" as this file predicted.
+   What it settled beyond the plan:
+
+   - **`Q_get_side_effects` as leaned, and the 303 earns its keep twice.** Each row is a
+     `<form method="post">` whose submit button *is* the row, so a prefetching browser can't switch
+     conversations. app.js intercepts the submit and declines the redirect (`redirect: 'manual'`);
+     the 303 is what a no-JS browser gets, which makes the sidebar work with JavaScript off for
+     free. The listener is delegated to the `<nav>`, so it survives the innerHTML swap.
+   - **The switch redraws the clicking tab the same way it redraws the others** — over SSE. There is
+     no special case for "the tab that clicked", which is why `Q_selection_scope`'s option A costs
+     nothing extra.
+   - **`ConversationStore#find` resolves through `#list`**, not by building a path. An id from a URL
+     can therefore only ever name a conversation that is already there, and no route has to think
+     about traversal.
+   - **The live conversation is selectable too**, even before its first save puts it in the
+     listing — `App` checks the runner before the store, mirroring what the sidebar merge does.
+     Otherwise clicking the row you are already on would 404.
 5. **v2 auto-title**, or manual rename first if `Q_title_length` says the sidebar wants short
    titles anyway.
 6. **v2 background turns** (`Q_switch_while_busy`) — conversation-tagged emissions, topics in

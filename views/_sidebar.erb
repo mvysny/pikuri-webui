@@ -2,14 +2,24 @@
     served on its own by GET /conversations so app.js can drop a fresh copy
     into that nav when the live conversation changes.
 
-    Read-only: rows are not links or forms yet, because nothing loads a saved
-    conversation back. The current one is marked by class and aria-current. %>
+    Each row is a form, not a link: selecting a conversation changes server
+    state, and a prefetching browser must not be able to do that with a GET.
+    app.js intercepts the submit; without JavaScript the POST redirects back
+    to a freshly rendered page. Rows are disabled mid-turn — one conversation
+    is live, and a switch would have to throw the running turn away. %>
 <ul class="conversations">
   <% conversations.each do |c| %>
-  <li class="conversation<%= ' current' if c[:current] %><%= ' unsupported' unless c[:supported] %>"
-      aria-current="<%= c[:current] %>">
-    <span class="conversation-title" title="<%= c[:title] %>"><%= c[:title] %></span>
-    <span class="conversation-time"><%= c[:supported] ? c[:ago] : 'unsupported format' %></span>
+  <li>
+    <form method="post" action="/conversations/<%= c[:id] %>/select">
+      <button type="submit"
+              class="conversation<%= ' current' if c[:current] %><%= ' unsupported' unless c[:supported] %>"
+              aria-current="<%= c[:current] %>"
+              title="<%= busy ? 'the agent is mid-turn' : c[:title] %>"
+              <%= 'disabled' if busy %>>
+        <span class="conversation-title"><%= c[:title] %></span>
+        <span class="conversation-time"><%= c[:supported] ? c[:ago] : 'unsupported format' %></span>
+      </button>
+    </form>
   </li>
   <% end %>
 </ul>

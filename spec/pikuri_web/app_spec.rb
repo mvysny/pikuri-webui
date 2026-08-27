@@ -17,27 +17,37 @@ RSpec.describe PikuriWeb::App do
     end
   end
 
-  # Stands in for ConversationStore: serves a canned listing.
+  # Stands in for ConversationStore: serves a canned listing, and resolves
+  # through it exactly as the real one does.
   class FakeStore
     attr_accessor :list
 
     def initialize(list = [])
       @list = list
     end
+
+    def find(id) = @list.find { |c| c.id == id }
   end
 
   # Stands in for AgentRunner: records calls, serves canned status.
   class FakeRunner
-    attr_reader :submitted, :cancels, :new_conversations
-    attr_accessor :busy, :new_conversation_outcome, :conversation
+    attr_reader :submitted, :cancels, :new_conversations, :loaded
+    attr_accessor :busy, :new_conversation_outcome, :load_conversation_outcome, :conversation
 
     def initialize
       @submitted = []
       @cancels = 0
       @new_conversations = 0
+      @loaded = []
       @busy = false
       @new_conversation_outcome = :started
+      @load_conversation_outcome = :loaded
       @conversation = ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the live one')
+    end
+
+    def load_conversation(conversation)
+      @loaded << conversation
+      @load_conversation_outcome
     end
 
     def submit(message) = @submitted << message
@@ -156,8 +166,25 @@ RSpec.describe PikuriWeb::App do
     it 'marks the live conversation current' do
       conversations.list = saved
       get '/'
-      assert_includes last_response.body, %(<li class="conversation current"\n      aria-current="true">)
-      assert_includes last_response.body, %(<li class="conversation"\n      aria-current="false">)
+      assert_includes last_response.body, 'class="conversation current"'
+      assert_includes last_response.body, 'aria-current="true"'
+      assert_includes last_response.body, 'class="conversation"'
+      assert_includes last_response.body, 'aria-current="false"'
+    end
+
+    it 'posts each row rather than linking it, so a prefetch cannot switch conversations' do
+      conversations.list = saved
+      get '/'
+      assert_includes last_response.body,
+                      '<form method="post" action="/conversations/2026-08-26T09-14-02Z-b1c7/select">'
+      refute_includes last_response.body, '<a href="/conversations'
+    end
+
+    it 'disables the rows while a turn is in flight' do
+      conversations.list = saved
+      runner.busy = true
+      get '/'
+      assert_equal 2, last_response.body.scan('title="the agent is mid-turn"').size
     end
 
     it 'lists the live conversation before its first save, when the store has no row for it' do
@@ -255,6 +282,49 @@ RSpec.describe PikuriWeb::App do
       runner.new_conversation_outcome = :busy
       post '/conversations'
       assert_equal 409, last_response.status
+    end
+  end
+
+  context 'POST /conversations/:id/select' do
+    let(:stored) { ConversationRows.row('2026-08-26T09-14-02Z-b1c7', 'yesterday\'s') }
+
+    before { conversations.list = [stored] }
+
+    it 'hands the stored conversation to the runner and redirects a no-JS browser home' do
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      assert_equal 303, last_response.status
+      assert_equal 'http://example.org/', last_response.headers['Location']
+      assert_equal [stored], runner.loaded
+    end
+
+    it 'accepts the live conversation, which is in the sidebar before it is on disk' do
+      post "/conversations/#{runner.conversation.id}/select"
+      assert_equal 303, last_response.status
+      assert_equal [runner.conversation], runner.loaded
+    end
+
+    it 'refuses an id that is not a listed conversation' do
+      post '/conversations/..%2F..%2Fetc/select'
+      assert_equal 404, last_response.status
+      assert_empty runner.loaded
+    end
+
+    it 'returns 409 when a turn is in flight' do
+      runner.load_conversation_outcome = :busy
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      assert_equal 409, last_response.status
+    end
+
+    it 'returns 422 when the stored history could not be read' do
+      runner.load_conversation_outcome = :failed
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      assert_equal 422, last_response.status
+    end
+
+    it 'redirects on a conversation that is already live' do
+      runner.load_conversation_outcome = :current
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      assert_equal 303, last_response.status
     end
   end
 end

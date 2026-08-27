@@ -82,10 +82,12 @@ turn away.
 
 The sidebar lists every conversation you have had, newest first, with when
 each started. The order is by start time, so a conversation stays where it
-is however long you keep talking in it. The rows don't do anything yet —
-clicking one to open it is the next step, and the machinery behind it is
-already in place. A row greyed out as *unsupported format* was written by
-a version this one can't read.
+is however long you keep talking in it. Click a row to open it: the one
+you were in is saved, and every open tab switches with you — there is one
+live conversation, not one per tab. Rows go dim while the agent is
+mid-turn, because switching would have to throw that turn away. A row
+labelled *unsupported format* has details this version can't read;
+opening it may still work.
 
 What comes back when a conversation is reopened is the conversation
 itself: what you asked, what the model thought and answered, which tools
@@ -110,11 +112,10 @@ started:
 The `conversations/` folder is there from boot; a conversation's own
 directory appears with its first completed turn, so a session you never
 said anything in leaves nothing behind. Turns are saved as they finish, so
-quitting keeps the conversation — but a restart still starts you empty
-until the sidebar rows become clickable, which is what
-`ideas/multiple-conversations.md` plans next.
+quitting keeps the conversation; a restart starts you in a fresh one with
+all the old ones a click away in the sidebar.
 
-Only `history.json` is stored; what you see on screen is rebuilt from it
+Only `history.json` is stored — what you see on screen is rebuilt from it
 each time, so a rendering or styling fix reaches every old conversation
 too.
 

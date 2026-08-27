@@ -542,9 +542,15 @@ the rule the theme cookie had to be argued *against* (`D_theme_cookie`)
 rather than quietly excepted from. Blocks are stored rendered, so a
 change to how a block renders does not retroactively re-render history.
 
-## D_single_shared_conversation — One agent, one transcript, loopback by default (2026-06-04)
+## D_single_shared_conversation — One *live* agent, one transcript, loopback by default (2026-06-04)
 
-**Status:** Accepted, shipped 2026-06-04.
+**Status:** Accepted, shipped 2026-06-04; narrowed on 2026-08-27, when a
+sidebar of stored conversations shipped. "One conversation" now means one
+**live** conversation — the browser can switch which stored conversation
+that is, and every tab follows, because there is still exactly one agent
+and one transcript. The rejection below is untouched: it was about a
+conversation *per session*, which is multi-user support in disguise, and
+none of what shipped moves toward it.
 
 **Context.** A web front-end invites the assumption that it is
 multi-user. This one is the TUI's single-conversation model rendered in a
@@ -552,7 +558,12 @@ browser, and its second "user" is a second tab on the same machine.
 
 **Decision.** One agent, one transcript, in-process. No sessions, no
 auth. `--bind` defaults to `127.0.0.1`; anything else is the operator's
-risk and is documented as such.
+risk and is documented as such. Selecting a conversation is therefore
+*server* state, changed by a POST and announced to every tab, not a
+per-URL view: one live agent showing two panes where only one accepts
+input would be confusing in exactly the situation it enabled. Per-URL
+`/c/<id>` is where this goes if background turns ever make the other
+pane genuinely alive.
 
 **Rejected: per-session conversations.** Not a patch — {AgentRunner} owns
 *the* worker thread and {Transcript} owns *the* block list, so sessions

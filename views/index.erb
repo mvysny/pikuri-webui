@@ -17,7 +17,7 @@
 </head>
 <body>
   <nav id="sidebar" aria-label="Conversations"><%==
-    erb(:_sidebar, layout: false, locals: { conversations: conversations })
+    erb(:_sidebar, layout: false, locals: { conversations: conversations, busy: status[:busy] })
   %></nav>
 
   <div id="chat">
