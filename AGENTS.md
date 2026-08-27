@@ -128,13 +128,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/version.rb` — `PikuriWeb::VERSION`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
   `GET /` (page shell), `GET /events` (SSE), `POST /messages`,
-  `POST /cancel`. Collaborators injected via class-level settings.
+  `POST /cancel`, `POST /conversations`. Collaborators injected via
+  class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, owns
-  the worker thread and the start-vs-inject (Interloper) decision,
-  broadcasts status.
+  the worker thread, the start-vs-inject (Interloper) decision and the
+  live conversation (saves at turn end); broadcasts status.
+- `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
+  the conversations folder: mints ids, owns `meta.json`. Pikuri-free.
 - `lib/pikuri_web/transcript.rb` — server-authoritative rendered-block
   store; thread-safe.
 - `lib/pikuri_web/broadcaster.rb` — SSE frame formatting + fan-out to

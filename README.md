@@ -73,6 +73,33 @@ bin/pikuri-web-chat --server http://localhost:8082 --model my-model --port 9292
 
 Ctrl+C stops it. Open browser tabs don't delay the exit.
 
+## Conversations
+
+**+ new conversation** in the status bar saves what you have and clears the
+page — the `/clear` this shell used to lack. It is refused (and the button
+disabled) while the agent is mid-turn: a click must not throw a running
+turn away.
+
+Each conversation becomes a directory under
+`~/.local/state/pikuri/conversations/` (`$XDG_STATE_HOME` if you set it),
+named for when it started:
+
+```
+2026-08-27T12-03-51Z-3f9a/
+    history.json   the conversation itself, in pikuri's own format
+    attachments/   any file the model was shown
+    meta.json      title, timestamps, which shell and model wrote it
+```
+
+Turns are saved as they finish, so quitting keeps the conversation — but
+**nothing reads these back yet**: a restart still starts you empty, and the
+saved conversations just accumulate. Loading them, and a sidebar to pick
+from, is what `ideas/multiple-conversations.md` plans.
+
+Nothing is encrypted. These files hold everything you typed and everything
+the tools fetched, so the directories are created `0700` and that is the
+whole of the protection. Delete a conversation with `rm -r`.
+
 ## Develop
 
 ```sh
@@ -87,7 +114,8 @@ request in either mode — a browser reload picks them up.
 Ruby under `lib/` is the exception: nothing reloads it, in either mode.
 The agent, its listener stack and the runner's worker thread are
 long-lived instances wired once in the boot script, so a class change
-lands only in a fresh process — which is also a fresh transcript. Let a
+lands only in a fresh process — which is also a fresh transcript (the old
+one is saved, per **Conversations** above, but not reloaded). Let a
 watcher restart it:
 
 ```sh
@@ -146,7 +174,7 @@ CLI flags.
 │ Input (Enter to send;            │
 │   sending mid-turn injects)      │
 ├──────────────────────────────────┤
-│ status · tokens                  │
+│ status · tokens · + new · theme  │
 └──────────────────────────────────┘
 ```
 

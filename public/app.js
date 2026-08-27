@@ -8,6 +8,7 @@ const transcript = document.getElementById('transcript');
 const composer = document.getElementById('composer');
 const promptEl = document.getElementById('prompt');
 const cancelBtn = document.getElementById('cancel');
+const newBtn = document.getElementById('new-conversation');
 const statusState = document.getElementById('status-state');
 const statusPending = document.getElementById('status-pending');
 const statusTokens = document.getElementById('status-tokens');
@@ -38,12 +39,18 @@ const updateStatus = ({ busy, pending, tokens }) => {
   statusPending.textContent = pending > 0 ? `${pending} queued` : '';
   statusTokens.textContent = tokens;
   cancelBtn.hidden = !busy;
+  // The server refuses a switch mid-turn (409); matching that here keeps the
+  // button from looking broken.
+  newBtn.disabled = busy;
 };
 
 const es = new EventSource('/events');
 es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
 es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
 es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
+// A new conversation started: the server's transcript is empty, so ours is
+// too. Emptying in place rather than reloading keeps a half-typed message.
+es.addEventListener('reset', () => transcript.replaceChildren());
 // On EventSource auto-reconnect the page may have missed frames; reload
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
@@ -67,6 +74,8 @@ promptEl.addEventListener('keydown', (e) => {
 });
 
 cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
+
+newBtn.addEventListener('click', () => fetch('/conversations', { method: 'POST' }));
 
 // Theme toggle. The cookie is the store — the server reads it back on
 // the next GET / and renders `data-theme` into the shell, so this only

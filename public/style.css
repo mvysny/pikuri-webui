@@ -184,7 +184,7 @@ button:hover { border-color: var(--accent); }
 #status-tokens { flex: 1; text-align: right; }
 
 /* A status-bar control, not a composer button: no chrome until hovered. */
-#theme-toggle {
+.status-button {
   background: none;
   border: 0;
   border-radius: 4px;
@@ -193,4 +193,5 @@ button:hover { border-color: var(--accent); }
   font: inherit;
 }
 
-#theme-toggle:hover { color: var(--fg); background: var(--bg); }
+.status-button:hover:not(:disabled) { color: var(--fg); background: var(--bg); }
+.status-button:disabled { cursor: default; opacity: 0.5; }

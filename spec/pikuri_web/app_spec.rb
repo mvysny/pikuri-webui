@@ -9,16 +9,25 @@ RSpec.describe PikuriWeb::App do
 
   # Stands in for AgentRunner: records calls, serves canned status.
   class FakeRunner
-    attr_reader :submitted, :cancels
+    attr_reader :submitted, :cancels, :new_conversations
+    attr_accessor :busy, :new_conversation_outcome
 
     def initialize
       @submitted = []
       @cancels = 0
+      @new_conversations = 0
+      @busy = false
+      @new_conversation_outcome = :started
     end
 
     def submit(message) = @submitted << message
     def cancel = @cancels += 1
-    def status_data = { busy: false, pending: 0, tokens: '12.3k in / 4.5k out' }
+    def status_data = { busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out' }
+
+    def new_conversation
+      @new_conversations += 1
+      @new_conversation_outcome
+    end
   end
 
   # Stands in for Broadcaster on the SSE route: subscribe returns a queue
@@ -91,6 +100,18 @@ RSpec.describe PikuriWeb::App do
       get '/'
       assert_includes last_response.body, '<html lang="en" data-theme="dark">'
     end
+
+    it 'offers the new-conversation button, enabled while idle' do
+      get '/'
+      assert_includes last_response.body, 'id="new-conversation"'
+      refute_includes last_response.body, 'disabled'
+    end
+
+    it 'renders the new-conversation button disabled while busy' do
+      runner.busy = true
+      get '/'
+      assert_includes last_response.body, 'disabled>+ new conversation</button>'
+    end
   end
 
   context 'GET /events' do
@@ -139,6 +160,26 @@ RSpec.describe PikuriWeb::App do
       post '/cancel'
       assert_equal 204, last_response.status
       assert_equal 1, runner.cancels
+    end
+  end
+
+  context 'POST /conversations' do
+    it 'forwards to the runner and returns 204' do
+      post '/conversations'
+      assert_equal 204, last_response.status
+      assert_equal 1, runner.new_conversations
+    end
+
+    it 'returns 204 for an already-empty conversation' do
+      runner.new_conversation_outcome = :empty
+      post '/conversations'
+      assert_equal 204, last_response.status
+    end
+
+    it 'returns 409 when a turn is in flight' do
+      runner.new_conversation_outcome = :busy
+      post '/conversations'
+      assert_equal 409, last_response.status
     end
   end
 end

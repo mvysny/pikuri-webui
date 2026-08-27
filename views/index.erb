@@ -34,7 +34,10 @@
     <span id="status-state"><%= status[:busy] ? 'busy' : 'idle' %></span>
     <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
     <span id="status-tokens"><%= status[:tokens] %></span>
-    <button type="button" id="theme-toggle"
+    <button type="button" id="new-conversation" class="status-button"
+            title="Save this conversation and start a fresh one"
+            <%= 'disabled' if status[:busy] %>>+ new conversation</button>
+    <button type="button" id="theme-toggle" class="status-button"
             title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"
             aria-label="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"><%=
       theme == 'dark' ? '☀ light' : '☾ dark'

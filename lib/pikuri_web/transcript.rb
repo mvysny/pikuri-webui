@@ -71,6 +71,19 @@ module PikuriWeb
       nil
     end
 
+    # Drop every block — a new conversation starting over
+    # (+Pikuri::Agent::Event::Reset+).
+    #
+    # The id counter is deliberately *not* reset: a browser tab that has not
+    # yet applied the reset would otherwise see a fresh +b1+ and upsert it into
+    # the block it still has on screen.
+    #
+    # @return [void]
+    def clear
+      @mutex.synchronize { @blocks.clear }
+      nil
+    end
+
     # @return [Array<Block>] snapshot copy, in order; never shares state
     #   with the internal list (the blocks themselves are not deep-copied —
     #   treat them as read-only)

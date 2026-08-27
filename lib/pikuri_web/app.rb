@@ -3,7 +3,7 @@
 require 'sinatra/base'
 
 module PikuriWeb
-  # The Sinatra app: four routes around the {Transcript} / {Broadcaster}
+  # The Sinatra app: five routes around the {Transcript} / {Broadcaster}
   # / {AgentRunner} trio, which the host injects via class-level settings
   # before boot (see bin/pikuri-web-chat; specs inject fakes the same way):
   #
@@ -89,6 +89,17 @@ module PikuriWeb
     # effect at the next tool boundary). Idempotent; no-op when idle.
     post '/cancel' do
       settings.runner.cancel
+      status 204
+    end
+
+    # Save the current conversation and start a fresh one. The browser needs
+    # no answer beyond the status code: the transcript is emptied by the
+    # +reset+ SSE event the agent's own +Event::Reset+ produces.
+    #
+    # 409 while a turn is in flight — the runner refuses rather than throw
+    # the turn away, and app.js disables the button on the same signal.
+    post '/conversations' do
+      halt 409, 'a turn is in flight' if settings.runner.new_conversation == :busy
       status 204
     end
   end

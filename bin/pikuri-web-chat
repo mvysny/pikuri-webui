@@ -90,6 +90,17 @@ Pikuri::Extractors::PDF.register
 transcript = PikuriWeb::Transcript.new
 broadcaster = PikuriWeb::Broadcaster.new
 
+# Conversations land under pikuri's own state root, in a folder named for
+# what it holds rather than for this shell: the format is pikuri's
+# history.json plus our envelope, so a future pikuri-tui /resume reads the
+# same files. Nothing here loads them back yet — "+ new conversation" saves
+# and clears.
+conversations = PikuriWeb::ConversationStore.new(
+  root: Pikuri::Paths.state / 'conversations',
+  shell: 'pikuri-web-chat',
+  model: llm.model
+)
+
 # Diagnostics go to stderr — pikuri's per-subsystem loggers and
 # PikuriWeb's own logger both default there. The browser shows the
 # conversation transcript only (see AGENTS.md).
@@ -153,6 +164,7 @@ runner = PikuriWeb::AgentRunner.new(
   interloper: interloper,
   cancellable: cancel_flag,
   broadcaster: broadcaster,
+  conversations: conversations,
   token_log: token_log
 )
 

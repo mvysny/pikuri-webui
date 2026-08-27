@@ -141,6 +141,31 @@ RSpec.describe PikuriWeb::SseListener do
     end
   end
 
+  context 'Reset' do
+    it 'empties the transcript and broadcasts one reset frame' do
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'hello'))
+      queue # subscribe after the conversation, before the reset
+
+      listener.on_event(Pikuri::Agent::Event::Reset.new)
+
+      assert_empty transcript.to_a
+      assert_equal %w[reset], event_types(drain_frames(queue))
+    end
+
+    it 'drops an open streaming handle instead of wiping its removed block' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'partial'))
+      listener.on_event(Pikuri::Agent::Event::Reset.new)
+      queue # subscribe after the reset
+
+      # A retained handle would make this delta rewrite a block nothing has.
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'fresh'))
+
+      assert_equal 1, transcript.to_a.size
+      assert_equal %w[block], event_types(drain_frames(queue))
+    end
+  end
+
   context 'silent events' do
     it 'ignores Tokens' do
       listener.on_event(

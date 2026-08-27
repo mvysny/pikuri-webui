@@ -1,9 +1,10 @@
 # Multiple conversations
 
-Today `pikuri-web-chat` is one agent, one transcript, forever (`D_single_shared_conversation`).
-Restart the process and the conversation is gone; there is no `/clear` either, so the only way to
-start fresh is Ctrl+C. This idea: **many conversations, persisted on disk, picked from a left
-sidebar** — roughly Web Claude's shape, minus multi-user.
+Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slice 1 below
+has shipped, so a conversation is now saved to disk and "+ new conversation" starts a fresh one —
+but nothing loads a saved one back, so a restart still lands you in an empty transcript with the
+old conversation sitting unreachable on disk. This idea: **many conversations, persisted on disk,
+picked from a left sidebar** — roughly Web Claude's shape, minus multi-user.
 
 Scope-wise this reopens `D_single_shared_conversation`, but *not* the part it rejected. That entry
 rejected **per-session** conversations (a conversation per browser tab / visitor), which is a
@@ -79,11 +80,10 @@ that free: **the store deals in paths, {AgentRunner} deals in `History`.** The s
 enumerates directories and owns `meta.json`; the runner — already inside the seam — is the only
 thing that calls `export_history.save` / `History.load`.
 
-**New work this creates:** `SseListener`'s `else` arm currently documents `Reset` / `ModelSwitched`
-as *unreachable* ("this shell offers neither /clear nor a model picker. Wiring either means adding
-an arm"). Multiple conversations makes `Reset` reachable and adds `HistoryLoaded`. Both need arms —
-`Reset` clears the transcript, `HistoryLoaded` is where a "restored N messages" notice would go, if
-we want one.
+**New work this creates:** `SseListener`'s `else` arm documented `Reset` / `ModelSwitched` as
+*unreachable*. Slice 1 made `Reset` reachable and gave it an arm (clear the transcript, push a
+`reset` frame). `HistoryLoaded` still has none — it is where a "restored N messages" notice would
+go, if we want one — and becomes reachable the moment step 3 lands.
 
 ---
 
@@ -212,6 +212,9 @@ in, repaired at `load_history!` (`D_history_load_repairs`) — the crash case is
 they made loadable. Under (c) the event log keeps its own append path; under (b) there is no second
 write path at all.
 
+*Slice 1 shipped turn-end saves instead* — see the deviation and its reason under **Smallest
+useful slice** step 1.
+
 **`Q_multi_process`** — two `pikuri-web-chat` processes on different ports, or the TUI, sharing the
 folder. Both writers rewrite `history.json` wholesale, so the failure is not a torn file (rename is
 atomic) but a **silently clobbered conversation**: the loser's turns vanish at the next save.
@@ -255,10 +258,14 @@ unchanged), or `App` learns to ask a `ConversationStore` for "the current transc
 request. (Lean: the former — routes keep calling `settings.transcript.to_a`, and the swap is one
 mutex-guarded assignment in the thing that owns both.)
 
-Step 4 is nearly free given what's already there: `app.js` already does `location.reload()` when
-`EventSource` reconnects, precisely because the server is authoritative. A `reload` SSE event
-reuses that path, so every open tab follows the switch with no new client state — which keeps
-`D_no_js_build_step` and `D_server_authoritative_transcript` intact.
+Step 4 is nearly free, and **slice 1 already built it**: a `reset` SSE event, whose handler is
+`transcript.replaceChildren()`. The earlier lean was to reuse app.js's existing
+`location.reload()` reconnect path, and that was wrong for one reason found while building —
+**a reload throws away a half-typed message** in every open tab, including tabs whose user is not
+the one who clicked. Emptying in place costs one more line of JS and no client state, so
+`D_no_js_build_step` and `D_server_authoritative_transcript` hold either way. A *switch* (as
+opposed to a clear) needs blocks to arrive as well as leave, so it either follows the `reset` with
+the new snapshot's blocks or reuses the reload after all — decide that in step 3, not here.
 
 **`Q_switch_while_busy` — SETTLED.** The agent is mid-turn and the user clicks another
 conversation. **v1: refuse** — sidebar rows disabled while busy, with a `title` explaining why.
@@ -419,10 +426,29 @@ The blocker is gone — [mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/iss
 `../pikuri` is a path dependency, so the round-trip is available right now with no version bump to
 wait for. The order that keeps each stage shippable:
 
-1. **Store + "New conversation" only.** No sidebar: one button that `export_history.save(dir)`s the
-   current conversation and `clear_conversation`s the agent. Already useful (it's the missing
-   `/clear`), it exercises the whole write path, and it forces the `Reset` arm in `SseListener` —
-   which every later stage needs anyway.
+1. ~~**Store + "New conversation" only.**~~ **SHIPPED.** `ConversationStore` (folder layout +
+   `meta.json`), `AgentRunner#new_conversation`, `POST /conversations`, the `Reset` arm in
+   `SseListener`, a `reset` SSE event, and a status-bar button. What it settled beyond the plan:
+
+   - **`AgentRunner` owns the live conversation; the store is stateless.** The planned
+     `conversation_session.rb` was not needed — the runner owns the agent whose history it is, so
+     it owns *which* conversation that history belongs to, and the store stays a pure
+     folder-layout object (which is also what makes slice 2's listing a plain read-only method).
+     The session object comes back in step 3, when a *transcript* has to be swapped rather than
+     cleared.
+   - **Saves happen at turn end, not per message** — a deliberate deviation from `Q_write_shape`'s
+     lean. There is no clean per-message event to hang it on: `Event::ToolResult` fires *before*
+     ruby_llm appends the tool message (pikuri's own `tool_batch_complete?` comment says so), and
+     no event fires for a tool message landing at all. Turn end needs no ordering assumptions, and
+     nothing reads these files back yet. Revisit with step 3, where a lost turn becomes visible.
+   - **"Idle" means "saved".** `#busy?` stays true until the turn's save lands, because a
+     `new_conversation` slipping into the gap would re-point the live conversation and the save
+     would land in the fresh folder. The save runs under the same mutex as the submit decision.
+   - **`Q_new_conversation_litter` and `Q_perms` are implemented as leaned**: `#create` writes
+     nothing, the button is a no-op (`:empty`) on a conversation with no messages, and directories
+     are 0700.
+   - **`Q_switch_while_busy`'s refusal is already live** for the clear case: `POST /conversations`
+     answers 409 while a turn is in flight, and the button renders `disabled`.
 2. **Sidebar, read-only list** — titles + relative time, current one highlighted, no switching.
    Proves the layout and the metadata reads. No `History.load` yet, so no replay risk.
 3. **Loading** — `History.load` + the replay path (`Q_store_format`) + `HistoryLoaded`'s arm. This is

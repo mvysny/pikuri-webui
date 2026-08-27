@@ -47,6 +47,21 @@ RSpec.describe PikuriWeb::Transcript do
     end
   end
 
+  context '#clear' do
+    it 'drops every block' do
+      transcript.add(kind: :user, html: 'hi')
+      transcript.add(kind: :assistant, html: 'hello')
+      transcript.clear
+      assert_empty transcript.to_a
+    end
+
+    it 'keeps minting fresh ids, so a lagging tab cannot collide' do
+      first = transcript.add(kind: :user, html: 'hi')
+      transcript.clear
+      refute_equal first.id, transcript.add(kind: :user, html: 'again').id
+    end
+  end
+
   context '#to_a' do
     it 'returns a snapshot that does not share the internal list' do
       transcript.add(kind: :user, html: 'hi')

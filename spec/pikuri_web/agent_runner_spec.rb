@@ -1,17 +1,24 @@
 # frozen_string_literal: true
 
-# Exercises the start-vs-inject decision against a real Interloper /
-# Cancellable and a gate-controlled fake agent, so worker-thread timing
+require 'tmpdir'
+
+# Exercises the start-vs-inject decision and the save/clear transition
+# against a real Interloper / Cancellable, a real ConversationStore over a
+# temp directory, and a gate-controlled fake agent so worker-thread timing
 # is deterministic.
 RSpec.describe PikuriWeb::AgentRunner do
-  # Stands in for Pikuri::Agent: records run_loop messages and blocks on
-  # a gate until the spec releases it.
+  # Stands in for Pikuri::Agent: records run_loop messages, blocks on a gate
+  # until the spec releases it, and serves a real History (so #persist
+  # exercises pikuri's own save rather than a stub).
   class FakeAgent
-    attr_reader :messages
+    attr_reader :messages, :clears
+    attr_accessor :history
 
     def initialize
       @gate = Thread::Queue.new
       @messages = []
+      @clears = 0
+      @history = Pikuri::Agent::History.new(messages: [])
     end
 
     def run_loop(user_message:)
@@ -19,16 +26,41 @@ RSpec.describe PikuriWeb::AgentRunner do
       @gate.pop
     end
 
+    def export_history = @history
+
+    def clear_conversation
+      @clears += 1
+      @history = Pikuri::Agent::History.new(messages: [])
+    end
+
     def release = @gate.push(:go)
   end
+
+  # A one-message History — enough to be non-empty, which is what the
+  # save-vs-no-op decisions turn on.
+  def history_of(text)
+    Pikuri::Agent::History.new(
+      messages: [
+        Pikuri::Agent::History::Message.new(
+          id: Pikuri::Agent::History.mint_id, role: 'user', content: text
+        )
+      ]
+    )
+  end
+
+  around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
   let(:agent) { FakeAgent.new }
   let(:interloper) { Pikuri::Agent::Control::Interloper.new }
   let(:cancellable) { Pikuri::Agent::Control::Cancellable.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
+  let(:conversations) do
+    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'qwen3.6')
+  end
   let(:runner) do
     described_class.new(
-      agent: agent, interloper: interloper, cancellable: cancellable, broadcaster: broadcaster
+      agent: agent, interloper: interloper, cancellable: cancellable,
+      broadcaster: broadcaster, conversations: conversations
     )
   end
 
@@ -128,6 +160,87 @@ RSpec.describe PikuriWeb::AgentRunner do
     it 'is a no-op when idle' do
       runner.cancel
       refute cancellable.cancelled?
+    end
+  end
+
+  context 'persistence at turn end' do
+    it 'writes history.json and meta.json into the live conversation' do
+      agent.history = history_of('what is 2+2?')
+      dir = runner.conversation.dir
+      runner.submit('what is 2+2?')
+      wait_until { runner.busy? }
+      agent.release
+      wait_until { !runner.busy? }
+
+      assert_equal %w[history.json meta.json], dir.children.map { |c| c.basename.to_s }.sort
+      assert_equal agent.history, Pikuri::Agent::History.load(dir)
+    end
+
+    it 'writes nothing for a turn that left no messages' do
+      runner.submit('hello')
+      wait_until { runner.busy? }
+      agent.release
+      wait_until { !runner.busy? }
+
+      refute @root.exist?
+    end
+
+    it 'logs a save failure instead of killing the worker thread' do
+      agent.history = history_of('hi')
+      # A file where the conversations root has to be a directory.
+      @root.dirname.mkpath
+      @root.write('not a directory')
+
+      log = capture_log do
+        runner.submit('hi')
+        wait_until { runner.busy? }
+        agent.release
+        wait_until { !runner.busy? }
+      end
+
+      assert_includes log, 'saving conversation'
+      refute runner.busy?
+    end
+  end
+
+  context '#new_conversation' do
+    it 'saves the old conversation, clears the agent, and mints a fresh id' do
+      agent.history = history_of('hello')
+      old = runner.conversation
+
+      assert_equal :started, runner.new_conversation
+
+      assert_equal 1, agent.clears
+      refute_equal old.id, runner.conversation.id
+      assert (old.dir / 'history.json').file?
+      refute runner.conversation.dir.exist?
+    end
+
+    it 'broadcasts status, since Reset zeroes the token readout' do
+      agent.history = history_of('hello')
+      queue = broadcaster.subscribe
+      runner.new_conversation
+      assert_equal %w[status], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+    end
+
+    it 'is a no-op on an empty conversation rather than minting a fresh folder' do
+      before = runner.conversation
+
+      assert_equal :empty, runner.new_conversation
+
+      assert_equal 0, agent.clears
+      assert_equal before.id, runner.conversation.id
+      refute @root.exist?
+    end
+
+    it 'refuses while a turn is in flight' do
+      agent.history = history_of('first')
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+
+      assert_equal :busy, runner.new_conversation
+
+      assert_equal 0, agent.clears
     end
   end
 

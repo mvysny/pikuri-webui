@@ -37,6 +37,9 @@ module PikuriWeb
   # - +SystemInjected+ (reference text the host injected — a loaded skill,
   #   recalled memory) collapses to a one-line +notice+; see
   #   {#render_system_injection}.
+  # - +Reset+ empties the transcript and pushes one +reset+ SSE event, so
+  #   every open tab drops its blocks without a page reload (and without
+  #   losing a half-typed message).
   # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
   #   status bar reads +TokenLog#status_line+ via AgentRunner).
   class SseListener < Pikuri::Agent::Listener::Base
@@ -115,10 +118,14 @@ module PikuriWeb
         flush_assistant(:preserve)
         release_thinking
         add_block(:error, MarkdownRenderer.escape('! cancelled'))
+      in Pikuri::Agent::Event::Reset
+        reset_transcript
       else
         # Tokens / ContextCap: silent here (TokenLog consumes them).
-        # Reset / ModelSwitched: unreachable — this shell offers neither
-        # /clear nor a model picker. Wiring either means adding an arm.
+        # ModelSwitched: unreachable — this shell has no model picker.
+        # HistoryLoaded: unreachable until conversations can be loaded back
+        # (this shell only ever starts fresh ones). Wiring either means
+        # adding an arm.
       end
     end
 
@@ -147,6 +154,23 @@ module PikuriWeb
       name = content[/\A<skill name="([^"]*)"/, 1]
       text = name ? "loaded skill: #{name}" : content
       add_block(:notice, MarkdownRenderer.escape("⊕ #{text}"))
+    end
+
+    # Empty the transcript and tell every browser to do the same — a new
+    # conversation replacing the old one.
+    #
+    # The streaming handles are dropped rather than flushed: their blocks are
+    # already gone, so +flush_assistant+ would broadcast a +remove+ for an id
+    # no tab still has. {AgentRunner#new_conversation} refuses while a turn is
+    # in flight, so there is normally nothing open to drop.
+    #
+    # @return [void]
+    def reset_transcript
+      @assistant = nil
+      @thinking = nil
+      @thinking_streamed = false
+      @transcript.clear
+      @broadcaster.broadcast(event: :reset, data: {})
     end
 
     # Append one finished block: store it and announce it.
