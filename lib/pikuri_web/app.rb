@@ -3,13 +3,15 @@
 require 'sinatra/base'
 
 module PikuriWeb
-  # The Sinatra app: five routes around the {Transcript} / {Broadcaster}
-  # / {AgentRunner} trio, which the host injects via class-level settings
-  # before boot (see bin/pikuri-web-chat; specs inject fakes the same way):
+  # The Sinatra app: six routes around the {Transcript} / {Broadcaster}
+  # / {AgentRunner} / {ConversationStore} quartet, which the host injects
+  # via class-level settings before boot (see bin/pikuri-web-chat; specs
+  # inject fakes the same way):
   #
-  #   PikuriWeb::App.set :transcript,  transcript
-  #   PikuriWeb::App.set :broadcaster, broadcaster
-  #   PikuriWeb::App.set :runner,      runner
+  #   PikuriWeb::App.set :transcript,    transcript
+  #   PikuriWeb::App.set :broadcaster,   broadcaster
+  #   PikuriWeb::App.set :runner,        runner
+  #   PikuriWeb::App.set :conversations, store
   #
   # Pikuri-free by design (the seam rule): routes speak only ids, kinds,
   # HTML strings and status hashes. Everything Pikuri-shaped sits behind
@@ -49,8 +51,17 @@ module PikuriWeb
       erb :index, locals: {
         blocks: settings.transcript.to_a,
         status: settings.runner.status_data,
+        conversations: conversation_rows,
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME
       }
+    end
+
+    # The sidebar's list on its own, for app.js to drop back into the page
+    # when the live conversation changes (the +reset+ SSE event) — the same
+    # server-rendered markup +GET /+ embeds, so no conversation state is ever
+    # assembled in the browser.
+    get '/conversations' do
+      erb :_sidebar, locals: { conversations: conversation_rows }
     end
 
     # SSE feed of transcript deltas (+block+ / +remove+) and +status+
@@ -101,6 +112,31 @@ module PikuriWeb
     post '/conversations' do
       halt 409, 'a turn is in flight' if settings.runner.new_conversation == :busy
       status 204
+    end
+
+    private
+
+    # The sidebar's model: every saved conversation newest first, plus the
+    # live one, which has no +meta.json+ until its first turn is saved and so
+    # is missing from the store's listing.
+    #
+    # @return [Array<Hash>] +{id:, title:, ago:, current:, supported:}+
+    def conversation_rows
+      # Ask the runner first: it answers under the mutex it switches
+      # conversations beneath, so a request racing a +reset+ frame blocks
+      # until the switch lands rather than reading the outgoing conversation.
+      live = settings.runner.conversation
+      rows = settings.conversations.list
+      rows.unshift(live) unless rows.any? { |c| c.id == live.id }
+      rows.map do |c|
+        {
+          id: c.id,
+          title: c.title,
+          ago: RelativeTime.humanize(c.created_at),
+          current: c.id == live.id,
+          supported: c.supported
+        }
+      end
     end
   end
 end

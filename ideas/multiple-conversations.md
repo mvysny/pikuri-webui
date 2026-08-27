@@ -1,9 +1,9 @@
 # Multiple conversations
 
-Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slice 1 below
-has shipped, so a conversation is now saved to disk and "+ new conversation" starts a fresh one —
-but nothing loads a saved one back, so a restart still lands you in an empty transcript with the
-old conversation sitting unreachable on disk. This idea: **many conversations, persisted on disk,
+Today `pikuri-web-chat` is one *live* conversation (`D_single_shared_conversation`). Slices 1 and 2
+below have shipped, so conversations are saved to disk and listed in a left sidebar — but nothing
+loads one back, so a restart still lands you in an empty transcript with the old conversations
+sitting on disk, visible and unreachable. This idea: **many conversations, persisted on disk,
 picked from a left sidebar** — roughly Web Claude's shape, minus multi-user.
 
 Scope-wise this reopens `D_single_shared_conversation`, but *not* the part it rejected. That entry
@@ -230,8 +230,12 @@ persistence was added to prevent.)
 web content; nothing is encrypted, and that should be a README line, not a surprise. Now also
 `attachments/` — every image a `read` showed the model, sitting on disk as a plain file.
 
-**`Q_schema_version`** — `schema: 1` in `meta.json`; an unknown version renders the row greyed-out
-with "unsupported format" instead of crashing the sidebar. Cheap, do it in v1.
+**`Q_schema_version` — SETTLED and shipped as leaned.** `schema: 1` in `meta.json`; an unknown
+version — or a corrupt file — renders the row greyed-out with "unsupported format" instead of
+crashing the sidebar. What building it added: the row still needs a *title*, and the envelope is
+exactly what can't be trusted to supply one, so an unreadable conversation falls back to the stamp
+derived from its id. Which is why the id carries a timestamp at all — it is the one piece of
+metadata that cannot be corrupted independently of the directory it names.
 
 **`Q_retention`** — no cap, no cleanup in v1? A delete button (with what confirmation?) is v2 at
 the earliest, and deleting the *currently open* conversation needs a rule.
@@ -380,19 +384,25 @@ untouched by any of this and still ours.
   become a stripe on a laptop or a canyon on a 4K monitor. Full height, own `overflow-y`, transcript
   column keeps its current max-width.
 - **Rows:** title (ellipsised) + relative time, muted and smaller. Selected row gets a background +
-  left border. Newest first — **`Q_sort_key`**: by `updated_at` (last activity, Web Claude) or
-  `created_at` (stable order)? (Lean: `updated_at`.)
+  left border. Newest first.
+- **`Q_sort_key` — SETTLED: `created_at`**, against the earlier lean. `updated_at` reshuffles the
+  list under the user every turn; a list that holds still is one you can build a habit on ("mine is
+  third from the top"). The consequence is free: the id *is* the created-at stamp, so ordering is a
+  lexical sort on the directory name and never opens a file. `updated_at` stays in `meta.json` as a
+  record; nothing reads it. The displayed time is `created_at` too, so the column and the order
+  agree.
 - **Relative time** ("6 hours ago", "yesterday", "2 days ago") — a ~15-line helper, no gem. Rendered
-  server-side, so it goes stale in a tab left open for a day. **`Q_relative_time_staleness`**:
-  accept (the app already reloads on every switch), refresh via the existing SSE `status` event, or
-  emit `<time datetime>` and format in JS. (Lean: accept in v1; JS formatting is client-side
-  rendering, which `D_no_js_build_step` pushes back on — the theme toggle was the *argued*
-  exception, not a precedent.)
-- **New CSS tokens.** A sidebar background/border almost certainly isn't in the existing nine
-  semantic tokens, and `D_theme_cookie` requires both palettes + both mappings, with nothing outside
-  `style.css` reading a raw colour.
-- **Narrow viewports:** `<details>`/`<summary>` drawer, or hide the sidebar under a media query —
-  both achievable with zero JS. **`Q_narrow_layout`**.
+  server-side, so it goes stale in a tab left open for a day. **`Q_relative_time_staleness` —
+  SETTLED: accept.** JS formatting is client-side rendering, which `D_no_js_build_step` pushes back
+  on — the theme toggle was the *argued* exception, not a precedent. It self-heals anyway: every
+  conversation change re-fetches the whole list.
+- ~~**New CSS tokens.**~~ **None needed** — `--bg-raised` (the status bar's surface) and `--border`
+  already say "chrome beside the transcript", and `--accent` marks the current row. So
+  `D_theme_cookie`'s both-palettes-both-mappings cost never came due.
+- **`Q_narrow_layout` — SETTLED: a media query, not a drawer.** Under 48rem the sidebar stacks on
+  top as a `max-height: 20vh` scrolling strip. `<details>` was the tempting zero-JS drawer and
+  doesn't work: CSS can't force it open on wide screens, so it would either be collapsible where it
+  shouldn't be or start collapsed everywhere. Revisit if 20vh turns out to be too much of a phone.
 - **No new block kinds**, so the `SseListener` / `index.erb` / `style.css` trifecta stays put — the
   sidebar is a new region, not a new block.
 - **`Q_conversation_count`** — 200 conversations in the sidebar: scroll only, or search / "load
@@ -402,9 +412,10 @@ untouched by any of this and still ours.
 
 ## Files this would add (Layout lines to write at graduation)
 
-- `lib/pikuri_web/conversation_store.rb` — enumerate / create / delete conversation folders, read
-  and write `meta.json`. Pikuri-free: it deals in **paths and plain hashes**, never a `History`.
-- `lib/pikuri_web/conversation.rb` — one conversation's metadata + paths; the sidebar's row model.
+- ~~`lib/pikuri_web/conversation_store.rb`~~ — **done**; `delete` is the only verb left, and it
+  belongs to `Q_retention`.
+- ~~`lib/pikuri_web/conversation.rb`~~ — **not a file.** `ConversationStore::Conversation` is a
+  `Data` nested in the store, which is the only thing that mints or reads one.
 - `lib/pikuri_web/conversation_session.rb` (name TBD) — holds the *current* transcript + store
   handle, does the switch under a mutex; what `App.set :transcript` becomes.
 - `lib/pikuri_web/history_replay.rb` — `Pikuri::Agent::History` → the events that produced it, fed
@@ -412,10 +423,11 @@ untouched by any of this and still ours.
   this is an `event_codec.rb` instead. Either way it's a **fourth file inside the Pikuri seam**, so
   `D_pikuri_free_core`'s "only three files" invariant needs amending — and `AgentRunner` is where
   `export_history.save` / `History.load` are called from.
-- `lib/pikuri_web/relative_time.rb` — or a helper in `App`; too small for its own file, probably.
-- `views/_sidebar.erb`, plus `index.erb` gaining the two-column shell.
-- Routes: `POST /conversations` (new), `POST /conversations/:id/select`, later
-  `DELETE`/`PATCH` for delete/rename.
+- ~~`lib/pikuri_web/relative_time.rb`~~ — **done**, and it did earn its own file: `App` is the
+  routes, not a helper drawer, and a pure function of two Times is trivially spec'd on its own.
+- ~~`views/_sidebar.erb`, plus `index.erb` gaining the two-column shell.~~ — **done.**
+- Routes: ~~`POST /conversations` (new)~~, ~~`GET /conversations` (the list fragment)~~,
+  `POST /conversations/:id/select`, later `DELETE`/`PATCH` for delete/rename.
 - Specs: store round-trip against a stubbed `XDG_STATE_HOME` (`Paths.state` reads env at call time,
   deliberately, so stubbing works); a replay spec building a `History` in Ruby (its constructor is
   public — no fixture file needed), replaying it, and asserting the rebuilt blocks. Note
@@ -456,8 +468,27 @@ wait for. The order that keeps each stage shippable:
      lazy.
    - **`Q_switch_while_busy`'s refusal is already live** for the clear case: `POST /conversations`
      answers 409 while a turn is in flight, and the button renders `disabled`.
-2. **Sidebar, read-only list** — titles + relative time, current one highlighted, no switching.
-   Proves the layout and the metadata reads. No `History.load` yet, so no replay risk.
+2. ~~**Sidebar, read-only list.**~~ **SHIPPED.** `ConversationStore#list`, `RelativeTime`,
+   `views/_sidebar.erb`, the two-column shell, `GET /conversations`. What it settled beyond the
+   plan:
+
+   - **The live conversation is not in the listing**, because `#create` mints without writing and
+     `#write_meta` is the commit point. So the sidebar's model is *store listing ∪ the runner's live
+     conversation*, assembled in `App#conversation_rows` — the one place that holds both
+     collaborators. `App.set :conversations` is the new injected setting.
+   - **`meta.json` is the commit marker, and `#list` enforces it**: a directory with `history.json`
+     and no `meta.json` is a save interrupted between pikuri's half and ours, and is not listed.
+     That was already `#write_meta`'s documented ordering; the listing is what makes it load-bearing.
+   - **The refresh path is a fetch, not a new SSE frame.** "+ new conversation" changes the sidebar
+     (a row for the conversation just saved, and the highlight moves), so app.js's `reset` handler
+     re-fetches `GET /conversations` and swaps the `<nav>`'s innerHTML. Rendering stays in ERB —
+     pushing sidebar HTML through `Broadcaster` would have meant `AgentRunner` rendering markup, and
+     the seam says no. Correct by construction against the race, too: `AgentRunner#conversation`
+     answers under the same mutex `new_conversation` holds, so a request landing between the `reset`
+     frame and the switch's end *blocks* rather than reading the outgoing conversation — which is
+     why `#conversation_rows` asks the runner first and the store second.
+   - **Rows are `<li>`, not links or forms**, so `Q_get_side_effects` doesn't come due until
+     step 4.
 3. **Loading** — `History.load` + the replay path (`Q_store_format`) + `HistoryLoaded`'s arm. This is
    the only genuinely new engineering left, and it's worth doing as a spec-first fixpoint
    (save → load → save produces an identical folder) before any route touches it.

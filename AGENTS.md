@@ -135,8 +135,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/version.rb` — `PikuriWeb::VERSION`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
   `GET /` (page shell), `GET /events` (SSE), `POST /messages`,
-  `POST /cancel`, `POST /conversations`. Collaborators injected via
-  class-level settings.
+  `POST /cancel`, `GET`/`POST /conversations`. Collaborators injected
+  via class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
@@ -144,7 +144,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   the worker thread, the start-vs-inject (Interloper) decision and the
   live conversation (saves at turn end); broadcasts status.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
-  the conversations folder: mints ids, owns `meta.json`. Pikuri-free.
+  the conversations folder: mints ids, owns `meta.json`, lists what is
+  saved. Pikuri-free.
+- `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
+  "6 hours ago" for sidebar rows; server-rendered, hence stale-tolerant.
 - `lib/pikuri_web/transcript.rb` — server-authoritative rendered-block
   store; thread-safe.
 - `lib/pikuri_web/broadcaster.rb` — SSE frame formatting + fan-out to
@@ -158,6 +161,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   loader for `~/.config/pikuri/config.toml`; port of pikuri-tui's
   `Shared::Config`, schema-complete, Pikuri-free.
 - `views/index.erb` — the page shell; server-rendered snapshot.
+- `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
+  and served alone by `GET /conversations` for in-place refresh.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror
   the TUI's visual language (muted thinking, cyan tool lines).

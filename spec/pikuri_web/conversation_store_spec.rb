@@ -91,6 +91,98 @@ RSpec.describe PikuriWeb::ConversationStore do
     end
   end
 
+  context '#list' do
+    # Commits a conversation the way AgentRunner does — history first, meta
+    # last — minus the history, which #list never reads.
+    def commit(at, **overrides)
+      conversation = store.create(at: at)
+      store.write_meta(conversation)
+      unless overrides.empty?
+        meta = meta_of(conversation).merge(overrides.transform_keys(&:to_s))
+        (conversation.dir / 'meta.json').write(JSON.generate(meta))
+      end
+      conversation
+    end
+
+    it 'is empty on a fresh root' do
+      assert_empty store.list
+    end
+
+    it 'orders by start time, newest first' do
+      older = commit(Time.utc(2026, 8, 26, 9, 14, 2))
+      newer = commit(Time.utc(2026, 8, 27, 12, 3, 51))
+      assert_equal [newer.id, older.id], store.list.map(&:id)
+    end
+
+    it 'keeps a conversation in place however late it is written to' do
+      first = commit(Time.utc(2026, 8, 26, 9, 14, 2))
+      second = commit(Time.utc(2026, 8, 27, 12, 3, 51))
+      store.write_meta(first, updated_at: Time.utc(2026, 8, 28, 18, 0, 0))
+      assert_equal [second.id, first.id], store.list.map(&:id)
+    end
+
+    it 'reads the title from meta.json' do
+      commit(at, 'title' => 'Debugging the SSE drain')
+      row = store.list.first
+      assert_equal 'Debugging the SSE drain', row.title
+      assert row.supported
+    end
+
+    it 'dates a conversation by its id, not by its envelope' do
+      commit(at, 'created_at' => '1999-01-01T00:00:00Z')
+      assert_equal at, store.list.first.created_at
+    end
+
+    it 'skips a directory with no meta.json — a save interrupted mid-commit' do
+      FileUtils.mkdir_p((@root / store.create(at: at).id).to_path)
+      assert_empty store.list
+    end
+
+    it 'skips directories that are not ours' do
+      FileUtils.mkdir_p((@root / 'attachments').to_path)
+      (@root / 'attachments' / 'meta.json').write('{"schema":1}')
+      assert_empty store.list
+    end
+
+    it 'skips a directory shaped like an id but not a date' do
+      store
+      FileUtils.mkdir_p((@root / '2026-99-99T99-99-99Z-abcd').to_path)
+      (@root / '2026-99-99T99-99-99Z-abcd' / 'meta.json').write('{"schema":1}')
+      assert_empty store.list
+    end
+
+    it 'skips plain files sitting in the root' do
+      store
+      (@root / 'notes.txt').write('scratch')
+      assert_empty store.list
+    end
+
+    it 'lists a conversation from a newer schema as unsupported' do
+      conversation = commit(at, 'schema' => 99, 'title' => 'from the future')
+      row = store.list.first
+      refute row.supported
+      assert_equal conversation.title, row.title, 'trusted a title from a schema it cannot read'
+    end
+
+    it 'lists a conversation with a corrupt envelope as unsupported' do
+      conversation = commit(at)
+      (conversation.dir / 'meta.json').write('{"schema": 1, "title": ')
+      refute store.list.first.supported
+    end
+
+    it 'falls back to the stamp title when meta.json has none' do
+      conversation = commit(at, 'title' => nil)
+      row = store.list.first
+      assert row.supported
+      assert_equal conversation.title, row.title
+    end
+
+    it 'points each row at its directory' do
+      conversation = commit(at)
+      assert_equal conversation.dir, store.list.first.dir
+    end
+  end
+
   context 'sharing the folder with pikuri' do
     it 'leaves history.json and attachments alone, and survives a save' do
       conversation = store.create(at: at)

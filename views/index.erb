@@ -1,8 +1,9 @@
 <!DOCTYPE html>
-<!-- The page shell. Server-rendered snapshot of the transcript and
-     status bar; public/app.js then connects an EventSource and
-     applies deltas. Block divs are addressed by their transcript id —
-     the SSE `block` event upserts by id, `remove` deletes by id.
+<!-- The page shell: a conversation sidebar beside the chat column.
+     Server-rendered snapshot of the transcript and status bar;
+     public/app.js then connects an EventSource and applies deltas.
+     Block divs are addressed by their transcript id — the SSE `block`
+     event upserts by id, `remove` deletes by id.
 
      `data-theme` carries the resolved `theme` cookie so the first paint
      is already in the right palette; the toggle's label names the theme
@@ -15,34 +16,40 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main id="transcript">
-    <% blocks.each do |block| %>
-    <div class="block <%= block.kind %>" id="<%= block.id %>"><%== block.html %></div>
-    <% end %>
-  </main>
+  <nav id="sidebar" aria-label="Conversations"><%==
+    erb(:_sidebar, layout: false, locals: { conversations: conversations })
+  %></nav>
 
-  <form id="composer">
-    <textarea name="prompt" id="prompt" rows="3" autofocus
-              placeholder="Message… (Enter to send, Shift+Enter for newline; sending mid-turn injects)"></textarea>
-    <div class="composer-buttons">
-      <button type="submit" id="send">Send</button>
-      <button type="button" id="cancel" <%= 'hidden' unless status[:busy] %>>Cancel</button>
-    </div>
-  </form>
+  <div id="chat">
+    <main id="transcript">
+      <% blocks.each do |block| %>
+      <div class="block <%= block.kind %>" id="<%= block.id %>"><%== block.html %></div>
+      <% end %>
+    </main>
 
-  <footer id="status-bar">
-    <span id="status-state"><%= status[:busy] ? 'busy' : 'idle' %></span>
-    <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
-    <span id="status-tokens"><%= status[:tokens] %></span>
-    <button type="button" id="new-conversation" class="status-button"
-            title="Save this conversation and start a fresh one"
-            <%= 'disabled' if status[:busy] %>>+ new conversation</button>
-    <button type="button" id="theme-toggle" class="status-button"
-            title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"
-            aria-label="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"><%=
-      theme == 'dark' ? '☀ light' : '☾ dark'
-    %></button>
-  </footer>
+    <form id="composer">
+      <textarea name="prompt" id="prompt" rows="3" autofocus
+                placeholder="Message… (Enter to send, Shift+Enter for newline; sending mid-turn injects)"></textarea>
+      <div class="composer-buttons">
+        <button type="submit" id="send">Send</button>
+        <button type="button" id="cancel" <%= 'hidden' unless status[:busy] %>>Cancel</button>
+      </div>
+    </form>
+
+    <footer id="status-bar">
+      <span id="status-state"><%= status[:busy] ? 'busy' : 'idle' %></span>
+      <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
+      <span id="status-tokens"><%= status[:tokens] %></span>
+      <button type="button" id="new-conversation" class="status-button"
+              title="Save this conversation and start a fresh one"
+              <%= 'disabled' if status[:busy] %>>+ new conversation</button>
+      <button type="button" id="theme-toggle" class="status-button"
+              title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"
+              aria-label="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"><%=
+        theme == 'dark' ? '☀ light' : '☾ dark'
+      %></button>
+    </footer>
+  </div>
 
   <script src="/app.js"></script>
 </body>

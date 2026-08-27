@@ -5,6 +5,7 @@
 'use strict';
 
 const transcript = document.getElementById('transcript');
+const sidebar = document.getElementById('sidebar');
 const composer = document.getElementById('composer');
 const promptEl = document.getElementById('prompt');
 const cancelBtn = document.getElementById('cancel');
@@ -50,7 +51,14 @@ es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).
 es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
 // A new conversation started: the server's transcript is empty, so ours is
 // too. Emptying in place rather than reloading keeps a half-typed message.
-es.addEventListener('reset', () => transcript.replaceChildren());
+// The sidebar changed as well — a row for the conversation just saved, and
+// the highlight moved — so pull the server's markup for it back in.
+es.addEventListener('reset', () => {
+  transcript.replaceChildren();
+  fetch('/conversations')
+    .then((r) => r.text())
+    .then((html) => { sidebar.innerHTML = html; });
+});
 // On EventSource auto-reconnect the page may have missed frames; reload
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };

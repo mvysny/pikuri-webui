@@ -7,10 +7,29 @@
 RSpec.describe PikuriWeb::App do
   include Rack::Test::Methods
 
+  # Builds the store's row type without touching a disk.
+  module ConversationRows
+    def self.row(id, title, created_at: Time.now, supported: true)
+      PikuriWeb::ConversationStore::Conversation.new(
+        id: id, dir: Pathname("/nonexistent/#{id}"), title: title,
+        created_at: created_at, supported: supported
+      )
+    end
+  end
+
+  # Stands in for ConversationStore: serves a canned listing.
+  class FakeStore
+    attr_accessor :list
+
+    def initialize(list = [])
+      @list = list
+    end
+  end
+
   # Stands in for AgentRunner: records calls, serves canned status.
   class FakeRunner
     attr_reader :submitted, :cancels, :new_conversations
-    attr_accessor :busy, :new_conversation_outcome
+    attr_accessor :busy, :new_conversation_outcome, :conversation
 
     def initialize
       @submitted = []
@@ -18,6 +37,7 @@ RSpec.describe PikuriWeb::App do
       @new_conversations = 0
       @busy = false
       @new_conversation_outcome = :started
+      @conversation = ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the live one')
     end
 
     def submit(message) = @submitted << message
@@ -54,6 +74,7 @@ RSpec.describe PikuriWeb::App do
   let(:transcript) { PikuriWeb::Transcript.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
   let(:runner) { FakeRunner.new }
+  let(:conversations) { FakeStore.new }
 
   def app = described_class
 
@@ -64,6 +85,7 @@ RSpec.describe PikuriWeb::App do
     described_class.set :transcript, transcript
     described_class.set :broadcaster, broadcaster
     described_class.set :runner, runner
+    described_class.set :conversations, conversations
   end
 
   context 'GET /' do
@@ -111,6 +133,59 @@ RSpec.describe PikuriWeb::App do
       runner.busy = true
       get '/'
       assert_includes last_response.body, 'disabled>+ new conversation</button>'
+    end
+  end
+
+  context 'the conversation sidebar' do
+    let(:saved) do
+      [
+        ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the live one', created_at: Time.now - 7200),
+        ConversationRows.row('2026-08-26T09-14-02Z-b1c7', 'yesterday\'s', created_at: Time.now - 90)
+      ]
+    end
+
+    it 'renders a row per saved conversation, with its age' do
+      conversations.list = saved
+      get '/'
+      assert_includes last_response.body, 'the live one'
+      assert_includes last_response.body, '2 hours ago'
+      assert_includes last_response.body, 'yesterday&#39;s'
+      assert_includes last_response.body, 'just now'
+    end
+
+    it 'marks the live conversation current' do
+      conversations.list = saved
+      get '/'
+      assert_includes last_response.body, %(<li class="conversation current"\n      aria-current="true">)
+      assert_includes last_response.body, %(<li class="conversation"\n      aria-current="false">)
+    end
+
+    it 'lists the live conversation before its first save, when the store has no row for it' do
+      get '/'
+      assert_includes last_response.body, 'the live one'
+      assert_includes last_response.body, 'aria-current="true"'
+    end
+
+    it 'does not list the live conversation twice once it is saved' do
+      conversations.list = saved
+      get '/'
+      assert_equal 1, last_response.body.scan('aria-current="true"').size
+    end
+
+    it 'labels a conversation it cannot read instead of dating it' do
+      conversations.list = [ConversationRows.row('2026-08-25T08-00-00Z-aaaa', '2026-08-25 10:00',
+                                                 supported: false)]
+      get '/'
+      assert_includes last_response.body, 'class="conversation unsupported"'
+      assert_includes last_response.body, 'unsupported format'
+    end
+
+    it 'serves the list on its own for app.js to swap in' do
+      conversations.list = saved
+      get '/conversations'
+      assert last_response.ok?
+      assert_includes last_response.body, '<ul class="conversations">'
+      refute_includes last_response.body, '<html'
     end
   end
 

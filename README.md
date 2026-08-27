@@ -80,6 +80,12 @@ page — the `/clear` this shell used to lack. It is refused (and the button
 disabled) while the agent is mid-turn: a click must not throw a running
 turn away.
 
+The sidebar lists every conversation you have had, newest first, with when
+each started. The order is by start time, so a conversation stays where it
+is however long you keep talking in it. The rows don't do anything yet —
+clicking one to open it is the next step. A row greyed out as *unsupported
+format* was written by a version this one can't read.
+
 Everything this shell persists lives under
 `~/.local/state/pikuri/pikuri-web-chat/` (`$XDG_STATE_HOME` if you set
 it), so `rm -r` on that folder is a complete reset. Each conversation
@@ -96,10 +102,10 @@ started:
 The `conversations/` folder is there from boot; a conversation's own
 directory appears with its first completed turn, so a session you never
 said anything in leaves nothing behind. Turns are saved as they finish, so
-quitting keeps the conversation — but **nothing reads these back yet**: a
-restart still starts you empty, and the saved conversations just
-accumulate. Loading them, and a sidebar to pick from, is what
-`ideas/multiple-conversations.md` plans.
+quitting keeps the conversation — but **nothing loads one back yet**: a
+restart still starts you empty, with the old conversations listed in the
+sidebar and not yet openable. Loading them is what
+`ideas/multiple-conversations.md` plans next.
 
 Nothing is encrypted. These files hold everything you typed and everything
 the tools fetched, so the directories are created `0700` and that is the

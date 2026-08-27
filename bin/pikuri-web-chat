@@ -101,8 +101,8 @@ broadcaster = PikuriWeb::Broadcaster.new
 # too, never straight into Paths.state.
 state_root = Pikuri::Paths.state / 'pikuri-web-chat'
 
-# Nothing loads a conversation back yet — "+ new conversation" saves the
-# current one and clears the agent.
+# Saved conversations fill the sidebar; nothing loads one back yet, so
+# "+ new conversation" saves the current one and clears the agent.
 conversations = PikuriWeb::ConversationStore.new(
   root: state_root / 'conversations',
   shell: 'pikuri-web-chat',
@@ -195,6 +195,7 @@ end
 PikuriWeb::App.set :transcript, transcript
 PikuriWeb::App.set :broadcaster, broadcaster
 PikuriWeb::App.set :runner, runner
+PikuriWeb::App.set :conversations, conversations
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
 # neither mode: the agent, its listener stack and the runner's worker

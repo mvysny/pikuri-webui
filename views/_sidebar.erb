@@ -1,0 +1,15 @@
+<%# The conversation list. Rendered into index.erb's <nav id="sidebar">, and
+    served on its own by GET /conversations so app.js can drop a fresh copy
+    into that nav when the live conversation changes.
+
+    Read-only: rows are not links or forms yet, because nothing loads a saved
+    conversation back. The current one is marked by class and aria-current. %>
+<ul class="conversations">
+  <% conversations.each do |c| %>
+  <li class="conversation<%= ' current' if c[:current] %><%= ' unsupported' unless c[:supported] %>"
+      aria-current="<%= c[:current] %>">
+    <span class="conversation-title" title="<%= c[:title] %>"><%= c[:title] %></span>
+    <span class="conversation-time"><%= c[:supported] ? c[:ago] : 'unsupported format' %></span>
+  </li>
+  <% end %>
+</ul>

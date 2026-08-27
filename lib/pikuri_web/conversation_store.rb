@@ -15,6 +15,7 @@ module PikuriWeb
   #   conversation = store.create                    # mints an id; no folder yet
   #   agent.export_history.save(conversation.dir)    # pikuri writes history.json
   #   store.write_meta(conversation)                 # our envelope, and the commit point
+  #   store.list                                     # everything committed, newest first
   #
   # The root exists from construction; a conversation's own directory appears
   # with its first save.
@@ -48,9 +49,14 @@ module PikuriWeb
     META_FILE = 'meta.json'
 
     # +meta.json+'s format version. Bumped only for a change an old reader
-    # could not survive; a reader meeting a higher one should refuse that one
-    # conversation rather than crash.
+    # could not survive; {#list} refuses that one conversation rather than
+    # crash the whole listing.
     SCHEMA = 1
+
+    # The start stamp an id opens with, +strftime+ing and matching halves of
+    # the same format.
+    ID_TIME = '%Y-%m-%dT%H-%M-%SZ'
+    ID = /\A(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)Z-[0-9a-f]+\z/
 
     # One conversation's identity and where it lives; no history of its own —
     # that is +history.json+ under +dir+.
@@ -63,7 +69,11 @@ module PikuriWeb
     #   @return [String] display title — the local-time start stamp
     # @!attribute [r] created_at
     #   @return [Time]
-    Conversation = Data.define(:id, :dir, :title, :created_at)
+    # @!attribute [r] supported
+    #   @return [Boolean] false for a conversation {#list} could not read —
+    #     +title+ is then the stamp derived from the id, and nothing else on
+    #     disk should be trusted
+    Conversation = Data.define(:id, :dir, :title, :created_at, :supported)
 
     # Creates +root+ if it is not there — so the folder exists from boot,
     # rather than appearing on whichever later event happens to save first.
@@ -100,13 +110,31 @@ module PikuriWeb
     def create(at: Time.now)
       # #getutc / #getlocal, not #utc / #localtime: the destructive pair would
       # convert the caller's own Time object as a side effect.
-      id = "#{at.getutc.strftime('%Y-%m-%dT%H-%M-%SZ')}-#{SecureRandom.hex(2)}"
+      id = "#{at.getutc.strftime(ID_TIME)}-#{SecureRandom.hex(2)}"
       Conversation.new(
-        id: id,
-        dir: @root / id,
-        title: at.getlocal.strftime('%Y-%m-%d %H:%M'),
-        created_at: at
+        id: id, dir: @root / id, title: stamp_title(at), created_at: at, supported: true
       )
+    end
+
+    # Every conversation committed to disk, newest first.
+    #
+    #   store.list.map { [_1.title, _1.supported] }
+    #   # => [["2026-08-27 14:03", true], ["2026-08-26 09:14", false]]
+    #
+    # Newest-first is a lexical sort on the id, which *is* the start stamp: a
+    # conversation holds its place in the list however long it goes on being
+    # written to, and ordering never opens a file.
+    #
+    # A directory without +meta.json+ is not listed — {#write_meta} is the
+    # commit point, so that is a save interrupted between pikuri's half and
+    # ours. One whose +meta.json+ is unreadable, or stamped by a schema this
+    # version doesn't know, comes back +supported: false+ rather than being
+    # dropped: a conversation the user can see and not open beats one that
+    # silently isn't there.
+    #
+    # @return [Array<Conversation>]
+    def list
+      @root.children.filter_map { |dir| row(dir) }.sort_by(&:id).reverse
     end
 
     # Write +meta.json+, creating the conversation's directory if pikuri has
@@ -136,6 +164,60 @@ module PikuriWeb
     end
 
     private
+
+    # One listing row, or nil for a directory that is not a committed
+    # conversation.
+    #
+    # @param dir [Pathname]
+    # @return [Conversation, nil]
+    def row(dir)
+      return nil unless dir.directory?
+
+      # The stamp comes from the directory name rather than meta.json's
+      # created_at: the name is the sort key, so a disagreeing envelope would
+      # sort a conversation in one place and date it in another.
+      created_at = id_time(dir.basename.to_s)
+      return nil if created_at.nil?
+      return nil unless (dir / META_FILE).file?
+
+      meta = load_meta(dir / META_FILE)
+      title = meta && meta['title']
+      Conversation.new(
+        id: dir.basename.to_s,
+        dir: dir,
+        title: title.is_a?(String) ? title : stamp_title(created_at),
+        created_at: created_at,
+        supported: !meta.nil?
+      )
+    end
+
+    # The envelope, or nil when this reader can't stand behind it — corrupt,
+    # unreadable, or written by a schema it doesn't know.
+    #
+    # @param path [Pathname]
+    # @return [Hash, nil]
+    def load_meta(path)
+      meta = JSON.parse(path.read)
+      meta if meta.is_a?(Hash) && meta['schema'] == SCHEMA
+    rescue JSON::ParserError, SystemCallError
+      nil
+    end
+
+    # @param basename [String]
+    # @return [Time, nil] nil when the name is not one of our ids
+    def id_time(basename)
+      match = ID.match(basename)
+      match && Time.utc(*match.captures.map(&:to_i))
+    rescue ArgumentError
+      # Shaped like an id but not a date (month 99): one hand-made directory
+      # must not take the whole listing down.
+      nil
+    end
+
+    # @param at [Time]
+    # @return [String] the local-time start stamp a conversation is titled by
+    #   until something better replaces it
+    def stamp_title(at) = at.getlocal.strftime('%Y-%m-%d %H:%M')
 
     # 0700 explicitly rather than through +mkdir_p+'s +mode:+, which a umask
     # can widen.
