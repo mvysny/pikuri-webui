@@ -29,105 +29,133 @@ the actual work is.
 
 ---
 
-## The hard part: pikuri cannot round-trip its history
+## The round-trip: shipped upstream, and richer than we asked for
 
-This is the crux, and it's worth settling before any UI work.
+**`Q_history_in_pikuri` — SETTLED, unblocked.** pikuri closed
+[mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) on 2026-08-27
+(`05ab5e0` + `ad02a97`). What landed is not the `[Hash, ...]` the ticket proposed — the ticket got
+argued *up* into `Pikuri::Agent::History`, a `Data` value that owns both directions of its own
+serialization, plus five `DECISIONS.md` entries: `D_history_value_type`, `D_history_container`,
+`D_history_attachments`, `D_history_local_ids`, `D_history_load_repairs`. Read those, don't
+re-argue them here.
 
-`Pikuri::Agent` wraps a private `@chat` (`RubyLLM::Chat`). There is **no public reader for the
-message history and no way to load one**:
-
-- `Agent#clear_conversation` exists (resets `@chat`, re-assembles the system prompt, emits
-  `Event::Reset`, resets controls, drains the interloper) — so "start fresh without re-wiring" is
-  already solved, and it's exactly what "New conversation" needs.
-- There is no `Agent#history` / `Agent#load_history!`. `@chat.messages` is reachable only via
-  `instance_variable_get`, which would put `Pikuri` internals in our store and break
-  `D_pikuri_free_core` in spirit even where it survives in letter.
-- One level down, RubyLLM has the raw material: `Chat#messages` (reader), `Chat#add_message(hash
-  or Message)`, `Chat#reset_messages!`, `Message#to_h`, `ToolCall#to_h`.
-
-So the round-trip is *possible* but the seam is wrong. **Filed upstream** as
-[mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) — the two-method history
-round-trip belongs in pikuri; everything else stays in-house:
+The API:
 
 ```ruby
-agent.export_history          # => [Hash, ...]  plain, JSON-safe, system message excluded
-agent.load_history!(array)    # replaces history; re-applies a freshly assembled system prompt
+agent.export_history                        # => Pikuri::Agent::History
+agent.export_history.save(dir)              # dir/history.json + dir/attachments/
+agent.load_history!(History.load(dir))      # => Integer, messages restored
 ```
 
-Why pikuri and not here: no shell can do it without reaching into `@chat`; pikuri-tui wants the
-same thing the moment anyone asks it for `/resume`; and the *meaning* of "a conversation that can
-continue" (what must be preserved for the model to behave as if nothing happened) is agent-loop
-knowledge, not web-shell knowledge — AGENTS.md already says a library-level fork gets logged in
-`../pikuri/DECISIONS.md`, not re-argued here. It also keeps the store Pikuri-free: it stores plain
-hashes, and `AgentRunner` (already inside the seam) does the conversion.
+Everything the sharp-edges list worried about is upstream's problem now — `Message#to_h`'s live
+`ToolCall` objects, `Content`-vs-String, base64, the never-restore-the-system-prompt rule. Facts
+that change *our* design, rather than merely unblocking it:
 
-Known sharp edges for that request, found while reading RubyLLM 1.16:
+- **`save(dir)` writes into a folder and never enumerates or deletes it** (`D_history_attachments`,
+  explicitly: "pikuri writes into that folder but does not own everything in it"). So our
+  per-conversation directory *is* the history's directory — no nesting, no separate store file, and
+  our `meta.json` sits beside `history.json` uncontested. This is the fact that collapses most of
+  the "on-disk layout" section below.
+- **`load_history!` calls `clear_conversation` itself**, so the switch's clear-then-load is one
+  call.
+- **Every message carries a pikuri-minted id** (`D_history_local_ids`), lexicographically sortable,
+  minted at creation so two exports agree. Upstream added it *for us*: the entry names "the
+  render/replay fork" and says without ids nothing can say *this rendered block is that message*.
+- **`Event::HistoryLoaded` fires after the `Reset`**, carrying message count and the last assistant
+  message's usage, and `Listener::TokenLog` already reseeds from it. That answers `Q_token_readout`
+  outright.
+- **Repairs happen on the way in, not out** (`D_history_load_repairs`): a tool call whose result
+  never arrived gets a synthesized `[Tool execution was interrupted]`, and a thinking signature from
+  a different model is dropped. So a conversation killed mid-batch is loadable, which matters for
+  `Q_write_shape` — we can save aggressively without worrying about torn tool batches.
+- **The scope line is drawn where we drew it.** `D_history_value_type`: "Both shells render the
+  `Agent::Event` stream, not the message list … The event log is the *shell's* artifact, because the
+  truncation policy is the shell's. Likewise title, timestamps and conversation ordering: the
+  shell's envelope wraps ours." That is `Q_folder_ownership`, answered.
 
-- `Message#to_h` emits `tool_calls:` as a Hash of **live `ToolCall` objects**, not their `to_h`.
-  `JSON.generate` on it will not round-trip — export must map them, and load must rehydrate
-  `ToolCall.new(...)` before `Message.new(tool_calls:)`.
-- `Message#content` is a String *or* a `Content` (text + attachments). Chat has no attachments
-  today, but the format shouldn't assume String.
-- `Message#to_h` carries per-message token counts — useful for `Q_token_readout`.
-- The system message must **not** be restored: `clear_conversation` deliberately re-assembles the
-  prompt so dynamic sections refresh, and the saved one contains a stale `Current date: …` line
-  that `bin/pikuri-web-chat` injects at boot.
+One thing the history is *not*: a `History` is a `Pikuri::` type, so it cannot cross into
+{ConversationStore} without breaking `D_pikuri_free_core`. The `save(dir)` / `load(dir)` shape makes
+that free: **the store deals in paths, {AgentRunner} deals in `History`.** The store creates and
+enumerates directories and owns `meta.json`; the runner — already inside the seam — is the only
+thing that calls `export_history.save` / `History.load`.
 
-**`Q_history_in_pikuri` — FILED, awaiting upstream.**
-[mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) carries the request: the two-method
-API, the "system message is never restored" rule, and the three RubyLLM sharp edges above. It also
-flags `TokenLog` seeding (see `Q_token_readout`) and asks whether `load_history!` should have an
-opinion on tool-set drift (`Q_tool_set_drift`) rather than leaving both to each host — so those
-two questions may get answered upstream instead of here.
-
-Until it lands, `instance_variable_get(:@chat)` is the only local route. Fine for a throwaway
-spike on a branch to prove the replay path; never merge it — the whole reason for the ticket is
-that a store full of `RubyLLM::Message` objects breaks `D_pikuri_free_core`.
+**New work this creates:** `SseListener`'s `else` arm currently documents `Reset` / `ModelSwitched`
+as *unreachable* ("this shell offers neither /clear nor a model picker. Wiring either means adding
+an arm"). Multiple conversations makes `Reset` reachable and adds `HistoryLoaded`. Both need arms —
+`Reset` clears the transcript, `HistoryLoaded` is where a "restored N messages" notice would go, if
+we want one.
 
 ---
 
-## What gets stored, exactly — the real fork
+## What gets stored, exactly — the fork, narrowed
 
-Two different things are needed and **neither is derivable from the other**:
+The model half is settled: `history.json`, written by `History#save`, and we don't get a vote on its
+contents. What's left is the **render** half — `Transcript` blocks (kinds, ids, rendered HTML) — and
+whether it needs an artifact of its own at all.
 
-| layer | what it is | who needs it |
-| --- | --- | --- |
-| model | LLM message history (roles, tool calls, tool results) | the agent, to continue the conversation |
-| render | `Transcript` blocks (rendered HTML, ids, kinds) | the browser, to show what happened |
+| layer | what it is | who needs it | who owns it |
+| --- | --- | --- | --- |
+| model | messages, tool calls, results, thinking, attachments | the agent, to continue | pikuri (`history.json`) |
+| render | `Transcript` blocks | the browser, to show what happened | us — open question |
 
-They diverge on purpose. `SseListener` truncates tool results to `MAX_TOOL_RESULT_CHARS` (200) and
-collapses `SystemInjected` to a one-line notice; the model history holds the full text.
-Conversely the history has no block ids, no `:thinking` / `:tool_call` kinds, and no notion of a
-wiped preview. Rebuilding either from the other is lossy in both directions.
+Three candidates, re-scored against what actually shipped upstream:
 
-Three candidate formats:
+- **(a) Store rendered blocks verbatim** (`blocks.json` beside `history.json`). Exact reload, zero
+  replay logic. Still costs what it cost before: HTML strings on disk, so a `MarkdownRenderer` or
+  `style.css` fix never reaches old conversations, and two representations of one conversation that
+  can disagree. **Dead** — the long lifetime makes the frozen-HTML problem worse than it is today.
+- **(b) Store nothing extra; re-derive blocks from `history.json`.** The original objection was that
+  this needs "a second renderer that has to guess", *"since `Event::ThinkingDelta` content isn't in
+  the history at all"*. **That objection is now factually wrong.** `History::Message` carries
+  `thinking` (text + signature), `tool_calls` (name + arguments), `tool_call_id`, full untruncated
+  tool-result content, and `kind: "reference"` marking exactly what `SystemInjected` collapses. The
+  block kinds map mechanically, one message to one-or-two blocks:
 
-- **(a) Store both, verbatim.** `messages.json` + `blocks.json` (rendered HTML). Exact reload,
-  zero replay logic. Costs: HTML strings in the store, so a change to `MarkdownRenderer` or
-  `style.css` never reaches old conversations (this is `D_server_authoritative_transcript`'s
-  "blocks are stored rendered" consequence, now with a much longer lifetime), and the file holds
-  two representations of the same conversation that can disagree.
-- **(b) Store the model history only, re-derive blocks.** Smallest file, but the derivation is a
-  second renderer that has to guess at thinking/tool-call presentation — a lie by omission, since
-  `Event::ThinkingDelta` content isn't in the history at all.
-- **(c) Store the event log (source text, not HTML) + the model history.** Append one JSON line
-  per `Pikuri::Agent::Event` — the same stream `SseListener` already consumes, serialized to plain
-  hashes at the seam. Loading = replay the log through a fresh `SseListener` into a fresh
-  `Transcript`, which rebuilds blocks *with today's renderer and today's CSS*, then
-  `load_history!` the messages.
+  | history | blocks |
+  | --- | --- |
+  | `role: user, kind: user` | `:user` |
+  | `role: user, kind: reference` | `:notice` (the skill one-liner) |
+  | `role: assistant` with `thinking` | `:thinking`, then `:assistant` |
+  | `role: assistant` with `tool_calls` | `:tool_call` per call |
+  | `role: tool` | `:tool_result` (truncate at render, as today) |
 
-**Lean: (c).** It reuses the one renderer we have instead of growing a second, makes old
-conversations benefit from renderer fixes, and keeps the store Pikuri-free (plain hashes on both
-sides of the seam). It also gives an append-only write path — see `Q_write_shape`. The cost is a
-`Event <-> Hash` codec that has to cover every event variant `SseListener` matches on, and stay in
-step with pikuri when a variant is added — a real maintenance tax, and the strongest argument for
-(a). Deltas need not be stored: only the finalized `Assistant` / `Thinking` bookends, which carry
-authoritative content (`D_rerender_and_replace`). That shrinks the log a lot.
+- **(c) Append an event log** (`log.jsonl`, source text not HTML) beside `history.json`, and replay
+  it through the real `SseListener` on load.
 
-**`Q_store_format`** — (a), (b) or (c)? Sub-question if (c): does the replay go through the real
-`SseListener` with the `Broadcaster` swapped for a null sink, or through a separate
-transcript-builder? (Lean: the real listener + null broadcaster — one renderer, and it's already
-built to write into an injected transcript.)
+**Lean flips to (b).** Two reasons, and the second is the real one:
+
+1. It is one artifact plus our envelope, not two artifacts that can disagree — and (b) keeps the
+   "old conversations get today's renderer and today's CSS" property that was (c)'s whole selling
+   point over (a).
+2. **(c) couples us to pikuri's event set; (b) couples us to a versioned file format.** An
+   `Event <-> Hash` codec must cover every variant `SseListener` matches on and stay in step as
+   pikuri adds variants — and pikuri adds them steadily (`Transient` and `HistoryLoaded` both landed
+   in the same unreleased cycle as the history itself). `History` is the opposite: written down,
+   `version:`-stamped, additive-only by decision, with unknown keys ignored so a file from a newer
+   pikuri still loads. Betting a persistence format on the stable one is not close.
+
+**What (b) actually loses**, stated plainly, because it isn't nothing:
+
+- `:error` blocks — `! cancelled`, and a `run_loop` failure notice. Never messages, so gone on
+  reload.
+- `FallbackNotice` lines.
+- The partial assistant text that cancel deliberately *preserves* (`flush_assistant(:preserve)`).
+  Cancel raises out of `Chat#ask`, so that text never became a message — the reloaded conversation
+  shows the user turn with no reply under it. Honest, and arguably a better record than a fragment,
+  but it is a visible difference between "the tab I have open" and "the tab after a reload".
+
+That is session ephemera plus one real case. If it turns out to matter, (c) is the answer — and the
+fallback is cheap to reach, because nothing about (b) forecloses adding `log.jsonl` later.
+
+**`Q_store_format` — lean (b), pending a sanity check that the losses above are acceptable.**
+
+**Sub-question, and it's the same one either way:** does the rebuild go through the real
+`SseListener` (with the `Broadcaster` swapped for a null sink) fed *synthesized* events, or through
+a separate `History → blocks` builder? (Lean: **synthesize events**. A `HistoryReplay` that turns
+each message into the `UserTurn` / `Thinking` / `Assistant` / `ToolCall` / `ToolResult` /
+`SystemInjected` events that produced it means there is still exactly **one** renderer and one
+event→kind mapping, and the trifecta in *Conventions* — SseListener / index.erb / style.css — stays
+a trifecta. A separate builder is a second place block kinds are decided.)
 
 ---
 
@@ -140,18 +168,21 @@ portable enough for XDG_DATA_HOME (logs, history, layout)" — i.e. `~/.local/st
 ```
 ~/.local/state/pikuri/conversations/
     2026-08-27T12-03-51Z-3f9a/
-        meta.json      # title, created_at, updated_at, model, shell, schema version
-        log.jsonl      # one event per line (append-only)
-        messages.json  # model history, rewritten atomically per turn
+        meta.json      # ours: title, created_at, updated_at, model, shell, schema version
+        history.json   # pikuri's: History#save, rewritten atomically per turn
+        attachments/   # pikuri's: content-addressed, only if the conversation has any
+        log.jsonl      # ours, only if Q_store_format lands on (c)
     2026-08-26T09-14-02Z-b1c7/
         …
 ```
 
 Choices baked into that sketch, each arguable:
 
-- **Directory per conversation, not one file.** The event log wants append (`>>` one line, crash-
-  safe, no rewrite of a growing file); the message history wants whole-file replacement (atomic
-  tmp+rename). Those two want different write strategies, so they want different files.
+- **Directory per conversation, and the directory is pikuri's `save(dir)` target.** Not a nesting
+  decision we get to make prettier: `save` puts `history.json` at the root of the folder it's given
+  and `attachments/` beside it. What makes co-habitation safe rather than lucky is that
+  `D_history_attachments` promises it — `save` never deletes and never enumerates the folder, and its
+  only read is a `stat` per referenced attachment. Our `meta.json` is not at risk.
 - **Timestamp stem as the id.** Sorts lexically, greps by date, readable in `ls`. UTC in the id,
   local time in the UI. The short random suffix is collision insurance (two processes, same
   second) and makes the id a real opaque handle.
@@ -163,24 +194,34 @@ Choices baked into that sketch, each arguable:
   pikuri-tui `/resume` or a pikuri-level store can read the same files. The attractive end state
   is "start a conversation in the TUI, finish it in the browser."
 
-**`Q_folder_ownership`** — if the format is shared with the TUI, does the *store* belong upstream
-too (pikuri owning `conversations/` and its schema) rather than here? Shipping our own layout into
-a shared folder means owning a migration if pikuri later ships its own. (Lean: our layout, our
-folder, documented as provisional; propose it upstream as the shape when the history round-trip
-lands.)
+**`Q_folder_ownership` — SETTLED, and upstream drew the line.** `D_history_value_type`: title,
+timestamps and conversation ordering are "the shell's envelope wraps ours". pikuri owns
+`history.json` and `attachments/`; we own the folder, its name, and `meta.json`. pikuri ships no
+conversation *store* and pikuri-tui has not adopted the history yet, so there is nothing to
+collide with — and if a shared store ever lands, the per-conversation folder is already the unit it
+would want.
 
-**`Q_write_shape`** — write after every event, or at turn end? (Lean: append events as they
-happen — a crash mid-turn then keeps what was said; rewrite `messages.json` once at turn end,
-since only then is the history consistent.)
+**`Q_write_shape` — near-settled by upstream's own measurement.** `D_history_container` measured the
+whole-file atomic rewrite `save` performs: **1.9 ms** for 200 messages (0.39 MB), **15.7 ms** for
+2000 (3.86 MB) — 0.05–0.5% of a turn that spends seconds on the model. So there is no reason to
+batch: call `export_history.save(dir)` after **every event that added a message** (assistant turn,
+each tool result, each user turn), and a crash mid-turn keeps what actually happened rather than
+losing the turn. Two facts make that safe rather than reckless: `save` is temp-file-and-rename, so
+the file on disk is always a complete valid history; and a dangling tool batch is *legal* on the way
+in, repaired at `load_history!` (`D_history_load_repairs`) — the crash case is explicitly the one
+they made loadable. Under (c) the event log keeps its own append path; under (b) there is no second
+write path at all.
 
-**`Q_multi_process`** — two `pikuri-web-chat` processes on different ports, or the TUI, sharing
-the folder. Two processes with the same conversation loaded would interleave appends into
-`log.jsonl`. Options: `flock` on open and show the conversation read-only if held; or last-writer-
-wins and don't care (single-user tool). (Lean: `flock`, because the failure is silent corruption of
-the thing we just added persistence for.)
+**`Q_multi_process`** — two `pikuri-web-chat` processes on different ports, or the TUI, sharing the
+folder. Both writers rewrite `history.json` wholesale, so the failure is not a torn file (rename is
+atomic) but a **silently clobbered conversation**: the loser's turns vanish at the next save.
+Options: `flock` on open and show the conversation read-only if held; or last-writer-wins and don't
+care (single-user tool). (Lean: `flock`, because losing turns silently is exactly the failure
+persistence was added to prevent.)
 
 **`Q_perms`** — `chmod 0700` the folder. Conversations hold everything the user typed plus scraped
-web content; nothing is encrypted, and that should be a README line, not a surprise.
+web content; nothing is encrypted, and that should be a README line, not a surprise. Now also
+`attachments/` — every image a `read` showed the model, sitting on disk as a plain file.
 
 **`Q_schema_version`** — `schema: 1` in `meta.json`; an unknown version renders the row greyed-out
 with "unsupported format" instead of crashing the sidebar. Cheap, do it in v1.
@@ -196,19 +237,25 @@ the earliest, and deleting the *currently open* conversation needs a rule.
 `Broadcaster` fans out to every tab. A conversation switch therefore means:
 
 1. Flush the current conversation's store (should already be current per `Q_write_shape`).
-2. `agent.clear_conversation` — resets history, controls, interloper queue; emits `Event::Reset`.
-3. `agent.load_history!(saved_messages)` (per `Q_history_in_pikuri`) — unless it's a new one.
-4. Swap in a fresh `Transcript` rebuilt by replaying `log.jsonl` (per `Q_store_format`).
-5. Tell every tab to re-snapshot.
+2. `agent.load_history!(History.load(dir))` — which runs `clear_conversation` itself (history,
+   controls, interloper queue, re-assembled system prompt, `Event::Reset`), then restores and emits
+   `Event::HistoryLoaded`. For a *new* conversation it's `agent.clear_conversation` alone.
+3. Swap in a fresh `Transcript` rebuilt from the store (per `Q_store_format`).
+4. Tell every tab to re-snapshot.
 
-Step 4 is the one that pokes the architecture: `App` holds its collaborators in **class-level
+Note the ordering hazard in step 2→3: `load_history!` emits `Reset` and `HistoryLoaded` **into the
+live `SseListener`**, which is about to have its transcript swapped underneath it. Either swap the
+transcript first, or have the `Reset` arm be what clears it — but it has to be decided, not
+discovered. (Lean: swap first, and let `Reset`'s arm be a no-op on an already-empty transcript.)
+
+Step 3 is the one that pokes the architecture: `App` holds its collaborators in **class-level
 settings** (`App.set :transcript, …`), set once at boot. Either the setting becomes a
 `ConversationSession` object whose `#transcript` is swapped behind it (one indirection, routes
 unchanged), or `App` learns to ask a `ConversationStore` for "the current transcript" on each
 request. (Lean: the former — routes keep calling `settings.transcript.to_a`, and the swap is one
 mutex-guarded assignment in the thing that owns both.)
 
-Step 5 is nearly free given what's already there: `app.js` already does `location.reload()` when
+Step 4 is nearly free given what's already there: `app.js` already does `location.reload()` when
 `EventSource` reconnects, precisely because the server is authoritative. A `reload` SSE event
 reuses that path, so every open tab follows the switch with no new client state — which keeps
 `D_no_js_build_step` and `D_server_authoritative_transcript` intact.
@@ -230,7 +277,7 @@ on v1 — it pulls in, roughly in dependency order:
   named; ~20 lines, but it's the invariant that entry rests on, so it needs its own `D_` entry
   rather than a quiet edit. The heartbeat and the `close` sentinel stay global.
 - **N transcripts resident in memory**, not one swapped behind an indirection — which means the
-  `conversation_session` shape from step 4 above is a v1-only stepping stone, not the end state.
+  `conversation_session` shape from step 3 above is a v1-only stepping stone, not the end state.
   Worth building it so it doesn't fight this later.
 - **A "busy elsewhere" affordance** in the sidebar: the row of a conversation with a live turn
   needs a spinner or a dot, or the feature is invisible until the user goes looking.
@@ -269,20 +316,23 @@ persisting an empty conversation per click litters the folder. (Lean: hold it un
 render it as "New conversation", write on the first submit; and make the button a no-op — or a
 re-select — when the current conversation is already empty, like Web Claude.)
 
-**`Q_token_readout`** — the status bar's token/context line comes from
-`Pikuri::Agent::Listener::TokenLog`, which is per-process and knows nothing about a loaded history.
-After a switch it will read as if the conversation were empty, then jump after the first turn.
-Options: accept the jump; seed `TokenLog` from the token counts in `Message#to_h`; or blank the
-readout until the first turn of the loaded conversation. (Lean: seed if pikuri makes it seedable,
-blank otherwise — a stale-looking "0 tokens" on a 40k-token conversation is a lie the user will act
-on.)
+**`Q_token_readout` — SETTLED upstream, nothing for us to build.** `load_history!` emits
+`Event::HistoryLoaded` carrying the last restored assistant message's usage, and `TokenLog` already
+has the arm that reseeds its context readout from it (`seed_snapshot`); the reply *counter*
+deliberately stays at zero, since restored turns didn't happen this session. A history exported
+without usage leaves the zeroed snapshot alone rather than inventing a number. The only thing we
+must not do is drop the event: our status bar reads `TokenLog#status_line` via `AgentRunner`, so the
+push has to happen *after* `load_history!` returns, not before.
 
-**`Q_tool_set_drift`** — a conversation saved by `pikuri-web-chat` (calculator / web_search /
-web_scrape / fetch) loaded by a future `pikuri-web-code` with a different tool set: the history
-holds `tool_calls` naming tools that no longer exist. `meta.json` records the shell name and tool
-list; on mismatch, warn in the sidebar / refuse to load? Same question for a different model or a
-smaller context window than the saved conversation needs. (Lean: record it, warn, allow — the
-model tolerates unknown tool names in history better than the user tolerates a refusal.)
+**`Q_tool_set_drift` — mostly answered upstream, and the answer is "relax".**
+`D_history_load_repairs`: "A tool the agent no longer wires draws no warning. A recorded call is
+never re-executed; it is a record of the harness that made it. The only live risk is the model
+retrying a tool it can see in its own context, and ruby_llm already answers that with an observation
+naming the tools that *are* available, so the model self-corrects." So refusing to load is off the
+table, and so is a load-time warning. What survives for us is presentational only: `meta.json`
+records the shell name, and the sidebar *may* label a row "saved by a different harness" — upstream
+explicitly left that as a shell concern. The model / context-window half of the question is
+untouched by any of this and still ours.
 
 ---
 
@@ -341,35 +391,45 @@ model tolerates unknown tool names in history better than the user tolerates a r
 
 ## Files this would add (Layout lines to write at graduation)
 
-- `lib/pikuri_web/conversation_store.rb` — enumerate / create / read / append; owns the on-disk
-  layout. Pikuri-free (plain hashes).
+- `lib/pikuri_web/conversation_store.rb` — enumerate / create / delete conversation folders, read
+  and write `meta.json`. Pikuri-free: it deals in **paths and plain hashes**, never a `History`.
 - `lib/pikuri_web/conversation.rb` — one conversation's metadata + paths; the sidebar's row model.
 - `lib/pikuri_web/conversation_session.rb` (name TBD) — holds the *current* transcript + store
   handle, does the switch under a mutex; what `App.set :transcript` becomes.
-- `lib/pikuri_web/event_codec.rb` — `Event <-> Hash`, only if `Q_store_format` lands on (c). Lives
-  inside the Pikuri seam, so `D_pikuri_free_core`'s "only three files" invariant becomes four.
+- `lib/pikuri_web/history_replay.rb` — `Pikuri::Agent::History` → the events that produced it, fed
+  to a real `SseListener` with a null broadcaster (per `Q_store_format`'s sub-question). Under (c)
+  this is an `event_codec.rb` instead. Either way it's a **fourth file inside the Pikuri seam**, so
+  `D_pikuri_free_core`'s "only three files" invariant needs amending — and `AgentRunner` is where
+  `export_history.save` / `History.load` are called from.
 - `lib/pikuri_web/relative_time.rb` — or a helper in `App`; too small for its own file, probably.
 - `views/_sidebar.erb`, plus `index.erb` gaining the two-column shell.
 - Routes: `POST /conversations` (new), `POST /conversations/:id/select`, later
   `DELETE`/`PATCH` for delete/rename.
 - Specs: store round-trip against a stubbed `XDG_STATE_HOME` (`Paths.state` reads env at call time,
-  deliberately, so stubbing works); a replay spec feeding a canned log through `SseListener` and
-  asserting the rebuilt blocks.
+  deliberately, so stubbing works); a replay spec building a `History` in Ruby (its constructor is
+  public — no fixture file needed), replaying it, and asserting the rebuilt blocks. Note
+  `Pikuri::Testing.fake_transport` exists for driving a real `Agent` end-to-end with no server, so
+  a save→load→save fixpoint spec is cheap.
 
 ---
 
 ## Smallest useful slice
 
-If this gets built in stages, the order that keeps each stage shippable:
+The blocker is gone — [mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) is closed and
+`../pikuri` is a path dependency, so the round-trip is available right now with no version bump to
+wait for. The order that keeps each stage shippable:
 
-1. **Wait on [mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1)** — nothing here works
-   without the round-trip, so this is a blocker, not a first task.
-2. **Store + "New conversation" only.** No sidebar: one button that saves the current conversation
-   and clears the agent. Already useful (it's the missing `/clear`), and it exercises the whole
-   write path.
-3. **Sidebar, read-only list** — titles + relative time, current one highlighted, no switching.
-   Proves the layout and the metadata reads.
-4. **Switching** (`Q_switch_while_busy`, `Q_selection_scope`, the replay path).
+1. **Store + "New conversation" only.** No sidebar: one button that `export_history.save(dir)`s the
+   current conversation and `clear_conversation`s the agent. Already useful (it's the missing
+   `/clear`), it exercises the whole write path, and it forces the `Reset` arm in `SseListener` —
+   which every later stage needs anyway.
+2. **Sidebar, read-only list** — titles + relative time, current one highlighted, no switching.
+   Proves the layout and the metadata reads. No `History.load` yet, so no replay risk.
+3. **Loading** — `History.load` + the replay path (`Q_store_format`) + `HistoryLoaded`'s arm. This is
+   the only genuinely new engineering left, and it's worth doing as a spec-first fixpoint
+   (save → load → save produces an identical folder) before any route touches it.
+4. **Switching** (`Q_switch_while_busy`, `Q_selection_scope`) — the UI on top of a load path that
+   already works.
 5. **v2 auto-title**, or manual rename first if `Q_title_length` says the sidebar wants short
    titles anyway.
 6. **v2 background turns** (`Q_switch_while_busy`) — conversation-tagged emissions, topics in
