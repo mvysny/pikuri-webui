@@ -34,6 +34,9 @@ module PikuriWeb
   #   content (deltas are preview-only). Thinking gets no special
   #   renderer — the +thinking+ block kind is the CSS hook that does the
   #   TUI's grayscale job.
+  # - +SystemInjected+ (reference text the host injected — a loaded skill,
+  #   recalled memory) collapses to a one-line +notice+; see
+  #   {#render_system_injection}.
   # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
   #   status bar reads +TokenLog#status_line+ via AgentRunner).
   class SseListener < Pikuri::Agent::Listener::Base
@@ -100,6 +103,10 @@ module PikuriWeb
         flush_assistant(:wipe)
         release_thinking
         add_block(:tool_result, MarkdownRenderer.escape("= #{truncate_tool_result(content)}"))
+      in Pikuri::Agent::Event::SystemInjected(content:)
+        flush_assistant(:wipe)
+        release_thinking
+        render_system_injection(content)
       in Pikuri::Agent::Event::FallbackNotice(reason:)
         flush_assistant(:wipe)
         release_thinking
@@ -109,8 +116,9 @@ module PikuriWeb
         release_thinking
         add_block(:error, MarkdownRenderer.escape('! cancelled'))
       else
-        # Tokens / ContextCap: silent here. TokenLog handles them if the
-        # host registered one.
+        # Tokens / ContextCap: silent here (TokenLog consumes them).
+        # Reset / ModelSwitched: unreachable — this shell offers neither
+        # /clear nor a model picker. Wiring either means adding an arm.
       end
     end
 
@@ -119,6 +127,27 @@ module PikuriWeb
     def to_s = 'SseListener'
 
     private
+
+    # Render an injected reference block as a one-line +notice+, collapsing
+    # the two skill-shaped payloads:
+    #
+    #   ⊕ loaded skill: writing-rdoc   # was a whole SKILL.md body
+    #                                  # a promotion block renders nothing
+    #
+    # Both are XML-wrapped and sized for the model; pasting either verbatim
+    # buries the transcript under a screenful nobody asked for. A promotion
+    # is dropped rather than summarized because the host that promoted it
+    # announces its own line.
+    #
+    # @param content [String] the unwrapped reference block
+    # @return [void]
+    def render_system_injection(content)
+      return if content.include?('<available_skills>')
+
+      name = content[/\A<skill name="([^"]*)"/, 1]
+      text = name ? "loaded skill: #{name}" : content
+      add_block(:notice, MarkdownRenderer.escape("⊕ #{text}"))
+    end
 
     # Append one finished block: store it and announce it.
     #

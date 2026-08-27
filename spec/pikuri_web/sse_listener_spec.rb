@@ -115,6 +115,32 @@ RSpec.describe PikuriWeb::SseListener do
     end
   end
 
+  context 'SystemInjected' do
+    it 'collapses a skill body to its name' do
+      listener.on_event(
+        Pikuri::Agent::Event::SystemInjected.new(
+          content: %(<skill name="writing-rdoc">\nthe whole SKILL.md body\n</skill>)
+        )
+      )
+      block = transcript.to_a.fetch(0)
+      assert_equal :notice, block.kind
+      assert_equal '⊕ loaded skill: writing-rdoc', block.html
+      refute_includes block.html, 'SKILL.md body'
+    end
+
+    it 'renders a non-skill reference block verbatim' do
+      listener.on_event(Pikuri::Agent::Event::SystemInjected.new(content: 'recalled: <x>'))
+      assert_equal '⊕ recalled: &lt;x&gt;', transcript.to_a.fetch(0).html
+    end
+
+    it 'drops a path-activation promotion, which the host announces itself' do
+      listener.on_event(
+        Pikuri::Agent::Event::SystemInjected.new(content: '<available_skills>…</available_skills>')
+      )
+      assert_empty transcript.to_a
+    end
+  end
+
   context 'silent events' do
     it 'ignores Tokens' do
       listener.on_event(

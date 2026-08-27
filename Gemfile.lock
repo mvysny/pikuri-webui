@@ -1,3 +1,18 @@
+PATH
+  remote: ../pikuri
+  specs:
+    pikuri-core (0.0.7)
+      faraday (~> 2.9)
+      nokogiri (~> 1.19)
+      rainbow (~> 3.1)
+      reverse_markdown (~> 3.0)
+      ruby-readability (~> 0.7)
+      ruby_llm (~> 1.16)
+      zeitwerk (~> 2.7)
+    pikuri-pdf (0.0.7)
+      pdf-reader (~> 2.15)
+      pikuri-core (= 0.0.7)
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -57,17 +72,6 @@ GEM
       hashery (~> 2.0)
       ruby-rc4
       ttfunk
-    pikuri-core (0.0.6)
-      faraday (~> 2.9)
-      nokogiri (~> 1.19)
-      rainbow (~> 3.1)
-      reverse_markdown (~> 3.0)
-      ruby-readability (~> 0.7)
-      ruby_llm (~> 1.15)
-      zeitwerk (~> 2.7)
-    pikuri-pdf (0.0.6)
-      pdf-reader (~> 2.15)
-      pikuri-core (= 0.0.6)
     prism (1.9.0)
     puma (8.0.2)
       nio4r (~> 2.0)
@@ -95,7 +99,7 @@ GEM
     ruby-readability (0.7.3)
       guess_html_encoding (>= 0.0.4)
       nokogiri (>= 1.6.0)
-    ruby_llm (1.15.0)
+    ruby_llm (1.16.0)
       base64
       event_stream_parser (~> 1)
       faraday (>= 1.10.0)
@@ -114,6 +118,7 @@ GEM
       rack-session (>= 2.0.0, < 3)
       tilt (~> 2.0)
     tilt (2.7.0)
+    tomlrb (2.0.4)
     ttfunk (1.8.0)
       bigdecimal (~> 3.1)
     uri (1.1.1)
@@ -134,13 +139,14 @@ DEPENDENCIES
   kramdown (~> 2.5)
   kramdown-parser-gfm (~> 1.1)
   minitest (~> 6.0)
-  pikuri-core (~> 0.0.6)
-  pikuri-pdf (~> 0.0.6)
+  pikuri-core!
+  pikuri-pdf!
   puma (~> 8.0)
   rack-test (~> 2.1)
   rackup (~> 2.2)
   rspec-core (~> 3.13)
   sinatra (~> 4.1)
+  tomlrb (~> 2.0)
   zeitwerk (~> 2.7)
 
 CHECKSUMS
@@ -176,8 +182,8 @@ CHECKSUMS
   nokogiri (1.19.3-x86_64-linux-gnu) sha256=2f5078620fe12e83669b5b17311b32532a8153d02eee7ad06948b926d6080976
   nokogiri (1.19.3-x86_64-linux-musl) sha256=248c906d2166eca5efb56d52fdee5f9a1f51d69a72e2b64fdac647b4ce39ea3f
   pdf-reader (2.15.1) sha256=18c6a986a84a3117fa49f4279fc2de51f5d2399b71833df5d2bccd595c7068ce
-  pikuri-core (0.0.6) sha256=555726e2471816d916f9a91dca5e0103861748cc7760bfe20650e3ca90868027
-  pikuri-pdf (0.0.6) sha256=eff00f574aca4dcbb003ca434fe6b784aa9c85bea7dec2f9ae4a0b65880eb9fe
+  pikuri-core (0.0.7)
+  pikuri-pdf (0.0.7)
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb
   racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f
@@ -193,10 +199,11 @@ CHECKSUMS
   rspec-support (3.13.7) sha256=0640e5570872aafefd79867901deeeeb40b0c9875a36b983d85f54fb7381c47c
   ruby-rc4 (0.1.5) sha256=00cc40a39d20b53f5459e7ea006a92cf584e9bc275e2a6f7aa1515510e896c03
   ruby-readability (0.7.3) sha256=bd213fab037118cc15d999e167a8ea2cc6b689dc78c033e78fb36a2a37efc241
-  ruby_llm (1.15.0) sha256=ca207465bca1cca007010a79fce500d4012b1fbe188b025040cd37b884fb98af
+  ruby_llm (1.16.0) sha256=26bd5310cf2ce55f74a60f8aae0b0d0327b586ff4532c84828103c3b2b905a18
   ruby_llm-schema (0.4.0) sha256=e930f5a5316f9301bff3fb7fe572e44727d05bb8e50621001bbb49a47d63b8da
   sinatra (4.2.1) sha256=b7aeb9b11d046b552972ade834f1f9be98b185fa8444480688e3627625377080
   tilt (2.7.0) sha256=0d5b9ba69f6a36490c64b0eee9f6e9aad517e20dcc848800a06eb116f08c6ab3
+  tomlrb (2.0.4) sha256=262f77947ac3ac9b3366a0a5940ecd238300c553e2e14f22009e2afcd2181b99
   ttfunk (1.8.0) sha256=a7cbc7e489cc46e979dde04d34b5b9e4f5c8f1ee5fc6b1a7be39b829919d20ca
   uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
   zeitwerk (2.8.2) sha256=7212a61311083c604184b1ea2574b9aa05cd14f855a0841c06985cabe9181d12

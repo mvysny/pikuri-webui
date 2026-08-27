@@ -23,9 +23,13 @@ require 'pikuri-core'
 require 'pikuri-pdf'
 require 'pikuri_web'
 
-server = 'http://localhost:8080'
-model  = 'unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M'
-api_key_env = 'OPENAI_API_KEY'
+# CLI overrides start nil ("flag not given") so PikuriWeb::Config can tell
+# an explicit flag from an absent one; they override the primary [[llm]]
+# connection's fields. Built-in connection defaults live in Config, the
+# single source of truth shown in --help. --port / --bind are ours alone
+# and have no config-file home.
+cli_server = nil
+cli_model  = nil
 port = 4567
 bind = '127.0.0.1'
 
@@ -33,9 +37,8 @@ parser = OptionParser.new do |opts|
   opts.banner = 'Usage: pikuri-web [options]'
   opts.separator ''
   opts.separator 'Options:'
-  opts.on('--server URL', "LLM server base URL (default: #{server})") { |v| server = v }
-  opts.on('--model NAME', "Model identifier (default: #{model})") { |v| model = v }
-  opts.on('--api-key-env VAR', "Env var holding the API key (default: #{api_key_env})") { |v| api_key_env = v }
+  opts.on('--server URL', "LLM server base URL (default: #{PikuriWeb::Config::DEFAULT_SERVER})") { |v| cli_server = v }
+  opts.on('--model NAME', "Model identifier (default: #{PikuriWeb::Config::DEFAULT_MODEL})") { |v| cli_model = v }
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
   opts.on('-h', '--help', 'Print this help and exit') do
@@ -52,25 +55,23 @@ rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
   exit 2
 end
 
-server = server.chomp('/')
-openai_api_base = "#{server}/v1"
-
-api_key = ENV[api_key_env]
-api_key_missing = api_key.nil? || api_key.strip.empty?
-api_key = 'not-needed' if api_key_missing
-
-Pikuri::Extractors::PDF.register
-
-RubyLLM.configure do |c|
-  c.openai_api_base = openai_api_base
-  c.openai_api_key  = api_key
+# Load the layered config (XDG search path, shared with pikuri-tui) and
+# overlay the CLI flags. There is no --api-key flag: a key must never
+# travel on the command line (visible in ps / shell history) — it comes
+# only from the config file. Boot-time, before Puma binds, so a bad file
+# is a plain warn + exit rather than a server that serves a broken agent.
+begin
+  config = PikuriWeb::Config.load(overrides: { server: cli_server, model: cli_model })
+rescue PikuriWeb::Config::Error => e
+  warn "config error: #{e.message}"
+  exit 2
 end
 
-# llama.cpp exposes the server's launched +n_ctx+ at +/props+ on the base
-# host (not under +/v1+). Hand the derived URL to
-# +Pikuri::Agent::ContextWindowDetector+ so the cap is resolved against
-# the local server, which is unknown to ruby_llm's bundled model registry.
-llama_probe_url = "#{server}/props"
+llm = config.primary_llm
+api_key = llm.api_key
+api_key = 'not-needed' if api_key.nil? || api_key.strip.empty?
+
+Pikuri::Extractors::PDF.register
 
 # — the Pikuri-free plumbing —
 
@@ -86,7 +87,7 @@ broadcaster = PikuriWeb::Broadcaster.new
 cancel_flag = Pikuri::Agent::Control::Cancellable.new
 interloper = Pikuri::Agent::Control::Interloper.new
 
-system_prompt = Pikuri.prompt(:'pikuri-chat')
+system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
 system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
 # Constructed up front so the Agent's ListenerList and the AgentRunner
@@ -108,22 +109,28 @@ rate_limited_listener = Pikuri::Agent::Listener::RateLimited.new(
   flush_pending_on_non_delta: false
 )
 
+# The connection (api_base / api_key) rides the transport's own per-chat
+# RubyLLM::Context — pikuri needs no process-global RubyLLM.configure, and
+# from_openai_server normalizes a server value that already ends in /v1.
+# The connection's context_window (an explicit cap for a server pikuri's
+# llama.cpp /props probe can't reach) rides it too; nil defers to that
+# probe.
 agent = Pikuri::Agent.new(
-  transport: Pikuri::Agent::ChatTransport.new(
-    model: model,
-    provider: :openai,
-    assume_model_exists: true
+  transport: Pikuri::Agent::ChatTransport.from_openai_server(
+    server: llm.server,
+    model: llm.model,
+    api_key: api_key,
+    context_window: llm.context_window
   ),
   system_prompt: system_prompt,
   step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
   cancellable: cancel_flag,
   interloper: interloper,
-  llama_probe_url: llama_probe_url,
   streaming: true
 ) do |c|
   c.add_listener rate_limited_listener
   c.add_listener token_log
-  c.add_tool Pikuri::Tool::WEB_SEARCH
+  c.add_tool Pikuri::Tool::WebSearch.build(brave_key: config.search.brave_key, exa_key: config.search.exa_key)
   c.add_tool Pikuri::Tool::CALCULATOR
   c.add_tool Pikuri::Tool::WEB_SCRAPE
   c.add_tool Pikuri::Tool::FETCH
@@ -137,12 +144,11 @@ runner = PikuriWeb::AgentRunner.new(
   token_log: token_log
 )
 
-if api_key_missing
-  PikuriWeb.logger.warn(
-    "API key env var #{api_key_env} is blank or unset; falling back to \"not-needed\" " \
-    '(fine for local llama.cpp, will fail against authenticated remotes)'
-  )
-end
+# The advisory lethal-trifecta map, printed once at boot: which of private
+# data / untrusted content / egress this tool set actually holds, and
+# which tool contributes each leg. Never blocks — this shell wires
+# web_search + web_scrape + fetch, so it is expected to report egress.
+puts agent.trifecta.render
 
 # SSE heartbeat: a comment frame every 15 s. A write attempt is the only
 # way to notice a silently vanished browser, whose /events drain loop
@@ -168,5 +174,5 @@ PikuriWeb::App.set :server, :puma
 at_exit { broadcaster.unsubscribe_all }
 
 PikuriWeb::App.run! do
-  puts "pikuri-web listening on http://#{bind}:#{port} (agent: #{model} @ #{server})"
+  puts "pikuri-web listening on http://#{bind}:#{port} (agent: #{llm.model} @ #{llm.server})"
 end

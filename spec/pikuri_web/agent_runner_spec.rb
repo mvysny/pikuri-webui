@@ -71,8 +71,27 @@ RSpec.describe PikuriWeb::AgentRunner do
       # true before the fake agent records the message.
       wait_until { agent.messages.any? }
       assert_equal :injected, runner.submit('second')
-      assert_equal ['second'], interloper.peek
+      assert_equal [:user], interloper.peek.map(&:kind)
+      assert_equal ['second'], interloper.peek.map(&:content)
       assert_equal ['first'], agent.messages
+    end
+  end
+
+  context 'pending count' do
+    it 'broadcasts the drop when the agent drains mid-loop, not just on submit' do
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+      runner.submit('second')
+      queue = broadcaster.subscribe # after the injection, so only the drain's frame lands
+
+      interloper.drain! # what Agent does at the next tool-batch boundary
+
+      frames = drain_frames(queue)
+      assert_equal %w[status], frames.map { |f| f[/event: (\w+)/, 1] }
+      assert_includes frames.fetch(0), '"pending":0'
+
+      agent.release
+      wait_until { !runner.busy? }
     end
   end
 

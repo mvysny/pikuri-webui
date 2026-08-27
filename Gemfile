@@ -26,8 +26,15 @@ gem 'zeitwerk', '~> 2.7'
 # The pikuri-core gem — Agent, Tool, prompts, listeners. Same wiring as
 # pikuri-tui's chat shell: bin/pikuri-web binds Pikuri::Agent +
 # Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
-gem 'pikuri-core', '~> 0.0.6'
-gem 'pikuri-pdf', '~> 0.0.6'
+#
+# A path dependency on the sibling checkout, not a released version: this
+# shell tracks pikuri master, whose unreleased surface (the trifecta
+# report, Interloper#on_change, Pikuri::Testing.fake_transport) it already
+# consumes. pikuri-pdf rides the same checkout because its gemspec pins
+# `pikuri-core = <exact version>` in lockstep — a released pikuri-pdf
+# would refuse the moment master bumps core's version.
+gem 'pikuri-core', path: '../pikuri'
+gem 'pikuri-pdf', path: '../pikuri'
 
 # Server-side Markdown → HTML for assistant/thinking content. The web
 # analogue of the TUI's TTY::Markdown: rendering happens on the server
@@ -37,6 +44,17 @@ gem 'kramdown', '~> 2.5'
 # GFM input parser for kramdown: LLMs emit backtick fences and pipe
 # tables, which kramdown's native syntax doesn't cover.
 gem 'kramdown-parser-gfm', '~> 1.1'
+
+# TOML parser for the layered config file (PikuriWeb::Config), which
+# shares its schema and its `~/.config/pikuri/config.toml` location with
+# pikuri-tui's Shared::Config — one file configures every pikuri shell on
+# the machine. Pure Ruby, parse-only (we only ever READ config, never
+# serialize), with ZERO runtime dependencies — chosen over toml-rb after
+# vetting: toml-rb pulls in citrus, which was last released in 2015 and
+# ships no license. tomlrb is MIT and actively maintained. We parse TOML
+# into a Hash and validate that Hash by hand (the schema is tiny); no
+# JSON Schema gem.
+gem 'tomlrb', '~> 2.0'
 
 # ERB engine Tilt picks over stdlib ERB. Needed for Sinatra's
 # +erb, escape_html: true+ auto-escaping and the +<%==+ raw-output tag

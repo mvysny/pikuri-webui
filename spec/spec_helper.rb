@@ -40,3 +40,17 @@ def drain_frames(queue)
 rescue ThreadError
   frames
 end
+
+# Run the block with PikuriWeb.logger writing to a StringIO, and return
+# everything it logged. Restores the silenced suite logger afterwards.
+#
+# @return [String]
+def capture_log
+  io = StringIO.new
+  previous = PikuriWeb.logger
+  PikuriWeb.logger = Logger.new(io)
+  yield
+  io.string
+ensure
+  PikuriWeb.logger = previous
+end

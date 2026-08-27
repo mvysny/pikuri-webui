@@ -17,6 +17,13 @@ all pikuri. We own the web shell only.
 Scaffold complete: Sinatra app, SSE plumbing, listener/runner adapters,
 boot script, specs. Not yet exercised against a live llama.cpp server.
 
+Tracks pikuri **master**, not a release: `pikuri-core` / `pikuri-pdf` are
+path dependencies on `../pikuri`. Upgrades follow pikuri's `CHANGELOG.md`
+— its `**Breaking:**` entries carry the migration instructions, and
+pikuri-tui's HEAD is the worked example for anything ambiguous. Reading
+that changelog beats bisecting pikuri-tui's git history, which is mostly
+Tuile churn this project doesn't share.
+
 ## Scope decisions
 
 - **Reuse pikuri as runtime; this project owns the web shell.**
@@ -66,9 +73,11 @@ boot script, specs. Not yet exercised against a live llama.cpp server.
   deferred). {AgentRunner#submit} starts a turn when idle and injects
   when busy; the injection renders through the normal listener path as
   `UserTurn(mid_loop: true)`. Remember Interloper's boundary caveat:
-  injections take effect at the next `after_tool_result` boundary, so
-  the input stays enabled while busy and the status bar shows the
-  queued count.
+  injections are delivered at turn start and once each tool batch
+  completes, so one placed mid-response waits for that boundary — which
+  is why the input stays enabled while busy and the status bar shows the
+  queued count. The count is pushed by `Interloper#on_change`, so the
+  agent's own mid-loop drain updates the browser too.
 
 - **Streaming is re-render-and-replace.** The TUI's
   `StreamingMarkdownBuffer` (block-cutter, committed-prefix
@@ -87,6 +96,16 @@ boot script, specs. Not yet exercised against a live llama.cpp server.
   is the operator's risk. Per-session conversations are a rewrite of
   {AgentRunner}/{Transcript} ownership, not a patch — out of scope
   until there's a concrete need.
+
+- **One config file for every pikuri shell.** {Config} reads the same
+  layered `~/.config/pikuri/config.toml` as pikuri-tui's
+  `Shared::Config`, and carries the *whole* schema — `[code]`,
+  `[[code.mcp]]` and all — even though this host wires none of it.
+  Trimming the schema to what we read would reject a file the TUI
+  wrote, because loading raises on an unknown top-level key. Secrets
+  (`[[llm]].api_key`, `[search]` provider keys) live only there: never a
+  CLI flag (visible in `ps`), never `ENV` (inherited by every subprocess
+  pikuri spawns), never a project-local file (git-committable).
 
 ## Layout
 
@@ -115,13 +134,19 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   StreamingMarkdownBuffer.
 - `lib/pikuri_web/markdown_renderer.rb` — kramdown (GFM) → HTML with
   escaped-text fallback; HTML-escape helper for plain-text blocks.
+- `lib/pikuri_web/config.rb` — `PikuriWeb::Config`, the layered TOML
+  loader for `~/.config/pikuri/config.toml` (model connections, search
+  provider keys). Port of pikuri-tui's `Shared::Config`, schema-complete
+  so one file serves every pikuri shell; Pikuri-free.
 - `views/index.erb` — the page shell; server-rendered snapshot.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror
   the TUI's visual language (muted thinking, cyan tool lines).
-- `bin/pikuri-web` — boot script: RubyLLM config, agent + tools +
-  Interloper wiring, Puma start. Same flags as the TUI plus
-  `--port` / `--bind`.
+- `bin/pikuri-web` — boot script: config load, agent + tools +
+  Interloper wiring, the trifecta report, Puma start. Same flags as the
+  TUI plus `--port` / `--bind`. No `--api-key` flag, ever: a secret on
+  the command line is visible in `ps` and shell history, so keys come
+  only from the config file.
 
 ## Conventions
 

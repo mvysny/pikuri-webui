@@ -14,15 +14,15 @@ module PikuriWeb
   #   +Pikuri::Agent#run_loop(user_message:)+. The listener stack renders
   #   everything the loop emits; nothing here touches the transcript.
   # - Agent busy → +Pikuri::Agent::Control::Interloper#inject_user_message+.
-  #   The agent drains the queue at the next +after_tool_result+ boundary
-  #   and emits +UserTurn(mid_loop: true)+, so the injection renders
-  #   through the same listener path as a normal turn. Note the boundary
-  #   caveat from Interloper's docs: an injection placed while the model
-  #   is mid-response takes effect on the *next* round-trip.
+  #   The agent drains the queue at turn start and once each tool batch
+  #   completes, emitting +UserTurn(mid_loop: true)+, so the injection
+  #   renders through the same listener path as a normal turn. An
+  #   injection placed while the model is mid-response still waits for
+  #   that boundary, which is why the input stays enabled while busy and
+  #   the status bar carries the queued count.
   #
   # The race between "worker finishes" and "submit checks alive?" is
-  # benign by pikuri's own design: +Interloper#drain!+ runs at every
-  # +after_tool_result+ *and* the queue survives across runs, so a
+  # benign by pikuri's own design: the queue survives across runs, so a
   # message injected into a just-finished loop is picked up by the next
   # {#submit}'s fresh +run_loop+ drain. The @mutex only serializes
   # concurrent submits.
@@ -52,6 +52,14 @@ module PikuriWeb
       @token_log = token_log
       @mutex = Mutex.new
       @thread = nil
+
+      # Claims the interloper's single on_change slot. Without it the
+      # queued-count badge only moves when a request happens to hit
+      # {#submit} or a turn ends — the agent's own mid-loop drain would
+      # leave the browser showing a stale "2 queued" for the rest of the
+      # turn. Fires on the agent's loop thread; {Broadcaster} is the sink
+      # that makes that safe.
+      @interloper.on_change = ->(_count) { broadcast_status }
     end
 
     # Route one user message: start a turn or inject mid-loop.
@@ -98,7 +106,7 @@ module PikuriWeb
     def status_data
       {
         busy: busy?,
-        pending: @interloper.peek.size,
+        pending: @interloper.size,
         tokens: @token_log&.status_line.to_s
       }
     end
