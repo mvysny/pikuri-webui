@@ -45,8 +45,9 @@ message history and no way to load one**:
 - One level down, RubyLLM has the raw material: `Chat#messages` (reader), `Chat#add_message(hash
   or Message)`, `Chat#reset_messages!`, `Message#to_h`, `ToolCall#to_h`.
 
-So the round-trip is *possible* but the seam is wrong. **Proposal: open a feature request in
-pikuri** for the two-method history round-trip, and keep everything else in-house:
+So the round-trip is *possible* but the seam is wrong. **Filed upstream** as
+[mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) — the two-method history
+round-trip belongs in pikuri; everything else stays in-house:
 
 ```ruby
 agent.export_history          # => [Hash, ...]  plain, JSON-safe, system message excluded
@@ -72,8 +73,16 @@ Known sharp edges for that request, found while reading RubyLLM 1.16:
   prompt so dynamic sections refresh, and the saved one contains a stale `Current date: …` line
   that `bin/pikuri-web-chat` injects at boot.
 
-**`Q_history_in_pikuri`** — feature request upstream, or `instance_variable_get(:@chat)` here to
-unblock a spike? (Lean: request upstream; spike locally on a branch if impatient, never merge it.)
+**`Q_history_in_pikuri` — FILED, awaiting upstream.**
+[mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1) carries the request: the two-method
+API, the "system message is never restored" rule, and the three RubyLLM sharp edges above. It also
+flags `TokenLog` seeding (see `Q_token_readout`) and asks whether `load_history!` should have an
+opinion on tool-set drift (`Q_tool_set_drift`) rather than leaving both to each host — so those
+two questions may get answered upstream instead of here.
+
+Until it lands, `instance_variable_get(:@chat)` is the only local route. Fine for a throwaway
+spike on a branch to prove the replay path; never merge it — the whole reason for the ticket is
+that a store full of `RubyLLM::Message` objects breaks `D_pikuri_free_core`.
 
 ---
 
@@ -353,7 +362,8 @@ model tolerates unknown tool names in history better than the user tolerates a r
 
 If this gets built in stages, the order that keeps each stage shippable:
 
-1. **`Q_history_in_pikuri` upstream** — nothing here works without the round-trip.
+1. **Wait on [mvysny/pikuri#1](https://codeberg.org/mvysny/pikuri/issues/1)** — nothing here works
+   without the round-trip, so this is a blocker, not a first task.
 2. **Store + "New conversation" only.** No sidebar: one button that saves the current conversation
    and clears the agent. Already useful (it's the missing `/clear`), and it exercises the whole
    write path.
