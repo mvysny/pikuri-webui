@@ -80,5 +80,6 @@ a number to justify the paragraph.
   conversation switch, the turn-end save), which a store lock cannot see. Two locks with distinct
   jobs and a strict ordering (runner outermost, store innermost, never the reverse) — write that
   ordering down, because that is where the next deadlock comes from.
-- Cheap to do now and cheaper than retrofitting under N agents. Not a blocker for
-  `ideas/conversation-delete.md`, which routes through the runner regardless.
+- Cheap to do now and cheaper than retrofitting under N agents. Delete shipped without it
+  (`D_delete_no_undo`), routing through the runner's mutex like every other mutating op — so the
+  discipline is intact and undocumented, which is the whole complaint above.

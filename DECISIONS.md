@@ -84,6 +84,123 @@ design or the invariant.
 
 ---
 
+## D_delete_no_undo — Deleting a conversation is irreversible, and the live one rolls onto a fresh conversation (2026-08-28)
+
+**Status:** Accepted, shipped 2026-08-28 as `ConversationStore#delete`,
+`AgentRunner#delete_conversation` and `POST /conversations/:id/delete`.
+
+**Context.** `ConversationStore` grew every verb but this one, so
+conversations accumulated until the user ran `rm -r`, which is what
+`README.md` told them to do. Three things needed settling before a ✕
+could go on a sidebar row: what confirmation looks like, what happens
+when the deleted conversation is the *live* one, and whether the removal
+is recoverable.
+
+**Decision.** A native `confirm()` naming the conversation — one line of
+`app.js` and the only option needing no CSS at all, where a modal
+component is exactly the kind of thing that starts arguing for a build
+step (`D_no_js_build_step`) — then a real removal: `FileUtils.rm_r` over the whole folder, `meta.json` unlinked
+first. Deleting the live conversation is `#new_conversation` *without the
+save* — the agent is cleared (its `Event::Reset` empties the transcript
+in every tab, the same path a fresh conversation takes) and a fresh id
+minted, then the folder goes. Both cases are refused while a turn is in
+flight (409), like selecting and starting a conversation.
+
+The conversation folder is ours end to end — nothing but pikuri and this
+shell writes there — so a delete removes the directory wholesale. That is
+deliberately unlike pikuri's refusal to sweep a single unreferenced
+attachment (pikuri `DECISIONS.md` `D_history_attachments`): declining to delete a
+*file* someone may have put beside the history is compatible with
+removing the *conversation* it belongs to. Attachments are never shared
+between conversations, so nothing is refcounted.
+
+**`meta.json` goes first because `#write_meta` is the commit point.**
+Unlinking the envelope is that commit's exact inverse, so a removal that
+dies half-way leaves a conversation *unlisted* rather than one that lists
+and then cannot be opened. Orphaned bytes are the better failure.
+
+**Rejected: an undo, and its tombstone variant.** Both need the folder to
+survive the click. A conversation holds everything the user typed and
+everything the tools fetched, unencrypted (`0700` is the whole of the
+protection) — someone deleting one is often deleting it *because* of what
+is in it, so keeping it for ten seconds "in case" is a privacy footgun
+and keeping it until a sweep is worse. The tombstone shape was
+additionally tempting because `#list` already skips a directory with no
+`meta.json`; that state currently means *a save interrupted between
+pikuri's half and ours*, and overloading it would make a crash and a
+deletion indistinguishable forever.
+
+**Rejected: refusing to delete the live conversation.** Consistent with
+how switching refuses, and useless: the conversation you most want to
+drop is usually the one in front of you. Rolling onto a fresh one is
+barely more code and is what the user meant.
+
+**Rejected: `DELETE /conversations/:id`, and a second `<form>` per row.**
+The row is already a form that POSTs to `/select`, and a nested form is
+invalid HTML while two sibling forms cannot share the row's flex line.
+One form with two submit buttons, delete carrying `formaction`, keeps the
+no-JS path working and leaves Enter on the row selecting rather than
+deleting.
+
+**Consequences.**
+
+- A bare `conversations` SSE event now means "the sidebar's list changed,
+  re-fetch it" — deleting a non-live conversation emits no `reset`, so
+  without it every *other* tab would keep a row that 404s when clicked.
+  `app.js` grew one `refreshSidebar()` that `reset` and the new event
+  share; a future titles or search feature should reuse the same signal.
+- The ✕ is revealed on hover and `:focus-within`, and shown
+  unconditionally under `@media (hover: none)` — on a touch device the row
+  itself is a submit button, so a tap selects the conversation instead of
+  revealing anything (`D_target_browsers`). The reveal uses `opacity`, not
+  `display`/`visibility`, or the button would leave the tab order and
+  `:focus-within` could never fire.
+- **A second process can resurrect what you deleted**, by saving its own
+  live copy at the next turn end. Accepted as a limitation; delete is the
+  first destructive operation that makes the case in
+  `ideas/multi-process-locking.md`.
+- Nothing new serializes the folder. What keeps a delete from racing the
+  turn-end save is the runner refusing while busy, which is the same
+  discipline `ideas/conversation-store-locking.md` and
+  `ideas/event-queue.md` argue should stop being a discipline.
+- Deleting is the whole answer to retention: still no cap and no
+  auto-prune. `rm -r` on the state folder remains a complete reset.
+
+## D_target_browsers — Firefox on the desktop, Safari on iPad and iPhone; greenfield only, no polyfills (2026-08-28)
+
+**Status:** Accepted 2026-08-28. The iPhone layout is *not* shipped — see
+Consequences.
+
+**Context.** The delete button's hover-reveal was the first change whose
+correctness depended on which browsers count, and "modern browsers" is
+not an answer a CSS reviewer can use.
+
+**Decision.** Three targets: Firefox on the desktop, Safari on iPadOS,
+Safari on iOS. Nothing is polyfilled and nothing carries a vendor prefix
+for a browser outside that list — `:has()`, `:focus-within`,
+`@media (hover: none)`, `dvh` units and `SubmitEvent#submitter` are all
+fair game and are used. **The iPad counts as a desktop**: it has the
+screen for the sidebar-beside-chat layout as it stands.
+
+**Rejected: "every modern browser".** It reads generous and decides
+nothing — every question about a selector or a unit comes back
+unanswered, and in practice it means testing on whatever is open.
+
+**Consequences.**
+
+- **The iPhone layout does not work, and that is deferred, not denied.**
+  There is a `@media (max-width: 48rem)` fallback that stacks the sidebar
+  into a 20vh strip, and nobody has opened it on a phone. Tracked in
+  `ideas/phone-layout.md`, which leads with the finding that the real
+  blocker is not CSS: reaching this app from a phone means `--bind`
+  leaving 127.0.0.1, and there is no auth (`D_single_shared_conversation`).
+- That breakpoint is on the wrong side of the iPad: portrait is 768px,
+  exactly 48rem, so `max-width: 48rem` matches and an iPad in portrait
+  gets the phone fallback today. Contradicts treating iPads as desktops;
+  fix belongs with the phone layout.
+- A change that needs a polyfill or a build step to reach a fourth browser
+  is out of scope twice over — here and under `D_no_js_build_step`.
+
 ## D_replay_from_history — Store only pikuri's history; re-derive the transcript by replaying synthesized events (2026-08-27)
 
 **Status:** Accepted, shipped 2026-08-27 as {HistoryReplay}.

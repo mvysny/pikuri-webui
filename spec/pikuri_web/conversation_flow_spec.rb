@@ -212,6 +212,49 @@ RSpec.describe 'saving a conversation and starting a new one' do
     end
   end
 
+  context '#delete_conversation' do
+    it 'empties the transcript and takes the folder, when the live one goes' do
+      live = runner.conversation
+      run_turn('What is 2 + 2?')
+      queue = broadcaster.subscribe
+
+      assert_equal :deleted, runner.delete_conversation(live)
+
+      # The reset arrives from the agent's own Event::Reset through the real
+      # listener — the same path #new_conversation uses.
+      assert_includes drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }, 'reset'
+      assert_empty transcript.to_a
+      assert_empty agent.export_history.messages
+      refute live.dir.exist?
+      refute_equal live.id, runner.conversation.id
+      assert_empty conversations.list
+    end
+
+    it 'removes a stored conversation without touching the live transcript' do
+      first = runner.conversation
+      run_turn('What is 2 + 2?')
+      runner.new_conversation
+      run_turn('Hello again')
+
+      assert_equal :deleted, runner.delete_conversation(conversations.find(first.id))
+
+      refute first.dir.exist?
+      assert_equal [runner.conversation.id], conversations.list.map(&:id)
+      assert_equal %w[user assistant], agent.export_history.messages.map(&:role)
+      assert_equal :assistant, transcript.to_a.last.kind
+    end
+
+    it 'does not resurrect the folder on the next turn' do
+      live = runner.conversation
+      run_turn('What is 2 + 2?')
+      runner.delete_conversation(live)
+      run_turn('Hello again')
+
+      refute live.dir.exist?, 'the turn-end save wrote the deleted conversation back'
+      assert_equal [runner.conversation.id], conversations.list.map(&:id)
+    end
+  end
+
   it 'saves the next turn into the new conversation, leaving the old alone' do
     first = runner.conversation
     run_turn('What is 2 + 2?')

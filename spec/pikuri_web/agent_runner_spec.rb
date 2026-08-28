@@ -321,6 +321,85 @@ RSpec.describe PikuriWeb::AgentRunner do
     end
   end
 
+  context '#delete_conversation' do
+    def saved(text)
+      conversation = conversations.create(at: Time.now - 3600)
+      history_of(text).save(conversation.dir)
+      conversations.write_meta(conversation)
+      conversation
+    end
+
+    it 'removes a stored conversation without disturbing the live one' do
+      target = saved('old news')
+      live = runner.conversation
+      agent.history = history_of('current question')
+
+      assert_equal :deleted, runner.delete_conversation(target)
+
+      refute target.dir.exist?
+      assert_equal live.id, runner.conversation.id
+      assert_equal 0, agent.clears
+    end
+
+    it 'clears the agent and mints a fresh conversation when the live one goes' do
+      agent.history = history_of('current question')
+      live = runner.conversation
+      conversations.write_meta(live) # committed by an earlier turn's save
+
+      assert_equal :deleted, runner.delete_conversation(live)
+
+      refute live.dir.exist?
+      refute_equal live.id, runner.conversation.id
+      assert_equal 1, agent.clears
+    end
+
+    it 'does not save the live conversation on the way out — the point is not to keep it' do
+      agent.history = history_of('current question')
+      live = runner.conversation
+
+      runner.delete_conversation(live)
+
+      refute live.dir.exist?, 'delete saved the conversation it was told to remove'
+      assert_empty @root.children
+    end
+
+    it 'broadcasts the sidebar signal, and status too when the live one went' do
+      target = saved('old news')
+      queue = broadcaster.subscribe
+      runner.delete_conversation(target)
+      assert_equal %w[conversations], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+
+      queue = broadcaster.subscribe
+      runner.delete_conversation(runner.conversation)
+      assert_equal %w[status conversations], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+    end
+
+    it 'refuses while a turn is in flight, which would save the folder straight back' do
+      target = saved('old news')
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+
+      assert_equal :busy, runner.delete_conversation(target)
+
+      assert target.dir.exist?
+    end
+
+    it 'reports failure without leaving the agent pointed at a deleted conversation' do
+      live = runner.conversation
+      agent.history = history_of('current question')
+      # A Conversation the store will refuse: not under its root.
+      outside = PikuriWeb::ConversationStore::Conversation.new(
+        id: live.id, dir: @root.parent / live.id, title: 'x',
+        created_at: Time.now, supported: true
+      )
+
+      log = capture_log { assert_equal :failed, runner.delete_conversation(outside) }
+
+      assert_includes log, "deleting conversation #{live.id} failed"
+      refute_equal live.id, runner.conversation.id, 'left the agent on the conversation it cleared'
+    end
+  end
+
   context 'worker errors' do
     it 'logs run_loop failures and returns to idle' do
       def agent.run_loop(user_message:) = raise 'transport exploded'

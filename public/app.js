@@ -47,7 +47,19 @@ const updateStatus = ({ busy, pending, tokens }) => {
     row.disabled = busy;
     row.title = busy ? 'the agent is mid-turn' : row.querySelector('.conversation-title').textContent;
   });
+  sidebar.querySelectorAll('.conversation-delete').forEach((btn) => {
+    btn.disabled = busy;
+    btn.title = busy ? 'the agent is mid-turn' : 'Delete this conversation';
+  });
 };
+
+// The sidebar's list, re-rendered by the server. Every conversation change
+// funnels through here rather than reloading the page, which would cost each
+// tab its half-typed message.
+const refreshSidebar = () =>
+  fetch('/conversations')
+    .then((r) => r.text())
+    .then((html) => { sidebar.innerHTML = html; });
 
 const es = new EventSource('/events');
 es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
@@ -59,10 +71,11 @@ es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
 // the highlight moved — so pull the server's markup for it back in.
 es.addEventListener('reset', () => {
   transcript.replaceChildren();
-  fetch('/conversations')
-    .then((r) => r.text())
-    .then((html) => { sidebar.innerHTML = html; });
+  refreshSidebar();
 });
+// A conversation was deleted somewhere — this tab or another. Nothing about
+// the transcript changed unless a `reset` said so, only the list.
+es.addEventListener('conversations', refreshSidebar);
 // On EventSource auto-reconnect the page may have missed frames; reload
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
@@ -89,13 +102,27 @@ cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
 
 newBtn.addEventListener('click', () => fetch('/conversations', { method: 'POST' }));
 
-// Selecting a conversation. Delegated to the nav, so it survives the sidebar
-// being re-rendered from the server. `redirect: 'manual'` declines the 303 the
-// route owes a no-JS browser: what redraws the page here is the reset + block
-// frames the switch pushes to every tab, this one included.
+// Selecting or deleting a conversation. Delegated to the nav, so it survives
+// the sidebar being re-rendered from the server. `redirect: 'manual'` declines
+// the 303 the routes owe a no-JS browser: what redraws the page here is the
+// reset + block frames a switch pushes to every tab, this one included.
+//
+// Which button was pressed decides where it goes — `getAttribute` rather than
+// `.formAction`, whose getter falls back to the form's action (and to the
+// document URL) when the attribute is absent, so it cannot tell them apart.
+// Deletion is irreversible and there is no undo, hence the confirm.
 sidebar.addEventListener('submit', (e) => {
   e.preventDefault();
-  fetch(e.target.action, { method: 'POST', redirect: 'manual' });
+  const deleteAction = e.submitter?.getAttribute('formaction');
+  if (!deleteAction) {
+    fetch(e.target.action, { method: 'POST', redirect: 'manual' });
+    return;
+  }
+  const title = e.target.querySelector('.conversation-title').textContent;
+  if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+  // Refresh either way: on 404 this tab's list was the stale thing, and
+  // re-fetching is what heals it.
+  fetch(deleteAction, { method: 'POST', redirect: 'manual' }).then(refreshSidebar);
 });
 
 // Theme toggle. The cookie is the store — the server reads it back on

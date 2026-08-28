@@ -6,7 +6,12 @@
     state, and a prefetching browser must not be able to do that with a GET.
     app.js intercepts the submit; without JavaScript the POST redirects back
     to a freshly rendered page. Rows are disabled mid-turn — one conversation
-    is live, and a switch would have to throw the running turn away. %>
+    is live, and a switch would have to throw the running turn away.
+
+    Delete is a second submit button in the *same* form, aimed elsewhere with
+    `formaction`: a nested form would be invalid HTML, and two sibling forms
+    could not share the row's flex line. Select stays first, so Enter still
+    selects. %>
 <ul class="conversations">
   <% conversations.each do |c| %>
   <li>
@@ -19,6 +24,11 @@
         <span class="conversation-title"><%= c[:title] %></span>
         <span class="conversation-time"><%= c[:supported] ? c[:ago] : 'unsupported format' %></span>
       </button>
+      <button type="submit" formaction="/conversations/<%= c[:id] %>/delete"
+              class="conversation-delete"
+              aria-label="Delete the conversation <%= c[:title] %>"
+              title="<%= busy ? 'the agent is mid-turn' : 'Delete this conversation' %>"
+              <%= 'disabled' if busy %>>&times;</button>
     </form>
   </li>
   <% end %>

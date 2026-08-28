@@ -31,23 +31,31 @@ RSpec.describe PikuriWeb::App do
 
   # Stands in for AgentRunner: records calls, serves canned status.
   class FakeRunner
-    attr_reader :submitted, :cancels, :new_conversations, :loaded
-    attr_accessor :busy, :new_conversation_outcome, :load_conversation_outcome, :conversation
+    attr_reader :submitted, :cancels, :new_conversations, :loaded, :deleted
+    attr_accessor :busy, :new_conversation_outcome, :load_conversation_outcome,
+                  :delete_conversation_outcome, :conversation
 
     def initialize
       @submitted = []
       @cancels = 0
       @new_conversations = 0
       @loaded = []
+      @deleted = []
       @busy = false
       @new_conversation_outcome = :started
       @load_conversation_outcome = :loaded
+      @delete_conversation_outcome = :deleted
       @conversation = ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the live one')
     end
 
     def load_conversation(conversation)
       @loaded << conversation
       @load_conversation_outcome
+    end
+
+    def delete_conversation(conversation)
+      @deleted << conversation
+      @delete_conversation_outcome
     end
 
     def submit(message) = @submitted << message
@@ -180,11 +188,22 @@ RSpec.describe PikuriWeb::App do
       refute_includes last_response.body, '<a href="/conversations'
     end
 
+    it 'aims delete at its own route from inside the select form, not a nested one' do
+      conversations.list = saved
+      get '/'
+      assert_includes last_response.body,
+                      'formaction="/conversations/2026-08-26T09-14-02Z-b1c7/delete"'
+      # One form per row, holding both buttons.
+      assert_equal 2, last_response.body.scan('<form method="post"').size
+      assert_equal 2, last_response.body.scan('class="conversation-delete"').size
+    end
+
     it 'disables the rows while a turn is in flight' do
       conversations.list = saved
       runner.busy = true
       get '/'
-      assert_equal 2, last_response.body.scan('title="the agent is mid-turn"').size
+      # Both buttons on both rows: a delete mid-turn would be refused anyway.
+      assert_equal 4, last_response.body.scan('title="the agent is mid-turn"').size
     end
 
     it 'lists the live conversation before its first save, when the store has no row for it' do
@@ -325,6 +344,43 @@ RSpec.describe PikuriWeb::App do
       runner.load_conversation_outcome = :current
       post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
       assert_equal 303, last_response.status
+    end
+  end
+
+  context 'POST /conversations/:id/delete' do
+    let(:stored) { ConversationRows.row('2026-08-26T09-14-02Z-b1c7', 'yesterday\'s') }
+
+    before { conversations.list = [stored] }
+
+    it 'hands the stored conversation to the runner and redirects a no-JS browser home' do
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/delete'
+      assert_equal 303, last_response.status
+      assert_equal 'http://example.org/', last_response.headers['Location']
+      assert_equal [stored], runner.deleted
+    end
+
+    it 'accepts the live conversation, which is in the sidebar before it is on disk' do
+      post "/conversations/#{runner.conversation.id}/delete"
+      assert_equal 303, last_response.status
+      assert_equal [runner.conversation], runner.deleted
+    end
+
+    it 'refuses an id that is not a listed conversation' do
+      post '/conversations/..%2F..%2Fetc/delete'
+      assert_equal 404, last_response.status
+      assert_empty runner.deleted
+    end
+
+    it 'returns 409 when a turn is in flight' do
+      runner.delete_conversation_outcome = :busy
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/delete'
+      assert_equal 409, last_response.status
+    end
+
+    it 'returns 500 when the folder could not be removed' do
+      runner.delete_conversation_outcome = :failed
+      post '/conversations/2026-08-26T09-14-02Z-b1c7/delete'
+      assert_equal 500, last_response.status
     end
   end
 end

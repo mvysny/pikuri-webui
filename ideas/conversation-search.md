@@ -3,9 +3,21 @@
 A search box above the sidebar list that filters conversations by a simple full-text match over
 what is actually in them — not just titles. Type, wait ~300ms, the list narrows.
 
-This is the answer to `Q_conversation_count` in `ideas/conversation-delete.md`, and it is also how
-deleting old conversations becomes bearable: **filter, then delete.** A prune UI that makes you
-scroll 200 rows looking for the one about Postgres is not a prune UI.
+This is the answer to **when the sidebar list gets long** — 200 conversations, and v1 answered
+"scroll" by doing nothing, which is fine and stays fine for a while. It is also how deleting old
+conversations becomes bearable: **filter, then delete.** A prune UI that makes you scroll 200 rows
+looking for the one about Postgres is not a prune UI. Delete itself has shipped
+(`D_delete_no_undo`), so this is now the missing half rather than a co-design.
+
+Two things delete already built that this should reuse rather than reinvent:
+
+- **`refreshSidebar()` in `app.js`** is the single path every list re-render goes through (the
+  `reset` and `conversations` SSE events both call it). The "re-send the current query" rule below
+  is a change to *that one function*, which is also what keeps a delete or a switch from silently
+  un-filtering the list.
+- **The `conversations` SSE event** is the bare "the list changed, re-fetch it" signal. A search
+  that is open when another tab deletes a row gets the refresh for free, provided the query rides
+  along.
 
 ## The shape
 

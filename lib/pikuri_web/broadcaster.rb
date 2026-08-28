@@ -43,7 +43,8 @@ module PikuriWeb
     # Format one SSE frame and push it to every subscriber.
     #
     # @param event [String, Symbol] SSE event type (the browser-side
-    #   +addEventListener+ name): +block+, +remove+, +status+
+    #   +addEventListener+ name): +block+, +remove+, +reset+, +status+,
+    #   +conversations+
     # @param data [Hash] JSON-serialized into the frame's +data:+ line
     # @return [void]
     def broadcast(event:, data:)

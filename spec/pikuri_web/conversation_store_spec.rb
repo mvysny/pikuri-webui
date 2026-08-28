@@ -198,6 +198,53 @@ RSpec.describe PikuriWeb::ConversationStore do
     end
   end
 
+  context '#delete' do
+    # A committed conversation with pikuri's half beside ours, which is what
+    # delete has to take with it.
+    def saved(at: self.at)
+      conversation = store.create(at: at)
+      (conversation.dir / 'attachments').mkpath
+      (conversation.dir / 'attachments' / 'abc-shot.png').write('not really a png')
+      (conversation.dir / 'history.json').write('{}')
+      store.write_meta(conversation)
+      conversation
+    end
+
+    it 'removes the folder, pikuri\'s half and the attachments with it' do
+      conversation = saved
+      assert store.delete(conversation)
+      refute conversation.dir.exist?
+    end
+
+    it 'drops the conversation from the listing' do
+      kept = saved(at: at - 3600)
+      store.delete(saved)
+      assert_equal [kept.id], store.list.map(&:id)
+    end
+
+    it 'deletes a conversation it could not read, which is how a broken one gets pruned' do
+      conversation = saved
+      (conversation.dir / 'meta.json').write('{ not json')
+      refute store.find(conversation.id).supported
+      assert store.delete(store.find(conversation.id))
+      assert_empty store.list
+    end
+
+    it 'reports nothing removed for a conversation minted but never saved' do
+      refute store.delete(store.create(at: at))
+    end
+
+    it 'refuses a conversation from outside the root rather than removing it' do
+      outside = PikuriWeb::ConversationStore::Conversation.new(
+        id: 'elsewhere', dir: @root.parent / 'elsewhere', title: 'x',
+        created_at: at, supported: true
+      )
+      (@root.parent / 'elsewhere').mkpath
+      assert_raises(ArgumentError) { store.delete(outside) }
+      assert (@root.parent / 'elsewhere').directory?, 'delete escaped the root'
+    end
+  end
+
   context 'sharing the folder with pikuri' do
     it 'leaves history.json and attachments alone, and survives a save' do
       conversation = store.create(at: at)

@@ -3,7 +3,7 @@
 require 'sinatra/base'
 
 module PikuriWeb
-  # The Sinatra app: seven routes around the {Transcript} / {Broadcaster}
+  # The Sinatra app: eight routes around the {Transcript} / {Broadcaster}
   # / {AgentRunner} / {ConversationStore} quartet, which the host injects
   # via class-level settings before boot (see bin/pikuri-web-chat; specs
   # inject fakes the same way):
@@ -64,8 +64,9 @@ module PikuriWeb
       erb :_sidebar, locals: { conversations: conversation_rows, busy: settings.runner.status_data[:busy] }
     end
 
-    # SSE feed of transcript deltas (+block+ / +remove+) and +status+
-    # events. The drain loop blocks on the subscribed queue until
+    # SSE feed of transcript deltas (+block+ / +remove+ / +reset+), +status+
+    # events, and +conversations+ — the bare "the sidebar's list changed,
+    # re-fetch it" signal. The drain loop blocks on the subscribed queue until
     # the client goes away (write raises) or the broadcaster shuts down
     # (nil sentinel).
     get '/events' do
@@ -127,6 +128,24 @@ module PikuriWeb
       case settings.runner.load_conversation(conversation)
       when :busy then halt 409, 'a turn is in flight'
       when :failed then halt 422, 'that conversation could not be read'
+      end
+      redirect to('/'), 303
+    end
+
+    # Delete a conversation — the stored folder, and the agent's history too
+    # when it is the live one. Irreversible: app.js asks first, and there is
+    # nowhere here that a deleted conversation could be recovered from.
+    #
+    # The 303 serves a no-JS browser, as with +select+; app.js declines it and
+    # re-fetches the sidebar, while the +conversations+ SSE frame the runner
+    # pushes is what un-lists the row in every *other* tab.
+    post '/conversations/:id/delete' do
+      conversation = resolve_conversation(params['id'])
+      halt 404, 'no such conversation' if conversation.nil?
+
+      case settings.runner.delete_conversation(conversation)
+      when :busy then halt 409, 'a turn is in flight'
+      when :failed then halt 500, 'that conversation could not be deleted'
       end
       redirect to('/'), 303
     end

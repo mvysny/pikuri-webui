@@ -37,8 +37,9 @@ module PikuriWeb
   # This class owns *which* conversation is live, because it owns the agent
   # whose history that is:
   #
-  #   runner.new_conversation                      # => :started — saved, cleared, fresh id
-  #   runner.load_conversation(store.list.first)   # => :loaded — saved, then replaced
+  #   runner.new_conversation                        # => :started — saved, cleared, fresh id
+  #   runner.load_conversation(store.list.first)     # => :loaded — saved, then replaced
+  #   runner.delete_conversation(store.list.first)   # => :deleted — removed, never saved
   #
   # Saves happen at *turn end*, from the worker thread's ensure, so a history
   # is never exported mid-+complete+ and {#busy?} staying true until the save
@@ -180,6 +181,34 @@ module PikuriWeb
       outcome
     end
 
+    # Delete a conversation, stored or live: the folder goes, and the live one
+    # takes the agent's history with it.
+    #
+    #   runner.delete_conversation(store.list.first)   # => :deleted
+    #
+    # Deleting the live conversation is {#new_conversation} *without the save*
+    # — the point is not to keep it. The transcript empties itself, as it does
+    # for a fresh conversation: +clear_conversation+ emits +Event::Reset+ and
+    # {SseListener} does the rest.
+    #
+    # The agent is cleared before the folder is removed, so a removal that
+    # raises leaves an emptied agent rather than one whose next turn-end save
+    # would write the deleted conversation straight back.
+    #
+    # @param conversation [ConversationStore::Conversation] from
+    #   +ConversationStore#list+ — a listed conversation rather than an id, so
+    #   no caller ever turns user input into a path
+    # @return [:deleted, :busy, :failed] +:busy+ while a turn is in flight,
+    #   which would otherwise save the folder back moments after it went
+    def delete_conversation(conversation)
+      outcome, live = @mutex.synchronize { discard(conversation) }
+      # Only the live conversation resets the agent, and TokenLog zeroes its
+      # context readout on Event::Reset.
+      broadcast_status if live
+      @broadcaster.broadcast(event: :conversations, data: {}) if outcome == :deleted
+      outcome
+    end
+
     # Status payload shared by SSE +status+ events and +GET /+'s initial
     # render.
     #
@@ -256,6 +285,26 @@ module PikuriWeb
       HistoryReplay.events(history).each { |event| @listener.on_event(event) }
       @conversation = conversation
       :loaded
+    end
+
+    # {#delete_conversation}'s body; the caller holds @mutex.
+    #
+    # @param conversation [ConversationStore::Conversation]
+    # @return [Array(Symbol, Boolean)] the outcome, and whether the deleted
+    #   conversation was the live one
+    def discard(conversation)
+      return [:busy, false] if busy?
+
+      live = conversation.id == @conversation.id
+      if live
+        @agent.clear_conversation
+        @conversation = @conversations.create
+      end
+      @conversations.delete(conversation)
+      [:deleted, live]
+    rescue StandardError => e
+      PikuriWeb.logger.error("deleting conversation #{conversation.id} failed (#{e.class}: #{e.message})")
+      [:failed, live]
     end
 
     # @param conversation [ConversationStore::Conversation]

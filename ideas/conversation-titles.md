@@ -32,4 +32,8 @@ change — and the title deliberately never appears in the path, so retitling ne
 The cheap alternative, and plausibly auto-title's escape hatch rather than a competitor: a pencil on
 the row, `PATCH /conversations/:id`. Worth asking whether v2 should be rename *first*.
 
-Rename touches the same route family as delete — see `ideas/conversation-delete.md`.
+Delete has shipped the shape a rename should copy (`D_delete_no_undo`): a second submit button in
+the row's existing form, aimed with `formaction` at `/conversations/:id/<verb>`, and a bare
+`conversations` SSE event that tells every tab to re-fetch the list through `app.js`'s one
+`refreshSidebar()`. A rename needs a text input rather than a button, which is the only part that is
+genuinely new — and `ConversationStore` already owns `meta.json`, where the title lives.

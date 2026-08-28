@@ -45,6 +45,19 @@ the alternatives that were rejected, live one entry per slug in
   ids, kinds, HTML strings, paths and queues. A fourth adapter has to
   argue for itself. See `D_pikuri_free_core`.
 
+- **Deleting a conversation is irreversible, and the live one rolls onto a
+  fresh conversation.** `confirm()` then `rm_r`, `meta.json` unlinked
+  first; no undo, no tombstone, no retention cap. Deleting the live one
+  clears the agent *without saving it*. Both refuse while busy.
+  See `D_delete_no_undo`.
+
+- **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
+  only.** No polyfills, no prefixes for a fourth browser; `:has()`,
+  `:focus-within`, `@media (hover: none)`, `dvh` and
+  `SubmitEvent#submitter` are all fair game. iPads count as desktops. The
+  iPhone *layout* does not work yet (`ideas/phone-layout.md`).
+  See `D_target_browsers`.
+
 - **The transcript is server-authoritative.** {Transcript} holds the
   rendered blocks; `GET /` renders the full snapshot and SSE carries
   only deltas. Never introduce client-only conversation state.
@@ -146,20 +159,20 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
   `GET /` (page shell), `GET /events` (SSE), `POST /messages`,
   `POST /cancel`, `GET`/`POST /conversations`,
-  `POST /conversations/:id/select`. Collaborators injected via
-  class-level settings.
+  `POST /conversations/:id/select`, `POST /conversations/:id/delete`.
+  Collaborators injected via class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, owns
   the worker thread, the start-vs-inject (Interloper) decision and the
-  live conversation (saves at turn end, loads a stored one on request);
+  live conversation (saves at turn end, loads or deletes one on request);
   broadcasts status.
 - `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
   saved `Agent::History` back into the events that produced it.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
   the conversations folder: mints ids, owns `meta.json`, lists what is
-  saved. Pikuri-free.
+  saved, deletes a folder. Pikuri-free.
 - `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
   "6 hours ago" for sidebar rows; server-rendered, hence stale-tolerant.
 - `lib/pikuri_web/transcript.rb` — server-authoritative rendered-block

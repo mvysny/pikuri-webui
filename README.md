@@ -126,7 +126,17 @@ too.
 
 Nothing is encrypted. These files hold everything you typed and everything
 the tools fetched, so the directories are created `0700` and that is the
-whole of the protection. Delete a conversation with `rm -r`.
+whole of the protection.
+
+To delete a conversation, hover its row in the sidebar and click the `×`.
+It asks first, and then the whole directory goes — history, attachments
+and all. **There is no undo**, deliberately: a conversation you want gone
+is usually one you want gone because of what is in it, so nothing is kept
+back for a grace period. Deleting the conversation you are currently in
+starts you in a fresh one without saving it. `rm -r` on a conversation
+directory still works and does the same thing.
+
+Nothing prunes old conversations for you — there is no cap and no expiry.
 
 ## Develop
 

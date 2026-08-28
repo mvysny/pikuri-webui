@@ -102,14 +102,25 @@ body {
   padding: 0;
 }
 
-.conversations form { margin: 0; }
+/* The row is a flex pair: the select button, and the delete button beside it.
+   `:has()` puts the row's background on the form rather than on the select
+   button, so the strip behind the ✕ is part of the same row — a background on
+   the button alone would stop short of it. */
+.conversations form {
+  margin: 0;
+  display: flex;
+}
+
+.conversations form:hover:has(.conversation:not(:disabled)),
+.conversations form:has(.conversation.current) { background: var(--bg); }
 
 /* A row is a submit button (selecting is a POST), stripped of every button
    affordance except the pointer. `border: 0` first so only the left edge has
-   width — the accent bar the global button:hover then lights up. */
+   width — the accent bar the global button:hover then lights up. `min-width: 0`
+   is what lets .conversation-title's ellipsis engage. */
 .conversation {
-  display: block;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   padding: 0.3rem 0.75rem;
   border: 0;
   border-left: 3px solid transparent;
@@ -120,12 +131,36 @@ body {
   text-align: left;
 }
 
-.conversation:hover:not(:disabled) { background: var(--bg); }
 .conversation:disabled { cursor: default; opacity: 0.6; }
 
-.conversation.current {
-  border-left-color: var(--accent);
-  background: var(--bg);
+.conversation.current { border-left-color: var(--accent); }
+
+/* Revealed on hover, and on keyboard focus anywhere in the row. `opacity`
+   rather than `display`/`visibility` so the button stays in the tab order —
+   hidden either of those ways, it could never be focused and :focus-within
+   would never fire. Always shown where there is no hover (iPhone, iPad —
+   D_target_browsers): the row itself is a submit button, so a tap selects the
+   conversation rather than revealing anything. */
+.conversation-delete {
+  flex: 0 0 auto;
+  align-self: stretch;
+  padding: 0 0.6rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--fg-muted);
+  font: inherit;
+  line-height: 1;
+  opacity: 0;
+}
+
+.conversations form:hover .conversation-delete:not(:disabled),
+.conversations form:focus-within .conversation-delete:not(:disabled) { opacity: 1; }
+
+.conversation-delete:hover:not(:disabled) { color: var(--error); }
+
+@media (hover: none) {
+  .conversation-delete:not(:disabled) { opacity: 1; }
 }
 
 .conversation-title {

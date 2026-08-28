@@ -9,6 +9,13 @@ always a complete valid history. It is a **silently clobbered conversation** —
 vanish at the next save, with nothing on screen to say so. README now warns about this under
 **Conversations**; nothing enforces it.
 
+**Delete makes it worse, and is the first destructive case.** Since `D_delete_no_undo` the loser can
+be a conversation that no longer exists: process A deletes the folder, process B still holds it live
+and writes it straight back at its next turn end. The user watched it disappear from the sidebar and
+it reappears — a resurrection, not just a lost turn. Accepted as a limitation there, and it is the
+strongest argument on this page: last-writer-wins is defensible for turns and indefensible for a
+deletion the user explicitly confirmed.
+
 Options:
 
 - **`flock` the conversation directory on open**, and render the conversation read-only in the

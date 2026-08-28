@@ -155,6 +155,33 @@ module PikuriWeb
       list.find { |conversation| conversation.id == id }
     end
 
+    # Remove a conversation from disk — folder, +history.json+,
+    # +attachments/+.
+    #
+    #   store.delete(store.find(params['id']))   # => true
+    #
+    # +meta.json+ is unlinked *before* the folder, inverting {#write_meta}'s
+    # commit point: a removal that dies half-way then leaves a conversation
+    # unlisted, rather than one that lists and cannot be opened.
+    #
+    # Takes a +Conversation+ rather than an id, like {#find}, so no caller
+    # turns user input into a path. Nothing is refcounted — attachments are
+    # never shared between conversations.
+    #
+    # @param conversation [Conversation] from {#list} or {#find}
+    # @return [Boolean] true when a folder was removed; false when there was
+    #   nothing on disk — a conversation minted but never saved
+    # @raise [ArgumentError] when the conversation does not live under the
+    #   root
+    def delete(conversation)
+      raise ArgumentError, "#{conversation.id} is not under #{@root}" unless conversation.dir.parent == @root
+      return false unless conversation.dir.exist?
+
+      FileUtils.rm_f((conversation.dir / META_FILE).to_path)
+      FileUtils.rm_r(conversation.dir.to_path)
+      true
+    end
+
     # Write +meta.json+, creating the conversation's directory if pikuri has
     # not already — and re-asserting 0700 either way, since +History#save+
     # creates it with the default mode.
@@ -196,9 +223,13 @@ module PikuriWeb
       # sort a conversation in one place and date it in another.
       created_at = id_time(dir.basename.to_s)
       return nil if created_at.nil?
-      return nil unless (dir / META_FILE).file?
 
+      # No +file?+ check first: the read's own ENOENT is the answer, and a
+      # check-then-read would call a conversation being deleted right now
+      # "unsupported format" instead of dropping it.
       meta = load_meta(dir / META_FILE)
+      return nil if meta == :absent
+
       title = meta && meta['title']
       Conversation.new(
         id: dir.basename.to_s,
@@ -209,14 +240,18 @@ module PikuriWeb
       )
     end
 
-    # The envelope, or nil when this reader can't stand behind it — corrupt,
-    # unreadable, or written by a schema it doesn't know.
+    # The envelope; nil when this reader can't stand behind it — corrupt, or
+    # written by a schema it doesn't know — and +:absent+ when there is no
+    # envelope at all, which is a save interrupted between pikuri's half and
+    # ours rather than a conversation to list.
     #
     # @param path [Pathname]
-    # @return [Hash, nil]
+    # @return [Hash, nil, :absent]
     def load_meta(path)
       meta = JSON.parse(path.read)
       meta if meta.is_a?(Hash) && meta['schema'] == SCHEMA
+    rescue Errno::ENOENT
+      :absent
     rescue JSON::ParserError, SystemCallError
       nil
     end
