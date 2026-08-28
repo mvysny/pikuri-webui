@@ -133,7 +133,7 @@ sidebar.addEventListener('submit', (e) => {
   if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
   fetch(e.target.action, { method: 'POST', redirect: 'manual' }).then(() => {
     // Deleting what this tab is reading leaves it on a page that no longer
-    // exists; the live conversation is the only safe place to land.
+    // exists; `/` picks the newest conversation left, or mints one.
     if (row.querySelector('.conversation').classList.contains('current')) location.href = '/';
     // Refresh otherwise: on 404 this tab's list was the stale thing, and
     // re-fetching is what heals it.

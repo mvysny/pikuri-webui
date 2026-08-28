@@ -94,19 +94,26 @@ scoped to your IP, not to a conversation.
 
 ## Conversations
 
-**+ new conversation** in the status bar saves what you have and clears the
-page — the `/clear` this shell used to lack. It is refused (and the button
-disabled) while the agent is mid-turn: a click must not throw a running
-turn away.
+**+ new conversation** in the status bar starts a fresh one and takes this
+tab to it. It is never refused, because a new conversation touches no
+existing one: a turn already running — including in the conversation you
+are leaving — carries on untouched, and other tabs stay where they are.
 
 The sidebar lists every conversation you have had, newest first, with when
 each started. The order is by start time, so a conversation stays where it
-is however long you keep talking in it. Click a row to open it: the one
-you were in is saved, and every open tab switches with you — there is one
-live conversation, not one per tab. Rows go dim while the agent is
-mid-turn, because switching would have to throw that turn away. A row
-labelled *unsupported format* has details this version can't read;
-opening it may still work.
+is however long you keep talking in it. Click a row to open it **in this
+tab**; the rows are ordinary links, and no other tab moves. Each row
+carries two independent marks: the conversation this tab has open is
+highlighted, and a `●` means a turn is running there — in any conversation,
+including one nobody is watching. A row labelled *unsupported format* has
+details this version can't read; opening it may still work.
+
+**Walking away from a running turn is the intended way to use this.** Open
+another conversation, or close the tab: the turn keeps going, its answer
+lands in that conversation's transcript, and you see the whole thing when
+you come back. The `●` is how you know it finished. Each conversation has
+its own agent and its own history, so they neither wait for nor disturb
+each other — beyond the shared cap on how many think at once, above.
 
 What comes back when a conversation is reopened is the conversation
 itself: what you asked, what the model thought and answered, which tools
@@ -131,8 +138,10 @@ started:
 The `conversations/` folder is there from boot; a conversation's own
 directory appears with its first completed turn, so a session you never
 said anything in leaves nothing behind. Turns are saved as they finish, so
-quitting keeps the conversation; a restart starts you in a fresh one with
-all the old ones a click away in the sidebar.
+quitting keeps the conversation, and a restart drops you back into the
+newest one with all the others a click away in the sidebar. What a restart
+does lose is a turn that was still running when you quit — saves land at
+turn end, and shutdown does not wait for one.
 
 Run one at a time. A second `pikuri-web-chat` on another port shares that
 folder, and each writes `history.json` whole, so two of them in the same
@@ -151,9 +160,12 @@ To delete a conversation, hover its row in the sidebar and click the `×`.
 It asks first, and then the whole directory goes — history, attachments
 and all. **There is no undo**, deliberately: a conversation you want gone
 is usually one you want gone because of what is in it, so nothing is kept
-back for a grace period. Deleting the conversation you are currently in
-starts you in a fresh one without saving it. `rm -r` on a conversation
-directory still works and does the same thing.
+back for a grace period. Deleting the one you are reading takes you to the
+newest conversation left, or to a fresh one if that was the last. The `×`
+is disabled while *that* conversation has a turn in flight — only that one,
+never the rest — so a delete cannot pull the folder out from under a save
+that is about to land. `rm -r` on a conversation directory still works and
+does the same thing.
 
 Nothing prunes old conversations for you — there is no cap and no expiry.
 
@@ -169,11 +181,12 @@ stderr. `public/app.js` and `public/style.css` are read off disk on every
 request in either mode — a browser reload picks them up.
 
 Ruby under `lib/` is the exception: nothing reloads it, in either mode.
-The agent, its listener stack and the runner's worker thread are
-long-lived instances wired once in the boot script, so a class change
-lands only in a fresh process — which is also a fresh transcript (the old
-one is saved, per **Conversations** above, but not reloaded). Let a
-watcher restart it:
+Each conversation's agent and listener stack are long-lived instances built
+once by the boot script's factory, so a class change lands only in a fresh
+process. That costs you any turn still running, but not the conversations
+themselves — the restart reopens the newest one and rebuilds its transcript
+from `history.json`, so a rendering change shows up on old conversations
+immediately. Let a watcher restart it:
 
 ```sh
 find bin lib views -type f | entr -r bin/pikuri-web-chat --dev
@@ -223,25 +236,35 @@ connection; `--server` / `--model` override its fields. Layering runs
 CLI flags.
 
 > [!WARNING]
-> There is no authentication and one shared conversation. Keep
-> `--bind` at its loopback default.
+> There is no authentication of any kind, and no notion of who is asking:
+> anyone who can reach the port can read, write and delete every
+> conversation. It is single-user by construction — a second person runs
+> their own `pikuri-web-chat` under their own OS account. Keep `--bind` at
+> its loopback default.
 
 ## Layout
 
 ```
-┌──────────────────────────────────┐
-│ Transcript                       │
-│                                  │
-│ assistant: markdown, reasoning   │
-│ tool calls & observations        │
-│                                  │
-├──────────────────────────────────┤
-│ Input (Enter to send;            │
-│   sending mid-turn injects)      │
-├──────────────────────────────────┤
-│ status · tokens · + new · theme  │
-└──────────────────────────────────┘
+┌────────────────┬──────────────────────────────────┐
+│ Conversations  │ Transcript                       │
+│                │                                  │
+│ ● today 14:03  │ assistant: markdown, reasoning   │
+│   today 09:41 ×│ tool calls & observations        │
+│   yesterday    │                                  │
+│                ├──────────────────────────────────┤
+│ ● a turn runs  │ Input (Enter to send;            │
+│   here         │   sending mid-turn injects)      │
+│ × delete       ├──────────────────────────────────┤
+│                │ status · tokens · + new · theme  │
+└────────────────┴──────────────────────────────────┘
 ```
+
+The URL is `/c/<conversation-id>`, so which conversation a tab is showing
+is that tab's own business — bookmark it, open two, keep them on different
+conversations. The transcript itself is server-side: the page arrives
+rendered, and the SSE stream carries only deltas for the one conversation
+this tab subscribed to. A reload, a second tab, or a dropped connection all
+converge on the same state without the browser keeping any of it.
 
 Sending a message while the agent is mid-turn injects it via pikuri's
 `Control::Interloper` — it's delivered at turn start or once the
