@@ -27,10 +27,11 @@ module PikuriWeb
   #   is mid-response still waits for that boundary, which is why the input
   #   stays enabled while busy and the status bar carries the queued count.
   #
-  # The race between "the job finishes" and "submit checks {#busy?}" is benign
-  # by pikuri's own design: the queue survives across runs, so a message
-  # injected into a just-finished loop is picked up by the next {#submit}'s
-  # fresh +run_loop+ drain.
+  # A submit landing between the loop's last completion and the state reset
+  # injects into a turn that is over, and no drain is coming for it. The turn
+  # job answers that on its way out: a queue left non-empty by a turn that
+  # returned normally claims the next turn on the spot, a bare +run_loop+ whose
+  # entry drain is the delivery.
   #
   # == Idle, queued, running
   #
@@ -157,8 +158,8 @@ module PikuriWeb
       # inject_user_message fires the Interloper's on_change synchronously,
       # which broadcasts status and reads back through here. Claiming the
       # state above is what makes the gap safe — and an injection landing in
-      # it after the turn ended is picked up by the next run_loop's drain
-      # anyway, which is the benign race described above.
+      # it after the turn ended is delivered by the restart {#finish_turn}
+      # claims, not stranded.
       if claim == :start
         @executor.post { run_turn(message) }
       else
@@ -255,20 +256,51 @@ module PikuriWeb
     # future nobody here holds, so the UI would just look stuck. The ensure
     # broadcasts idle so the browser's input re-enables even on the error path.
     #
-    # @param message [String]
+    # @param message [String, nil] +nil+ on a restart, where the turn exists
+    #   for the Interloper drain +run_loop+ does before its first completion
     # @return [void]
     def run_turn(message)
       return if claim_running == :abandoned
 
       @agent.run_loop(user_message: message)
+      completed = true
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      @mutex.synchronize do
+      finish_turn(restart: completed)
+    end
+
+    # Save, go idle, and — when the Interloper still holds something — claim
+    # the next turn before anyone can observe the gap.
+    #
+    # Injections are delivered by +run_loop+'s drain and by nothing else, so a
+    # message that arrived while this turn was ending would otherwise sit until
+    # the user sent another one, with the status bar's queued count stuck above
+    # zero over an idle conversation.
+    #
+    # Only after a turn that returned normally: a cancelled or failed one
+    # leaves what is queued for the next {#submit} rather than turning a stop
+    # into a fresh round-trip or an unreachable transport into a spin. The
+    # queue emptying is likewise +run_loop+'s job — a restart against an agent
+    # that does not drain would post turns forever.
+    #
+    # Reading the Interloper under this mutex is safe because its +on_change+ —
+    # which broadcasts status and re-enters here — fires outside its own lock.
+    #
+    # @param restart [Boolean, nil] whether the turn ran to completion
+    # @return [void]
+    def finish_turn(restart:)
+      resume = @mutex.synchronize do
         persist
         @state = :idle
+        next false unless restart && @interloper.pending?
+
+        @state = :queued
+        true
       end
       broadcast_status
+      @executor.post { run_turn(nil) } if resume
+      nil
     end
 
     # Move from queued to running, unless {#cancel} got here first — which is

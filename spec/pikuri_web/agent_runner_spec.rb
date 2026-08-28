@@ -11,20 +11,31 @@ RSpec.describe PikuriWeb::AgentRunner do
   # until the spec releases it, and serves a real History (so #persist
   # exercises pikuri's own save rather than a stub).
   class FakeAgent
-    attr_reader :messages, :clears, :loaded
+    attr_reader :messages, :injected, :clears, :loaded
     attr_accessor :history
 
-    def initialize
+    def initialize(interloper)
+      @interloper = interloper
       @gate = Thread::Queue.new
       @messages = []
+      @injected = []
       @clears = 0
       @loaded = []
       @history = Pikuri::Agent::History.new(messages: [])
     end
 
+    # Run +block+ as the next run_loop returns, and only that one: the spec's
+    # way into the window between the loop ending and the runner going idle.
+    def at_turn_end(&block) = @at_turn_end = block
+
+    # Drains the Interloper first, as the real run_loop does — a fake that
+    # left the queue full would have the runner restarting forever.
     def run_loop(user_message:)
+      @injected.concat(@interloper.drain!.map(&:content))
       @messages << user_message
       @gate.pop
+      @at_turn_end&.call
+      @at_turn_end = nil
     end
 
     def export_history = @history
@@ -67,8 +78,8 @@ RSpec.describe PikuriWeb::AgentRunner do
 
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
-  let(:agent) { FakeAgent.new }
   let(:interloper) { Pikuri::Agent::Control::Interloper.new }
+  let(:agent) { FakeAgent.new(interloper) }
   let(:cancellable) { Pikuri::Agent::Control::Cancellable.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
   let(:conversations) do
@@ -131,6 +142,49 @@ RSpec.describe PikuriWeb::AgentRunner do
       assert_equal [:user], interloper.peek.map(&:kind)
       assert_equal ['second'], interloper.peek.map(&:content)
       assert_equal ['first'], agent.messages
+    end
+  end
+
+  # The window between the loop's last completion and the state reset: #submit
+  # still sees a running turn and injects, but no drain is left to deliver it.
+  context 'an injection that lands as the turn ends' do
+    it 'starts a bare turn that delivers it' do
+      agent.at_turn_end { interloper.inject_user_message('late') }
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+
+      agent.release # the loop returns, and 'late' lands on its way out
+      wait_until { agent.messages.size == 2 }
+
+      assert_equal ['first', nil], agent.messages, 'the restart is a bare turn'
+      assert_equal ['late'], agent.injected
+      assert runner.busy?, 'the restart was claimed before anyone could see idle'
+      assert_equal 0, runner.status_data[:pending]
+    end
+
+    it 'stays idle when the queue is empty' do
+      runner.submit('hello')
+      wait_until { agent.messages.any? }
+
+      agent.release
+      wait_until { !runner.busy? }
+
+      assert_equal ['hello'], agent.messages
+    end
+
+    # A failed turn hands the queue to the next #submit rather than turning an
+    # unreachable transport into a restart spin.
+    it 'restarts nothing after a turn that raised' do
+      interloper.inject_user_message('late')
+      def agent.run_loop(user_message:) = raise('transport exploded')
+
+      capture_log do
+        runner.submit('first')
+        wait_until { !runner.busy? }
+      end
+
+      assert_equal 1, interloper.size
+      assert_equal :idle, runner.state
     end
   end
 

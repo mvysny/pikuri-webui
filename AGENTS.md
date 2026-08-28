@@ -128,7 +128,11 @@ the alternatives that were rejected, live one entry per slug in
   non-answer is a conversation deleted under it.
   Interloper delivers at turn start and at
   tool-batch completion, so the status bar's queued count (pushed by
-  `Interloper#on_change`) exists to make that wait legible.
+  `Interloper#on_change`) exists to make that wait legible — and a turn
+  that ends holding a queue starts a bare turn to deliver it, so the
+  count never sits above zero over an idle conversation. Only after a
+  turn that returned normally: a cancelled or failed one leaves the queue
+  for the next submit.
   See `D_interloper_mid_loop_input`.
 
 - **The chat script stays chat-only; new capability means a new

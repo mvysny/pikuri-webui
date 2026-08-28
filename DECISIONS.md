@@ -1072,7 +1072,8 @@ must be thread-safe on its own, because no caller synchronizes.
 ## D_interloper_mid_loop_input — Mid-loop input goes through `Control::Interloper`, input stays enabled while busy (2026-06-04)
 
 **Status:** Accepted, shipped 2026-06-04 in {AgentRunner}; the queued-count
-push was completed 2026-08-27 with `Interloper#on_change`.
+push was completed 2026-08-27 with `Interloper#on_change`; the end-of-turn
+restart closed the stranding window on 2026-08-28.
 
 **Context.** pikuri-tui deferred mid-loop input. A web page makes the
 want sharper: the input field is right there while the agent is working,
@@ -1093,6 +1094,33 @@ during the one period they most want to interrupt, and the field refuses.
 That is client-only conversation state, which
 `D_server_authoritative_transcript` forbids — a reload would silently eat
 the queue.
+
+**Decision (2026-08-28): a turn that ends holding a queue starts another
+one.** Only `run_loop` drains the Interloper, so an injection accepted in
+the window between the loop's last completion and {AgentRunner}'s state
+reset — where `#submit` correctly still reads `:running` — had nothing
+left to deliver it. It sat until the user happened to send again, with
+the status bar promising "1 queued" over a conversation doing nothing.
+{AgentRunner#finish_turn} claims the restart in the same critical section
+that goes idle, so no `#submit` and no `#discard!` ever observes the gap,
+and the restart is a *bare* turn: `run_loop(user_message: nil)` drains
+before its first completion, which is the entire job.
+
+**Restricted to a turn that returned normally.** A cancelled or failed
+turn leaves what is queued for the next `#submit`. Restarting after a
+cancel would make the stop button look broken — the user asks for quiet
+and gets a fresh round-trip — and restarting after a transport failure
+turns an unreachable server into a spin. Termination rests on `run_loop`
+draining what it was restarted for; against an agent that does not, the
+restart would post turns forever, which is why the fake agent in the spec
+drains too.
+
+**Rejected: draining the queue on `#cancel`.** It kills the same
+stranding for the cancel path and makes "cancel" mean "stop everything",
+badge back to zero. But it silently discards user-typed text that was
+never rendered anywhere, and it widens a bug fix into a semantic change
+to cancellation. Left as it was: the messages survive and the next
+`#submit` delivers them.
 
 **Consequences.** Interloper's delivery boundary is the caveat that
 leaks: injections arrive at turn start and once each tool batch
