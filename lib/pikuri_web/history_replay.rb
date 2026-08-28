@@ -68,6 +68,37 @@ module PikuriWeb
       messages.flat_map { |message| events_for(message, results) }
     end
 
+    # Render a stored conversation's blocks without disturbing the live one —
+    # what a tab viewing a conversation the agent is *not* on gets:
+    #
+    #   blocks = HistoryReplay.snapshot(conversation.dir)   # => [Block, …] or nil
+    #
+    # Still one renderer: this replays {events} through a throwaway
+    # {SseListener} over a throwaway {Transcript}, so it is the same event →
+    # block-kind mapping a live turn goes through. The throwaway {Broadcaster}
+    # is what keeps it silent — it has no subscribers, so the replay's frames
+    # fan out to nobody instead of redrawing every open tab.
+    #
+    # Recomputed per request rather than cached: kramdown over a few dozen
+    # messages is milliseconds, and a cache would be the second copy of the
+    # transcript that `D_replay_from_history` exists to avoid. Holding these
+    # resident is `ideas/per-conversation-agents.md` stage 2.
+    #
+    # @param dir [Pathname] a conversation folder
+    # @return [Array<Transcript::Block>, nil] nil when the history cannot be
+    #   read — a corrupt or half-written save is the caller's to render as
+    #   unavailable, not to crash on
+    def snapshot(dir)
+      history = Pikuri::Agent::History.load(dir)
+      transcript = Transcript.new
+      listener = SseListener.new(transcript: transcript, broadcaster: Broadcaster.new)
+      events(history).each { |event| listener.on_event(event) }
+      transcript.to_a
+    rescue Pikuri::Agent::History::Error, SystemCallError => e
+      PikuriWeb.logger.error("previewing conversation at #{dir} failed (#{e.class}: #{e.message})")
+      nil
+    end
+
     # @param message [Pikuri::Agent::History::Message]
     # @param results [Hash{String => String}] tool-call id → observation
     # @return [Array<Pikuri::Agent::Event::Base>]

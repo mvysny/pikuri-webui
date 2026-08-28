@@ -94,7 +94,7 @@ module PikuriWeb
       @token_log = token_log
       @mutex = Mutex.new
       @running = false
-      @conversation = conversations.create
+      self.conversation = conversations.create
 
       # Claims the interloper's single on_change slot. Without it the
       # queued-count badge only moves when a request happens to hit
@@ -281,8 +281,13 @@ module PikuriWeb
       return :empty if history.messages.empty?
 
       persist(history)
+      # Re-point before clearing: +clear_conversation+ emits the +Reset+ that
+      # empties the transcript, and it has to be stamped with the conversation
+      # it belongs to — the fresh one. Stamped with the outgoing id, tabs still
+      # reading that conversation would wipe a transcript that is now a
+      # perfectly good saved one.
+      self.conversation = @conversations.create
       @agent.clear_conversation
-      @conversation = @conversations.create
       :started
     end
 
@@ -300,9 +305,13 @@ module PikuriWeb
       return :failed if history.nil?
 
       persist
+      # Persist the outgoing one, then re-point *before* emitting anything: the
+      # +Reset+ and the replayed blocks describe the incoming conversation, and
+      # a frame stamped with the outgoing id would be dropped by the very tab
+      # that asked for the switch — and applied by the tabs that did not.
+      self.conversation = conversation
       @agent.load_history!(history)
       HistoryReplay.events(history).each { |event| @listener.on_event(event) }
-      @conversation = conversation
       :loaded
     end
 
@@ -316,8 +325,10 @@ module PikuriWeb
 
       live = conversation.id == @conversation.id
       if live
+        # Re-point before clearing, as in {#switch_conversation}: the +Reset+
+        # belongs to the fresh conversation that replaces this one.
+        self.conversation = @conversations.create
         @agent.clear_conversation
-        @conversation = @conversations.create
       end
       @conversations.delete(conversation)
       [:deleted, live]
@@ -355,6 +366,21 @@ module PikuriWeb
       @conversations.write_meta(@conversation)
     rescue StandardError => e
       PikuriWeb.logger.error("saving conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
+    end
+
+    # Point the live conversation at +conversation+, and tell the
+    # {Broadcaster} which id to stamp on outgoing frames so a tab viewing a
+    # different conversation can drop them.
+    #
+    # Deliberately takes no lock: every caller past the constructor already
+    # holds @mutex, and Ruby's Mutex will not re-enter.
+    #
+    # @param conversation [ConversationStore::Conversation]
+    # @return [void]
+    def conversation=(conversation)
+      @conversation = conversation
+      @broadcaster.conversation_id = conversation.id
+      nil
     end
 
     # @return [void]

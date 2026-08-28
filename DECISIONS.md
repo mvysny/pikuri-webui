@@ -667,6 +667,17 @@ sidebar of stored conversations shipped. "One conversation" now means one
 that is, and every tab follows, because there is still exactly one agent
 and one transcript.
 
+**Selection clause repealed and shipped 2026-08-28.** Viewing is now a
+per-tab, per-URL concern (`GET /c/:id`), rows are links, and sending into
+a conversation the agent is not on is what makes it live — carrying the
+mid-turn refusal that `POST /conversations/:id/select`, now gone, used to
+carry. A conversation the agent is not on is replayed from history per
+request (`HistoryReplay.snapshot`). SSE remains one undivided feed, so
+every frame is stamped with the live conversation's id and the client
+drops what is not its own; per-conversation subscriptions arrive with the
+agent-per-conversation work. The paragraphs below are kept for the
+reasoning, not as current behaviour.
+
 **Superseded in direction 2026-08-28, still accurate as shipped.** The
 single-user, no-auth, loopback half stands and is now settled rather than
 provisional: a second person runs their own process under their own OS

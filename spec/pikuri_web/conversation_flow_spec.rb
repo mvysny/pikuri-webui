@@ -76,6 +76,46 @@ RSpec.describe 'saving a conversation and starting a new one' do
     assert_equal 1, JSON.parse((dir / 'meta.json').read).fetch('schema')
   end
 
+  # What a tab viewing a conversation the agent has moved off of renders from:
+  # the same blocks, re-derived, with the live transcript untouched.
+  it 'snapshots a conversation the agent is no longer on' do
+    saved = runner.conversation
+    run_turn('What is 2 + 2?')
+    live_blocks = transcript.to_a
+    runner.new_conversation
+
+    snapshot = PikuriWeb::HistoryReplay.snapshot(saved.dir)
+
+    assert_equal live_blocks.map(&:kind), snapshot.map(&:kind)
+    assert_equal live_blocks.map(&:html), snapshot.map(&:html)
+    # The live transcript is the fresh conversation's, and stayed empty.
+    assert_empty transcript.to_a
+  end
+
+  # The switch emits a Reset and then the replayed blocks. They describe the
+  # conversation being switched *to*, so they have to be stamped with its id —
+  # stamped with the outgoing one they would be dropped by the tab that asked
+  # for the switch and applied by the tabs that did not, which is backwards.
+  it 'stamps a switch onto the incoming conversation, not the outgoing one' do
+    saved = runner.conversation
+    run_turn('What is 2 + 2?')
+    runner.new_conversation
+    fresh = runner.conversation
+    queue = broadcaster.subscribe
+
+    assert_equal :loaded, runner.load_conversation(saved)
+
+    stamps = drain_frames(queue).map { |f| JSON.parse(f[/data: (.*)/, 1])['conversation'] }
+    refute_empty stamps
+    assert_equal [saved.id], stamps.uniq
+    refute_includes stamps, fresh.id
+  end
+
+  it 'reports an unreadable conversation as nil rather than raising' do
+    log = capture_log { assert_nil PikuriWeb::HistoryReplay.snapshot(@root / 'nope') }
+    assert_includes log, 'previewing conversation'
+  end
+
   it 'clears the live conversation and keeps the saved one readable' do
     saved = runner.conversation
     run_turn('What is 2 + 2?')

@@ -7,8 +7,15 @@
 
      `data-theme` carries the resolved `theme` cookie so the first paint
      is already in the right palette; the toggle's label names the theme
-     it switches *to*, and app.js keeps both in sync after a click. -->
-<html lang="en" data-theme="<%= theme %>">
+     it switches *to*, and app.js keeps both in sync after a click.
+
+     `data-conversation` names what this tab is showing and `data-live` says
+     whether the agent is on it. SSE is one undivided feed in this version, so
+     app.js compares the id on each frame against `data-conversation` and drops
+     the rest — otherwise a tab reading an old conversation would have the live
+     one's deltas land in it. -->
+<html lang="en" data-theme="<%= theme %>"
+      data-conversation="<%= conversation %>" data-live="<%= live %>">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,20 +35,25 @@
     </main>
 
     <form id="composer">
+      <input type="hidden" name="conversation" value="<%= conversation %>">
       <textarea name="prompt" id="prompt" rows="3" autofocus
-                placeholder="Message… (Enter to send, Shift+Enter for newline; sending mid-turn injects)"></textarea>
+                placeholder="<%= live ? 'Message… (Enter to send, Shift+Enter for newline; sending mid-turn injects)' : 'Message… (sending resumes this conversation)' %>"></textarea>
       <div class="composer-buttons">
         <button type="submit" id="send">Send</button>
-        <button type="button" id="cancel" <%= 'hidden' unless status[:busy] %>>Cancel</button>
+        <button type="button" id="cancel" <%= 'hidden' unless live && status[:busy] %>>Cancel</button>
       </div>
     </form>
 
     <footer id="status-bar">
-      <span id="status-state"><%= status[:busy] ? 'busy' : 'idle' %></span>
-      <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
-      <span id="status-tokens"><%= status[:tokens] %></span>
+      <span id="status-state"><%=
+        if live then status[:busy] ? 'busy' : 'idle'
+        else status[:busy] ? 'busy elsewhere' : 'not live'
+        end
+      %></span>
+      <span id="status-pending"><%= live && status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
+      <span id="status-tokens"><%= live ? status[:tokens] : '' %></span>
       <button type="button" id="new-conversation" class="status-button"
-              title="Save this conversation and start a fresh one"
+              title="Save the live conversation and start a fresh one"
               <%= 'disabled' if status[:busy] %>>+ new conversation</button>
       <button type="button" id="theme-toggle" class="status-button"
               title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"

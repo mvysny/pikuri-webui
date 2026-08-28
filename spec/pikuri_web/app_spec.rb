@@ -124,21 +124,21 @@ RSpec.describe PikuriWeb::App do
 
     it 'defaults to the dark theme with no cookie' do
       get '/'
-      assert_includes last_response.body, '<html lang="en" data-theme="dark">'
+      assert_includes last_response.body, 'data-theme="dark"'
       assert_includes last_response.body, '☀ light'
     end
 
     it 'honours a light theme cookie' do
       set_cookie 'theme=light'
       get '/'
-      assert_includes last_response.body, '<html lang="en" data-theme="light">'
+      assert_includes last_response.body, 'data-theme="light"'
       assert_includes last_response.body, '☾ dark'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do
       set_cookie 'theme=neon'
       get '/'
-      assert_includes last_response.body, '<html lang="en" data-theme="dark">'
+      assert_includes last_response.body, 'data-theme="dark"'
     end
 
     it 'offers the new-conversation button, enabled while idle' do
@@ -171,51 +171,56 @@ RSpec.describe PikuriWeb::App do
       assert_includes last_response.body, 'just now'
     end
 
-    it 'marks the live conversation current' do
+    it 'marks the row this tab has open, and the live one, separately' do
       conversations.list = saved
       get '/'
-      assert_includes last_response.body, 'class="conversation current"'
-      assert_includes last_response.body, 'aria-current="true"'
-      assert_includes last_response.body, 'class="conversation"'
+      # On GET / the two coincide: the tab is looking at the live conversation.
+      assert_includes last_response.body, 'class="conversation current live"'
+      assert_includes last_response.body, 'aria-current="page"'
       assert_includes last_response.body, 'aria-current="false"'
     end
 
-    it 'posts each row rather than linking it, so a prefetch cannot switch conversations' do
+    it 'links each row, because opening a conversation is a side-effect-free GET' do
       conversations.list = saved
       get '/'
-      assert_includes last_response.body,
-                      '<form method="post" action="/conversations/2026-08-26T09-14-02Z-b1c7/select">'
-      refute_includes last_response.body, '<a href="/conversations'
+      assert_includes last_response.body, 'href="/c/2026-08-26T09-14-02Z-b1c7"'
+      refute_includes last_response.body, '/select'
     end
 
-    it 'aims delete at its own route from inside the select form, not a nested one' do
+    it 'keeps delete a POST, in its own form beside the link' do
       conversations.list = saved
       get '/'
       assert_includes last_response.body,
-                      'formaction="/conversations/2026-08-26T09-14-02Z-b1c7/delete"'
-      # One form per row, holding both buttons.
-      assert_equal 2, last_response.body.scan('<form method="post"').size
+                      '<form method="post" action="/conversations/2026-08-26T09-14-02Z-b1c7/delete">'
       assert_equal 2, last_response.body.scan('class="conversation-delete"').size
     end
 
-    it 'disables the rows while a turn is in flight' do
+    it 'keeps the rows clickable mid-turn but still refuses delete' do
       conversations.list = saved
       runner.busy = true
       get '/'
-      # Both buttons on both rows: a delete mid-turn would be refused anyway.
-      assert_equal 4, last_response.body.scan('title="the agent is mid-turn"').size
+      # Reading another conversation while this one works is the point, so only
+      # the delete buttons are disabled.
+      assert_equal 2, last_response.body.scan('title="the agent is mid-turn"').size
+      refute_includes last_response.body, '<a href="/c/2026-08-26T09-14-02Z-b1c7"\n       class="conversation" disabled'
+    end
+
+    it 'marks the live row busy while a turn is in flight' do
+      runner.busy = true
+      get '/'
+      assert_includes last_response.body, 'class="conversation-busy"'
     end
 
     it 'lists the live conversation before its first save, when the store has no row for it' do
       get '/'
       assert_includes last_response.body, 'the live one'
-      assert_includes last_response.body, 'aria-current="true"'
+      assert_includes last_response.body, 'aria-current="page"'
     end
 
     it 'does not list the live conversation twice once it is saved' do
       conversations.list = saved
       get '/'
-      assert_equal 1, last_response.body.scan('aria-current="true"').size
+      assert_equal 1, last_response.body.scan('aria-current="page"').size
     end
 
     it 'labels a conversation it cannot read instead of dating it' do
@@ -284,17 +289,50 @@ RSpec.describe PikuriWeb::App do
     end
   end
 
+  context 'GET /c/:id' do
+    let(:stored) { ConversationRows.row('2026-08-26T09-14-02Z-b1c7', 'yesterday\'s') }
+
+    it 'serves the live conversation from the transcript, marked live' do
+      get "/c/#{runner.conversation.id}"
+      assert_equal 200, last_response.status
+      assert_includes last_response.body, 'data-live="true"'
+      assert_includes last_response.body, %(data-conversation="#{runner.conversation.id}")
+    end
+
+    it 'refuses an id that is not a listed conversation' do
+      conversations.list = [stored]
+      get '/c/..%2F..%2Fetc'
+      assert_equal 404, last_response.status
+    end
+
+    # The fake store points every row at a folder that does not exist, which is
+    # the same shape as a half-written save: unreadable, and the tab is told so
+    # rather than shown a blank conversation.
+    it 'reports a conversation whose history cannot be read' do
+      conversations.list = [stored]
+      capture_log { get '/c/2026-08-26T09-14-02Z-b1c7' }
+      assert_equal 422, last_response.status
+    end
+
+    it 'leaves viewing free while a turn is in flight' do
+      runner.busy = true
+      get "/c/#{runner.conversation.id}"
+      assert_equal 200, last_response.status
+    end
+  end
+
   context 'POST /conversations' do
-    it 'forwards to the runner and returns 204' do
+    it 'forwards to the runner and answers with the fresh id to navigate to' do
       post '/conversations'
-      assert_equal 204, last_response.status
+      assert_equal 200, last_response.status
+      assert_equal runner.conversation.id, last_response.body
       assert_equal 1, runner.new_conversations
     end
 
-    it 'returns 204 for an already-empty conversation' do
+    it 'answers with the id for an already-empty conversation' do
       runner.new_conversation_outcome = :empty
       post '/conversations'
-      assert_equal 204, last_response.status
+      assert_equal 200, last_response.status
     end
 
     it 'returns 409 when a turn is in flight' do
@@ -304,46 +342,54 @@ RSpec.describe PikuriWeb::App do
     end
   end
 
-  context 'POST /conversations/:id/select' do
+  # Selecting a conversation is no longer a route of its own: sending into one
+  # the agent is not on is what makes it live, and carries the refusals the old
+  # POST /conversations/:id/select carried.
+  context 'POST /messages into another conversation' do
     let(:stored) { ConversationRows.row('2026-08-26T09-14-02Z-b1c7', 'yesterday\'s') }
 
     before { conversations.list = [stored] }
 
-    it 'hands the stored conversation to the runner and redirects a no-JS browser home' do
-      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
-      assert_equal 303, last_response.status
-      assert_equal 'http://example.org/', last_response.headers['Location']
+    it 'makes it live, then submits' do
+      post '/messages', prompt: 'carry on', conversation: '2026-08-26T09-14-02Z-b1c7'
+      assert_equal 204, last_response.status
       assert_equal [stored], runner.loaded
+      assert_equal ['carry on'], runner.submitted
     end
 
-    it 'accepts the live conversation, which is in the sidebar before it is on disk' do
-      post "/conversations/#{runner.conversation.id}/select"
-      assert_equal 303, last_response.status
-      assert_equal [runner.conversation], runner.loaded
+    it 'submits without a switch when the target is already live' do
+      runner.load_conversation_outcome = :current
+      post '/messages', prompt: 'more', conversation: runner.conversation.id
+      assert_equal 204, last_response.status
+      assert_equal ['more'], runner.submitted
+    end
+
+    it 'submits to the live conversation when no target is named' do
+      post '/messages', prompt: 'plain'
+      assert_equal 204, last_response.status
+      assert_empty runner.loaded
+      assert_equal ['plain'], runner.submitted
     end
 
     it 'refuses an id that is not a listed conversation' do
-      post '/conversations/..%2F..%2Fetc/select'
+      post '/messages', prompt: 'hi', conversation: '../../etc'
       assert_equal 404, last_response.status
       assert_empty runner.loaded
+      assert_empty runner.submitted
     end
 
-    it 'returns 409 when a turn is in flight' do
+    it 'returns 409 without submitting when a turn is in flight elsewhere' do
       runner.load_conversation_outcome = :busy
-      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      post '/messages', prompt: 'hi', conversation: '2026-08-26T09-14-02Z-b1c7'
       assert_equal 409, last_response.status
+      assert_empty runner.submitted
     end
 
     it 'returns 422 when the stored history could not be read' do
       runner.load_conversation_outcome = :failed
-      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
+      post '/messages', prompt: 'hi', conversation: '2026-08-26T09-14-02Z-b1c7'
       assert_equal 422, last_response.status
-    end
-
-    it 'redirects on a conversation that is already live' do
-      runner.load_conversation_outcome = :current
-      post '/conversations/2026-08-26T09-14-02Z-b1c7/select'
-      assert_equal 303, last_response.status
+      assert_empty runner.submitted
     end
   end
 

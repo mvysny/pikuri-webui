@@ -116,17 +116,20 @@ the alternatives that were rejected, live one entry per slug in
   own tool set and its own trifecta report.
   See `D_chat_only_entry_point`.
 
-- **One *live* conversation, loopback by default — and single-user for
-  good.** One agent, one transcript, in-process; the sidebar switches
-  which stored conversation is live and every tab follows. No sessions,
-  no auth, no accounts: a second person runs their own process under
-  their own OS account. `--bind` defaults to 127.0.0.1 and anything else
-  is the operator's risk. See `D_single_shared_conversation`.
-  **Direction change, not yet built:** which conversation a tab views is
-  *view* state and belongs in the URL, not server state announced to
-  every tab, and a conversation will own its own agent. Don't add code
-  that deepens the every-tab-follows assumption — see
-  `ideas/per-conversation-agents.md`.
+- **One *live* agent, but every browser browses freely — and single-user
+  for good.** One agent and one live transcript, in-process. Which
+  conversation a *tab* views is that tab's own state and lives in the URL
+  (`GET /c/:id`); a conversation the agent is not on is replayed from its
+  history per request. Sending is what makes a conversation live, and it
+  is the only thing that refuses mid-turn. No sessions, no auth, no
+  accounts: a second person runs their own process under their own OS
+  account. `--bind` defaults to 127.0.0.1 and anything else is the
+  operator's risk. See `D_single_shared_conversation`.
+  **Still to come:** an agent per conversation, so a turn can run while
+  you read something else — `ideas/per-conversation-agents.md`. Until
+  then SSE is one undivided feed and every frame carries the live
+  conversation's id for the client to filter on; don't add state that
+  assumes one transcript is the only one.
 
 - **Theme is a presentational cookie, not transcript state.** Nine
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
@@ -162,10 +165,11 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `PikuriWeb.logger`.
 - `lib/pikuri_web/version.rb` — `PikuriWeb::VERSION`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
-  `GET /` (page shell), `GET /events` (SSE), `POST /messages`,
+  `GET /` (the live conversation), `GET /c/:id` (any conversation),
+  `GET /events` (SSE), `POST /messages` (selects its target first),
   `POST /cancel`, `GET`/`POST /conversations`,
-  `POST /conversations/:id/select`, `POST /conversations/:id/delete`.
-  Collaborators injected via class-level settings.
+  `POST /conversations/:id/delete`. Collaborators injected via
+  class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
@@ -174,7 +178,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   live conversation (saves at turn end, loads or deletes one on request);
   broadcasts status.
 - `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
-  saved `Agent::History` back into the events that produced it.
+  saved `Agent::History` back into the events that produced it; also
+  `snapshot`, the same replay into throwaway blocks for viewing.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
   the conversations folder: mints ids, owns `meta.json`, lists what is
   saved, deletes a folder. Pikuri-free.

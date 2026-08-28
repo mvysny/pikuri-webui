@@ -7,7 +7,15 @@ RSpec.describe PikuriWeb::Broadcaster do
     it 'formats an SSE frame with event type and JSON data' do
       queue = broadcaster.subscribe
       broadcaster.broadcast(event: :block, data: { id: 'b1', html: '<p>hi</p>' })
-      assert_equal ["event: block\ndata: {\"id\":\"b1\",\"html\":\"<p>hi</p>\"}\n\n"], drain_frames(queue)
+      assert_equal ["event: block\ndata: {\"id\":\"b1\",\"html\":\"<p>hi</p>\",\"conversation\":null}\n\n"],
+                   drain_frames(queue)
+    end
+
+    it 'stamps the live conversation onto every frame, so a tab viewing another can drop it' do
+      broadcaster.conversation_id = 'c-42'
+      queue = broadcaster.subscribe
+      broadcaster.broadcast(event: :reset, data: {})
+      assert_equal ["event: reset\ndata: {\"conversation\":\"c-42\"}\n\n"], drain_frames(queue)
     end
 
     it 'fans out to every subscriber' do

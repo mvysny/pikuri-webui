@@ -17,6 +17,23 @@ module PikuriWeb
       @mutex = Mutex.new
       @queues = []
       @closed = false
+      @conversation_id = nil
+    end
+
+    # Stamp every outgoing frame with the id of the conversation it belongs to,
+    # so a tab viewing a different one can drop it (public/app.js). Set by
+    # {AgentRunner} whenever the live conversation changes.
+    #
+    # Interim, and deliberately crude: one live conversation means one id, so
+    # the "topic" is a field the client filters on rather than a subscription
+    # the server honours. Per-conversation +subscribe+ is
+    # `ideas/per-conversation-agents.md` stage 2, and it deletes this.
+    #
+    # @param id [String, nil]
+    # @return [void]
+    def conversation_id=(id)
+      @mutex.synchronize { @conversation_id = id }
+      nil
     end
 
     # Register a new client. The caller owns the returned queue's drain
@@ -45,10 +62,13 @@ module PikuriWeb
     # @param event [String, Symbol] SSE event type (the browser-side
     #   +addEventListener+ name): +block+, +remove+, +reset+, +status+,
     #   +conversations+
-    # @param data [Hash] JSON-serialized into the frame's +data:+ line
+    # @param data [Hash] JSON-serialized into the frame's +data:+ line, plus a
+    #   +conversation+ key naming the live conversation (see
+    #   {#conversation_id=})
     # @return [void]
     def broadcast(event:, data:)
-      frame = "event: #{event}\ndata: #{JSON.generate(data)}\n\n"
+      live = @mutex.synchronize { @conversation_id }
+      frame = "event: #{event}\ndata: #{JSON.generate(data.merge(conversation: live))}\n\n"
       each_queue { |q| q.push(frame) }
     end
 

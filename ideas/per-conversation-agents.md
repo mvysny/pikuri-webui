@@ -93,21 +93,30 @@ Two simplifications fell out that are worth knowing about before the next stage:
 One gotcha the next reader will hit: `submit` must post **outside** its mutex. `ImmediateExecutor`
 runs the job on the calling thread, and the turn's ensure re-takes that same non-reentrant mutex.
 
-### Stage 1 — decouple *viewing* from *liveness* (small)
+### Stage 1 — decouple *viewing* from *liveness* — **done 2026-08-28**
 
-Keep exactly one live agent. Make `/c/<id>` a real URL that any tab can sit on, with the transcript
-rebuilt from history for a conversation that is not live. What changes is only *which* operation
-refuses while busy: today `POST /conversations/:id/select` 409s; instead, **viewing is always free,
-and submitting into a non-live conversation is what starts a turn** (making it live) or 409s if
-another conversation is mid-turn.
+`GET /c/:id` serves any conversation; the live one from {Transcript}, any other replayed per request
+by `HistoryReplay.snapshot`. Sending is what makes a conversation live and carries the mid-turn
+refusal, so `POST /conversations/:id/select` is gone. Rows are links, which took the
+`Q_get_side_effects` prefetch hazard and the un-button-a-button CSS with them. `POST /conversations`
+now answers with the fresh id, because a new conversation has an id the asking tab is not on and it
+has to navigate.
 
-This delivers "every browser browses freely" on its own. It is background-turns' old objection B —
-two panes where only one accepts input — but that objection is much weaker once the user *navigated*
-there deliberately instead of having a pane forced on them.
+SSE is still one undivided feed, so **every frame is stamped with the live conversation's id and
+app.js drops what is not its own.** Crude on purpose; stage 2's per-conversation `subscribe` deletes
+it.
 
-Also collects the side benefit the old file noted: sidebar rows become honest links instead of
-`<form method="post">` submit buttons, so the `Q_get_side_effects` prefetch hazard and the ~10 lines
-of CSS that un-button a button both evaporate.
+Two things worth carrying into stage 2:
+
+- **Ordering bug, found in a browser and not by the specs.** `AgentRunner` re-pointed `@conversation`
+  *after* `load_history!` emitted its `Reset` and after the replayed blocks, so a switch stamped its
+  frames with the **outgoing** conversation — dropped by the very tab that asked for the switch, and
+  applied by the tabs that did not. Fixed by persisting the outgoing conversation, then re-pointing,
+  then emitting; all three of `switch_conversation` / `switch_to` / `discard` now follow that order,
+  and `conversation_flow_spec` has a regression test that fails without it. **Any future code that
+  emits during a switch has to sit on the right side of that re-point.**
+- **`current` and `live` are now different marks** in the sidebar, and the CSS carries both. That
+  distinction is what stage 2's "busy elsewhere" affordance builds on.
 
 ### Stage 2 — a conversation owns its agent (the expensive one)
 

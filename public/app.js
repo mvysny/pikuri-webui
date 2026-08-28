@@ -4,6 +4,20 @@
 // page by block id and keeps the status bar in sync.
 'use strict';
 
+// Which conversation this tab has open, and whether the agent is on it.
+// `viewing` is fixed for the life of the page (it came from the URL); `live`
+// moves, because another tab can send into a different conversation and take
+// the agent with it — every frame names the live conversation, so each one
+// re-answers the question.
+const viewing = document.documentElement.dataset.conversation;
+let live = document.documentElement.dataset.live === 'true';
+
+// Transcript frames belong to whatever conversation the agent is on. Applying
+// one to a tab reading a different conversation would interleave two
+// transcripts, so drop them. (Server-side per-conversation subscriptions are
+// what replace this; until then the fan-out really is a broadcast.)
+const mine = (data) => data.conversation === viewing;
+
 const transcript = document.getElementById('transcript');
 const sidebar = document.getElementById('sidebar');
 const composer = document.getElementById('composer');
@@ -35,18 +49,19 @@ const upsertBlock = ({ id, kind, html }) => {
   if (stick) transcript.scrollTop = transcript.scrollHeight;
 };
 
-const updateStatus = ({ busy, pending, tokens }) => {
-  statusState.textContent = busy ? 'busy' : 'idle';
-  statusPending.textContent = pending > 0 ? `${pending} queued` : '';
-  statusTokens.textContent = tokens;
-  cancelBtn.hidden = !busy;
-  // The server refuses a switch mid-turn (409); matching that here keeps the
-  // controls from looking broken.
+const updateStatus = ({ busy, pending, tokens, conversation }) => {
+  live = conversation === viewing;
+  statusState.textContent = live ? (busy ? 'busy' : 'idle') : (busy ? 'busy elsewhere' : 'not live');
+  statusPending.textContent = live && pending > 0 ? `${pending} queued` : '';
+  statusTokens.textContent = live ? tokens : '';
+  // Cancel would stop whichever turn is running, which from a tab reading
+  // another conversation is not the one on screen.
+  cancelBtn.hidden = !busy || !live;
+  // The server refuses a new conversation mid-turn (409); matching that here
+  // keeps the control from looking broken. Rows stay clickable throughout —
+  // reading another conversation while this one works is the point — but
+  // delete is still refused.
   newBtn.disabled = busy;
-  sidebar.querySelectorAll('.conversation').forEach((row) => {
-    row.disabled = busy;
-    row.title = busy ? 'the agent is mid-turn' : row.querySelector('.conversation-title').textContent;
-  });
   sidebar.querySelectorAll('.conversation-delete').forEach((btn) => {
     btn.disabled = busy;
     btn.title = busy ? 'the agent is mid-turn' : 'Delete this conversation';
@@ -55,24 +70,31 @@ const updateStatus = ({ busy, pending, tokens }) => {
 
 // The sidebar's list, re-rendered by the server. Every conversation change
 // funnels through here rather than reloading the page, which would cost each
-// tab its half-typed message.
+// tab its half-typed message. `viewing` rides along so the server can mark
+// which row this tab has open, which it cannot know otherwise.
 const refreshSidebar = () =>
-  fetch('/conversations')
+  fetch(`/conversations?viewing=${encodeURIComponent(viewing)}`)
     .then((r) => r.text())
     .then((html) => { sidebar.innerHTML = html; });
 
 const es = new EventSource('/events');
-es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
-es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
+const onFrame = (handler) => (e) => {
+  const data = JSON.parse(e.data);
+  if (mine(data)) handler(data);
+};
+es.addEventListener('block', onFrame(upsertBlock));
+es.addEventListener('remove', onFrame(({ id }) => document.getElementById(id)?.remove()));
+// Status is not filtered: a frame naming a *different* live conversation is
+// precisely how this tab learns it is no longer the live one.
 es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
-// A new conversation started: the server's transcript is empty, so ours is
-// too. Emptying in place rather than reloading keeps a half-typed message.
-// The sidebar changed as well — a row for the conversation just saved, and
-// the highlight moved — so pull the server's markup for it back in.
-es.addEventListener('reset', () => {
+// The live conversation was cleared or swapped out from under this tab, and it
+// is still ours — so empty in place rather than reloading, which keeps a
+// half-typed message. The sidebar changed too (a row for what was just saved,
+// and the live marker moved), so pull the server's markup back in.
+es.addEventListener('reset', onFrame(() => {
   transcript.replaceChildren();
   refreshSidebar();
-});
+}));
 // A conversation was deleted somewhere — this tab or another. Nothing about
 // the transcript changed unless a `reset` said so, only the list.
 es.addEventListener('conversations', refreshSidebar);
@@ -85,10 +107,18 @@ es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true
 // tool boundary), so "type while it works" is a feature, not an error.
 composer.addEventListener('submit', (e) => {
   e.preventDefault();
-  if (!promptEl.value.trim()) return;
-  fetch('/messages', { method: 'POST', body: new FormData(composer) });
+  const text = promptEl.value;
+  if (!text.trim()) return;
+  const body = new FormData(composer); // before clearing: it reads the textarea
   promptEl.value = '';
   promptEl.focus();
+  fetch('/messages', { method: 'POST', body }).then((r) => {
+    if (r.ok) return;
+    // 409: a turn is running in another conversation, so this one cannot take
+    // the agent yet. Hand the text back instead of swallowing it.
+    promptEl.value = text;
+    statusState.textContent = r.status === 409 ? 'busy elsewhere — not sent' : 'not sent';
+  });
 });
 
 promptEl.addEventListener('keydown', (e) => {
@@ -100,29 +130,36 @@ promptEl.addEventListener('keydown', (e) => {
 
 cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
 
-newBtn.addEventListener('click', () => fetch('/conversations', { method: 'POST' }));
+// The fresh conversation has an id this page is not showing, so follow it
+// rather than clearing in place. Other tabs stay put, on a conversation that
+// is now saved and no longer live — which is the wanted behaviour, not a
+// side effect.
+newBtn.addEventListener('click', () => {
+  fetch('/conversations', { method: 'POST' })
+    .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
+    .then((id) => { location.href = `/c/${encodeURIComponent(id)}`; })
+    .catch(() => {});
+});
 
-// Selecting or deleting a conversation. Delegated to the nav, so it survives
-// the sidebar being re-rendered from the server. `redirect: 'manual'` declines
-// the 303 the routes owe a no-JS browser: what redraws the page here is the
-// reset + block frames a switch pushes to every tab, this one included.
+// Deleting a conversation. Delegated to the nav so it survives the sidebar
+// being re-rendered from the server; `redirect: 'manual'` declines the 303 the
+// route owes a no-JS browser. Selecting needs nothing here any more — rows are
+// links, and the browser follows them.
 //
-// Which button was pressed decides where it goes — `getAttribute` rather than
-// `.formAction`, whose getter falls back to the form's action (and to the
-// document URL) when the attribute is absent, so it cannot tell them apart.
 // Deletion is irreversible and there is no undo, hence the confirm.
 sidebar.addEventListener('submit', (e) => {
   e.preventDefault();
-  const deleteAction = e.submitter?.getAttribute('formaction');
-  if (!deleteAction) {
-    fetch(e.target.action, { method: 'POST', redirect: 'manual' });
-    return;
-  }
-  const title = e.target.querySelector('.conversation-title').textContent;
+  const row = e.target.closest('li');
+  const title = row.querySelector('.conversation-title').textContent;
   if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
-  // Refresh either way: on 404 this tab's list was the stale thing, and
-  // re-fetching is what heals it.
-  fetch(deleteAction, { method: 'POST', redirect: 'manual' }).then(refreshSidebar);
+  fetch(e.target.action, { method: 'POST', redirect: 'manual' }).then(() => {
+    // Deleting what this tab is reading leaves it on a page that no longer
+    // exists; the live conversation is the only safe place to land.
+    if (row.querySelector('.conversation').classList.contains('current')) location.href = '/';
+    // Refresh otherwise: on 404 this tab's list was the stale thing, and
+    // re-fetching is what heals it.
+    else refreshSidebar();
+  });
 });
 
 // Theme toggle. The cookie is the store — the server reads it back on
