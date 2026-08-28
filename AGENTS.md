@@ -116,12 +116,17 @@ the alternatives that were rejected, live one entry per slug in
   own tool set and its own trifecta report.
   See `D_chat_only_entry_point`.
 
-- **One *live* conversation, loopback by default.** One agent, one
-  transcript, in-process; the sidebar switches which stored conversation
-  is live and every tab follows. Which one is selected is server state
-  changed by a POST — never a per-tab or per-URL view. No sessions, no
-  auth; `--bind` defaults to 127.0.0.1 and anything else is the
-  operator's risk. See `D_single_shared_conversation`.
+- **One *live* conversation, loopback by default — and single-user for
+  good.** One agent, one transcript, in-process; the sidebar switches
+  which stored conversation is live and every tab follows. No sessions,
+  no auth, no accounts: a second person runs their own process under
+  their own OS account. `--bind` defaults to 127.0.0.1 and anything else
+  is the operator's risk. See `D_single_shared_conversation`.
+  **Direction change, not yet built:** which conversation a tab views is
+  *view* state and belongs in the URL, not server state announced to
+  every tab, and a conversation will own its own agent. Don't add code
+  that deepens the every-tab-follows assumption — see
+  `ideas/per-conversation-agents.md`.
 
 - **Theme is a presentational cookie, not transcript state.** Nine
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`

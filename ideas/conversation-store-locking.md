@@ -1,9 +1,13 @@
 # Give `ConversationStore` its own lock
 
-> **Check `ideas/event-queue.md` first — that idea eats this one.** Locks *or* a single event-loop
-> thread, not both: a lock here is dead weight once one thread does all the mutating. Do this only if
-> the queue is far off. The `row` TOCTOU fix below is the exception — it is about a *second process*
-> and is worth taking either way.
+> **Read `ideas/per-conversation-agents.md` and `ideas/event-queue.md` first.** The old note here
+> said a queue eats this idea — a lock is dead weight once one thread does all the mutating — and
+> that was true while the mutating thread was *one*. It no longer is: a conversation now owns its
+> agent, so the folder has N writers and no per-conversation owner can see them all. What this idea
+> asks for is therefore back on, but the *reason* has moved: not "make the store thread-safe against
+> request threads" but "the store is the one genuinely global thing left, so it has to own its own
+> consistency". The `row` TOCTOU fix below survives every version of this — it is about a *second
+> process*.
 
 Today the conversations folder is kept consistent by a *discipline*, not by the store: every write
 goes through `AgentRunner`'s `@mutex` (`persist`, which calls both `history.save(dir)` and
@@ -20,10 +24,10 @@ coming:
   from the route — and the single-writer discipline is gone. v1 routes it through
   `AgentRunner#delete_conversation` anyway (it has to, for the live case), so the discipline holds by
   choice rather than by construction. That is the definition of accidental.
-- **Multiple agents.** `ideas/background-turns.md` still says one live turn at a time and explicitly
-  refuses a second concurrent one — so this is a step past v2, not v2. But the moment there are N
-  agents there are N writers, and "one serialized writer in `AgentRunner`" stops being true in a way
-  no reader of `ConversationStore` would ever guess.
+- **Multiple agents — this trigger has now fired.** `ideas/per-conversation-agents.md` settles that a
+  conversation owns its own agent, which means N writers to the folder, and "one serialized writer in
+  `AgentRunner`" stops being true in a way no reader of `ConversationStore` would ever guess. It is no
+  longer a step past some later version: it is a precondition of the one that is coming.
 
 ## Shape: `Monitor`, stdlib, not a gem
 

@@ -665,9 +665,21 @@ change to how a block renders does not retroactively re-render history.
 sidebar of stored conversations shipped. "One conversation" now means one
 **live** conversation — the browser can switch which stored conversation
 that is, and every tab follows, because there is still exactly one agent
-and one transcript. The rejection below is untouched: it was about a
-conversation *per session*, which is multi-user support in disguise, and
-none of what shipped moves toward it.
+and one transcript.
+
+**Superseded in direction 2026-08-28, still accurate as shipped.** The
+single-user, no-auth, loopback half stands and is now settled rather than
+provisional: a second person runs their own process under their own OS
+account. What is repealed is the **selection** clause below — that which
+conversation a tab views is server state announced to every tab. It is
+view state belonging to the tab, and it goes in the URL. The rejection
+paragraph is where the error actually sits: it treats a per-tab *view* and
+a per-user *session* as the same thing, and Slack is the refutation —
+channel selection lives in its URL, the session exists only for auth. The
+premise the clause reasons from ("one live agent") is itself scheduled for
+replacement by one agent per conversation. Direction, staging and the
+hazards it opens: `ideas/per-conversation-agents.md`. Nothing here has
+changed in code yet; amend this entry, don't trust it as intent.
 
 **Context.** A web front-end invites the assumption that it is
 multi-user. This one is the TUI's single-conversation model rendered in a
