@@ -10,9 +10,9 @@ module PikuriWeb
   #
   # One block per logical unit, mirroring the TUI's region-per-block model:
   # user turn, streamed thinking, streamed assistant answer, tool call,
-  # tool result, notice. Streaming updates rewrite a block in place
-  # ({#update}); the TUI's "wipe an unfinished preview" path becomes
-  # {#remove}.
+  # tool result, notice. A streaming update replaces a block, keeping its id
+  # and position ({#update}); the TUI's "wipe an unfinished preview" path
+  # becomes {#remove}.
   #
   # Pikuri-free by design (see the seam rule in AGENTS.md): this class
   # speaks only ids, kinds and HTML strings. Thread-safe — written from
@@ -23,7 +23,12 @@ module PikuriWeb
     # +:thinking+, +:tool_call+, +:tool_result+, +:notice+, +:error+);
     # +html+ is trusted pre-rendered markup (escaped or kramdown output —
     # escaping happened upstream in SseListener / MarkdownRenderer).
-    Block = Struct.new(:id, :kind, :html, keyword_init: true)
+    #
+    # +Data+, so a block handed out by {#to_a} cannot be rewritten under the
+    # reader that holds it: {#update} replaces the element instead of mutating
+    # it. A mutable Struct made the snapshot a copy of the *list* only, which
+    # left a request thread rendering the page able to read a block mid-delta.
+    Block = Data.define(:id, :kind, :html)
 
     def initialize
       @mutex = Mutex.new
@@ -46,17 +51,17 @@ module PikuriWeb
       end
     end
 
-    # Rewrite an existing block's content in place (the streaming-delta
-    # path). Unknown ids are ignored — the block may have been wiped by a
-    # concurrent event; the stale update is harmless either way.
+    # Replace an existing block's content, keeping its id and position (the
+    # streaming-delta path). Unknown ids are ignored — the block may have been
+    # wiped by a concurrent event; the stale update is harmless either way.
     #
     # @param id [String]
     # @param html [String]
     # @return [void]
     def update(id, html)
       @mutex.synchronize do
-        block = @blocks.find { |b| b.id == id }
-        block&.html = html
+        index = @blocks.index { |b| b.id == id }
+        @blocks[index] = @blocks[index].with(html: html) if index
       end
       nil
     end
@@ -83,9 +88,9 @@ module PikuriWeb
       nil
     end
 
-    # @return [Array<Block>] snapshot copy, in order; never shares state
-    #   with the internal list (the blocks themselves are not deep-copied —
-    #   treat them as read-only)
+    # @return [Array<Block>] snapshot, in order — a consistent one: the list is
+    #   copied and the blocks in it are immutable, so a caller can render it
+    #   while a turn streams into the transcript behind them
     def to_a
       @mutex.synchronize { @blocks.dup }
     end

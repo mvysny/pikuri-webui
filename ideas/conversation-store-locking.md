@@ -1,13 +1,22 @@
 # Give `ConversationStore` its own lock
 
-> **Read `ideas/per-conversation-agents.md` and `ideas/event-queue.md` first.** The old note here
-> said a queue eats this idea — a lock is dead weight once one thread does all the mutating — and
-> that was true while the mutating thread was *one*. It no longer is: a conversation now owns its
-> agent, so the folder has N writers and no per-conversation owner can see them all. What this idea
-> asks for is therefore back on, but the *reason* has moved: not "make the store thread-safe against
-> request threads" but "the store is the one genuinely global thing left, so it has to own its own
-> consistency". The `row` TOCTOU fix below survives every version of this — it is about a *second
-> process*.
+> **Read `ideas/per-conversation-agents.md` and `DECISIONS.md` `D_no_event_queue` first.** The
+> oldest note here said an event queue eats this idea — a lock is dead weight once one thread does
+> all the mutating. That queue is now decided against, so this idea is on its own merits.
+>
+> **But check the premise before acting on it.** The middle version of this note argued the trigger
+> had fired: a conversation owns its agent, so the folder has N writers. True, and weaker than it
+> sounds — those writers touch *disjoint subdirectories*. `write_meta` only ever writes
+> `conversation.dir/meta.json`, through a sibling temp file and a rename inside that same directory;
+> the shared root is created once in the constructor and otherwise only enumerated; and one
+> conversation admits one turn at a time, so a single directory never has two writers. That audit is
+> in `D_serial_turn_executor`, and it is why `--turns > 1` shipped without this lock.
+>
+> What is left is the honest, smaller case: the store's consistency rests on a *discipline* nobody
+> states, and its rdoc's "Thread-safe: stateless…" is a claim about the object that reads as a claim
+> about the folder. Worth fixing for legibility. Not urgent for correctness.
+>
+> The `row` TOCTOU fix below survives every version of this — it is about a *second process*.
 
 Today the conversations folder is kept consistent by a *discipline*, not by the store: every write
 goes through `AgentRunner`'s `@mutex` (`persist`, which calls both `history.save(dir)` and

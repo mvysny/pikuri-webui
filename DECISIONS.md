@@ -84,6 +84,167 @@ design or the invariant.
 
 ---
 
+## D_no_event_queue — No owner thread: state is partitioned per conversation, browser state stays in the browser, and anything genuinely shared gets *one global* mechanism (2026-08-28)
+
+**Status:** Accepted. Nothing to ship: this is a decision *not* to build
+the owner thread that was on the roadmap. The idea file that argued for it
+graduated into this entry.
+
+**Context.** The standing plan was to give all mutable state a single
+owner thread, Tuile-style: every other thread posts a command, no locks,
+because one thread touches the state. The complaint driving it was real —
+`Transcript`, `Broadcaster` and `AgentRunner` each held their own lock, and
+cross-object consistency rested on a discipline nothing enforced. The idea
+file names three options: **(a)** one lock per object, today's shape;
+**(b)** one coarse lock over the whole state graph, Vaadin minus the
+session axis; **(c)** one owner thread plus a queue, Tuile.
+
+By the time the question came back, `D_conversation_owns_agent` had
+shipped, and it had already answered most of it. The exhibits (b) and (c)
+existed to fix were audited one by one and had gone:
+
+- **The `SseListener` unguarded per-turn state.** It was safe only by an
+  argument spanning three classes, and `AgentRunner#load_conversation` held
+  it. That method no longer exists: a runner *is* its conversation, one
+  listener per runner, and `#restore!` runs inside the registry's monitor
+  before the runner is published. The argument is now "one conversation,
+  one writer".
+- **The `conversation_rows` tear.** `ConversationRegistry#rows` reads the
+  listing and the busy flags inside one monitor. One consistent answer.
+- **The refusal routes needing request/reply with a bounded wait.** The
+  audit assumed three. `select` is gone with the live pointer, `POST
+  /conversations` refuses nothing, and only `delete`'s 409 is left —
+  the queue's most expensive machinery, built for one route.
+- **The pool-1 precondition.** The file's closing claim was that an owner
+  thread is what unlocks more than one turn at a time. Checked and false;
+  see `D_serial_turn_executor`'s amendment.
+
+**Decision.** Three parts, and the third is the one with a future in it.
+
+**No owner thread, and no coarse lock either.** The partition does the
+work: one agent, one history, one transcript and one listener per
+conversation, and a conversation admits one turn at a time
+({AgentRunner#submit} injects rather than starting a second). Per-object
+locks survive where they guard genuinely shared things — the registry's
+monitor over the resident map, the broadcaster's over the subscriber list
+— and each now guards one small thing with a stated owner, which is not
+the failure the idea file opened by describing.
+
+**This is a single-user server, and each browser owns its own state.**
+No sessions, no auth, no accounts; a second person runs their own process
+under their own OS account. What a tab holds — an unsent draft, scroll
+position, the theme cookie, and *which* conversation it is reading — lives
+in the browser and in the URL. Two tabs may read different conversations,
+or the same one, and neither disturbs the other. The server holds the
+conversations; the browser holds the view of them.
+
+**If server state ever does become genuinely shared, it gets one global
+mechanism — a single event queue, or a single lock — and never a
+per-session one.** Stated now because the tempting wrong answer is
+specific and has a famous precedent. Vaadin partitions its lock per
+session because a session there owns a whole component tree; here a
+session owns nothing, so a per-session lock would guard the empty set
+while adding a session concept this app has deliberately refused. The
+`Broadcaster` stays outside whatever is built, in either shape: it is a
+sink, its lock guards the subscriber list that request threads and the
+`:state, :stop` hook touch, and folding it in would put a new tab's
+subscribe behind a running turn and the shutdown path behind a wedged one
+— the exact parked-thread hazard `D_shutdown_on_state_stop` prevents.
+
+**Why there is no guidance to crib, and what the real precedents are.**
+Worth recording, because the absence is itself the finding. **Sinatra
+offers nothing**: it is a routing DSL over Rack with no concurrency model
+and no server-side state model — `session` is a signed cookie, so there is
+nothing to lock — and its only coarse lock is `Rack::Lock`, one mutex
+around the whole app, which exists to run non-thread-safe apps under
+threaded servers and is regarded as a throughput disaster. **Mainstream
+Rack/Rails practice is to not have this problem**: stateless processes,
+shared mutable state in Postgres or Redis, the database's transactions
+doing the locking. **So this app is the outlier**, which is why the
+folklore is missing: a live in-memory object graph plus a worker thread is
+structurally a desktop app that speaks HTTP, and its precedents are Tuile,
+Swing and Vaadin rather than Rails. That is also why "one global queue" and
+"one global lock" are the same decision wearing different clothes —
+Vaadin's `UI.access()` *is* this design, a background thread posting a
+command instead of touching the tree, with a lock as the enforcement
+mechanism where Tuile uses a dedicated thread. What does not transfer from
+Vaadin is the session axis; what does is the *coarseness*.
+
+**Rejected: build it anyway, because the current model is past
+comfortable.** The honest form of the pro-queue case: it was a good
+argument, and true when written. It loses to having each of its exhibits
+checked and found already fixed. Rebuild the case from *live* defects if it
+comes back — the old examples are spent.
+
+**Rejected: option (b), one coarse lock, as a cheap step toward (c).** It
+was cheap, and mostly deletion. But it buys nothing once the state is
+partitioned — it would re-coarsen a graph that was just split, putting one
+conversation's kramdown pass behind another's — and its own file admits
+the lock must be released across the LLM call and across tool execution,
+which is the interleaving reasoning it was meant to remove.
+
+**Rejected: a per-session lock or a per-session queue, Vaadin-style.** See
+above; recorded as a rejection rather than an omission because it is what
+a reader who knows Vaadin will reach for first.
+
+**If one is ever built, these are the constraints** — the surviving half
+of the graduated idea file, kept because they were derived from this app's
+existing decisions and would otherwise be rediscovered by hitting them.
+
+- **The owner must never block.** Not on I/O, not on a socket, not on a
+  lock, and never on a reply from a thread that might be waiting on it.
+  Break this one and the design stops being "easy to reason about" and
+  becomes a deadlock hunt.
+- **The agent loop still gets its own thread** — it blocks on the LLM and
+  on tools for minutes, so running it on the owner freezes the server
+  (`D_worker_thread_agent_loop`). The change is the *direction*: it posts
+  events rather than calling the listener stack inline.
+- **Per-connection SSE queues stay.** The owner must never write to a
+  socket; one slow client would stall every tab. Owner → per-connection
+  queue → parked writer thread is already {Broadcaster}'s shape, and it is
+  already right.
+- **Every reply path gets a bounded wait and a 503.** A request thread
+  blocking forever on a wedged owner exhausts Puma's pool and takes the
+  whole server down instead of one route. Reads can escape this entirely
+  by publishing an immutable snapshot instead of replying — the trick
+  {Transcript} already uses.
+- **Backpressure has asymmetric answers.** Blocking a *request* thread on a
+  full queue is fine; blocking the *agent* thread stalls a turn; blocking
+  Puma's `:state, :stop` hook recreates the exact parked-thread bug
+  `D_shutdown_on_state_stop` exists to prevent. So: unbounded, or bounded
+  with a documented drop policy for the producers that cannot block.
+- **Shutdown is part of the design.** Close the owner from the same
+  `:state, :stop` hook that closes the broadcaster, before Puma's unbounded
+  graceful wait. Nothing in the exit path may rely on `at_exit`.
+- **Posted commands should be frozen** — an unfrozen object crossing the
+  boundary is shared mutable state smuggled past the model.
+- **Measure where rendering runs before committing.**
+  `D_rerender_and_replace` re-renders the whole accumulated message through
+  kramdown per delta at 15 fps; on the owner that competes with `POST
+  /cancel` for responsiveness, and a 50 KB message may not be free. The
+  escape hatch is that the owner owns *mutation*, not rendering: markdown →
+  HTML is a pure function of the accumulated source, so it can stay on the
+  agent thread and post the finished string.
+- **Build it on `concurrent-ruby`, or hand-roll on stdlib `Queue`** (~80
+  lines: `while (cmd = queue.pop)` plus a latch for replies). Tuile's API
+  is the right shape to crib — `post`, `submit(&block)`, `await_empty`,
+  `tick_fps`, `run`, `stop` — with one gap: nothing there returns a value
+  to the caller, which the refusing route needs. Do **not** take a
+  dependency on Tuile to get it; extracting its queue into a shared gem is
+  a pikuri-family conversation, logged in `../pikuri/DECISIONS.md`, not
+  decided here.
+
+**Consequences.**
+
+- **The triggers to reopen are named, and none has fired.** More server
+  state than the transcript and the resident runners — a search index,
+  generated titles, a cache to invalidate — or a second writer to one
+  conversation. Raising `--turns` is *not* one of them.
+- **The snapshot-read design was taken, minus the queue.** {Transcript}'s
+  `Block` is a `Data`, so `#update` replaces rather than mutates and a
+  caller rendering a snapshot cannot have a block rewritten underneath it.
+  That was the one piece of the idea that stood on its own.
+
 ## D_conversation_owns_agent — A conversation owns its agent; a tab owns which conversation it views (2026-08-28)
 
 **Status:** Accepted, shipped 2026-08-28. {ConversationRegistry} holds one
@@ -130,40 +291,76 @@ rule is the wrong lever.
   mutable state. The registry has a `Monitor`; the folder's own
   consistency is still open (`ideas/conversation-store-locking.md`).
 - `HistoryReplay.snapshot` became dead code and was removed.
-- Rendering a detached conversation is not optimized: with a serial
-  executor only one conversation renders at a time anyway, so the
-  accumulate-don't-render idea only pays at pool > 1.
+- Rendering a detached conversation is not optimized: the
+  accumulate-don't-render idea only pays at `--turns` > 1, which
+  `D_serial_turn_executor` now allows but does not default to.
 
-## D_serial_turn_executor — Turns run on one shared serial executor, and pool size 1 is correctness (2026-08-28)
+## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count (2026-08-28)
 
-**Status:** Accepted, shipped 2026-08-28 as
-`Concurrent::SingleThreadExecutor`, injected into every {AgentRunner}.
+**Status:** Accepted, shipped 2026-08-28 as a `Concurrent::FixedThreadPool`
+sized by `--turns` (default 1), injected into every {AgentRunner}.
 
 **Context.** A turn blocks on the LLM for minutes, so it cannot run on a
 Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations
 own their own agents, "how many turns at once" stops being implied by
 "how many agents".
 
-**Decision.** One process-wide serial executor. Its queue *is* the
-admission gate: submitting always succeeds, and a turn waiting for a busy
-executor reports `:queued` rather than being rejected. Cancelling a queued
-turn needs nothing from pikuri — the job checks a flag on entry and returns
-without starting.
+**Decision.** One process-wide executor shared by every runner. Its queue
+*is* the admission gate: submitting always succeeds, and a turn waiting for
+a free slot reports `:queued` rather than being rejected. Cancelling a
+queued turn needs nothing from pikuri — the job checks a flag on entry and
+returns without starting.
 
-**The pool size is not a tunable, and the type says so.** `executor:` is
-typed `Concurrent::SerialExecutorService`, which `SingleThreadExecutor` and
-`ImmediateExecutor` satisfy and `FixedThreadPool.new(2)` does not. An
-`Executor`'s contract is `submit(block) → result`: it holds no state by
+**The pool size caps concurrent turns, and nothing else depends on it.**
+It exists so turns do not outnumber the inference server's parallel slots
+— match it to llama.cpp's `--parallel`. It is an operator setting about
+load, with no correctness claim resting on it.
+
+**Rejected: pinning the pool at 1 as a correctness precondition.** The
+position this decision was first taken with, and the one to expect back —
+it is what the abstraction invites. The argument was that an `Executor`'s
+contract is `submit(block) → result`, a job runner that holds no state by
 design, so single-writer safety at pool 1 is a property of *that number*
-rather than of the abstraction, and it would evaporate silently when
-someone raised it. Two writers would mean two agents writing the
-conversations folder at once, and two agents inside pikuri's shared tool
-constants (`CALCULATOR` / `WEB_SCRAPE` / `FETCH`) at once.
+rather than of the abstraction, and would evaporate silently when someone
+raised it. The premise is correct and worth keeping: **never rest a
+correctness claim on a pool size.** The conclusion was not, because the
+executor was not carrying single-writer safety in the first place. Raising
+the pool was said to put two agents in two places at once — the
+conversations folder, and pikuri's shared tool constants. Both were audited
+when `--turns` was added, and neither holds.
 
-**Rejected: exposing pool size as a `--parallel` flag.** Proposed, then
-dropped: a dial labelled "how fast" that silently enables data races is a
-trap. Raising it needs the owner-thread work in `ideas/event-queue.md`
-first, and a thread-safety answer for the tool constants from pikuri.
+- **The folder.** Two turn-ends write two *disjoint subdirectories*.
+  {ConversationStore#write_meta} touches only `conversation.dir/meta.json`,
+  through a sibling temp file and a rename inside that same directory; the
+  shared root is created in the constructor and otherwise only enumerated.
+  A listing concurrent with a save was already correct by design — `#row`
+  takes a read's own `ENOENT` as the answer rather than checking first. And
+  one directory can never have two writers, because a conversation admits
+  one turn at a time.
+- **The tool constants.** pikuri answers this itself now: every tool
+  declares a sharing posture in its yardoc (its `DECISIONS.md`, "Every tool
+  declares one of four postures"). `CALCULATOR` is `P_stateless`, and says
+  outright to hand it to every agent in the VM; `FETCH` and `WEB_SCRAPE`
+  are `P_shared_benign`, sharing a process-wide URL cache whose race that
+  doc argues is harmless. `WebSearch` is built per wiring for its API keys,
+  but is `P_shared_locked` on class-level per-provider limiters, so a
+  per-agent instance would throttle no differently.
+
+Single-writer safety was never located in the pool size. It comes from the
+*partition*: per-conversation agents (`D_conversation_owns_agent`) plus a
+conversation admitting one turn at a time ({AgentRunner#submit} injects
+rather than starting a second). Two turns are two agents, two histories,
+two transcripts, two listeners and two disjoint folders. That property is
+independent of how many turns run at once, which is why `--turns` needed no
+owner thread to go with it (`D_no_event_queue`).
+
+**Rejected: deriving the pool size by probing the server's slot count.**
+llama.cpp reports `--parallel` on `/props`, so this is possible and would
+remove a way to misconfigure the pair. Not done: the probe would have to
+happen at boot, before any conversation exists, and would make an
+unreachable server fatal to *starting* rather than to the first turn.
+A flag the operator sets alongside the one they already set on the server
+is the cheaper half of that trade. Reopen if `--turns` is routinely wrong.
 
 **Rejected: hand-rolling the pool on stdlib `Queue`.** Ruby ships no
 executor, so the alternative is writing a pool, a shutdown protocol and a
@@ -173,7 +370,7 @@ backpressure policy by hand. `concurrent-ruby` is a new direct dependency
 
 **Rejected: treating the executor as the event queue.** They share a
 mechanism and have opposite contracts — this one exists *to* block, an
-owner thread must never block. See `ideas/event-queue.md`.
+owner thread must never block. See `D_no_event_queue`.
 
 **Consequences.**
 
@@ -185,6 +382,21 @@ owner thread must never block. See `ideas/event-queue.md`.
 - Specs inject `ImmediateExecutor` to run turns inline, which deleted one
   hand-rolled spin-waiter. The examples that are *about* the busy state
   keep a real thread.
+- **Nothing enforces the pool size, and nothing should need to.** The
+  `executor:` parameter is typed `Concurrent::ExecutorService`, which any
+  pool satisfies; what carries the intent is the boot script's paragraph
+  saying the number is a load cap. A future reader who finds a correctness
+  argument resting on it should distrust the argument, not tighten the
+  type.
+- **`--turns > 1` buys overlapping inference, not overlapping search.**
+  pikuri's search rate limiter holds its mutex across the HTTP call and is
+  scoped to the egress IP, so two agents searching at once serialize
+  anyway, and one tripping a provider's circuit breaker cools down the
+  other. Documented at the tool wiring; it is upstream's design
+  (`P_shared_locked`), not something to work around here.
+- **The accumulate-don't-render idea for detached conversations becomes
+  reachable**, since more than one conversation can now render at once —
+  see `D_conversation_owns_agent`'s consequences, which parked it at pool 1.
 
 ## D_delete_no_undo — Deleting a conversation is irreversible, and the live one rolls onto a fresh conversation (2026-08-28)
 
@@ -263,8 +475,8 @@ deleting.
   `ideas/multi-process-locking.md`.
 - Nothing new serializes the folder. What keeps a delete from racing the
   turn-end save is the runner refusing while busy, which is the same
-  discipline `ideas/conversation-store-locking.md` and
-  `ideas/event-queue.md` argue should stop being a discipline.
+  discipline `ideas/conversation-store-locking.md` argues should stop
+  being a discipline.
 - Deleting is the whole answer to retention: still no cap and no
   auto-prune. `rm -r` on the state folder remains a complete reset.
 

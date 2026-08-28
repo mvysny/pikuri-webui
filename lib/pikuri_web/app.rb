@@ -109,10 +109,10 @@ module PikuriWeb
     # (Interloper); the browser needs no answer beyond "accepted" — rendering
     # arrives over SSE.
     #
-    # Never refused. A turn submitted while a *different* conversation is
-    # working is queued on the shared executor and reported as such, rather
-    # than rejected: that wait is the whole reason the executor is the
-    # admission gate.
+    # Never refused. A turn submitted when the executor's slots are all taken
+    # by other conversations is queued and reported as such, rather than
+    # rejected: that wait is the whole reason the executor is the admission
+    # gate.
     post '/messages' do
       prompt = params['prompt'].to_s
       halt 422, 'prompt must not be blank' if prompt.strip.empty?
@@ -175,8 +175,8 @@ module PikuriWeb
     #
     # +current+ is the row this tab has open (per tab, from the URL); +busy+ is
     # whether that conversation has a turn in flight (server-wide, and true of
-    # at most one row while the executor is serial). They are independent: a
-    # turn running in a row you are not looking at is the point of the feature.
+    # as many rows as +--turns+ allows). They are independent: a turn running in
+    # a row you are not looking at is the point of the feature.
     #
     # @param viewing [String] id of the conversation this tab has open
     # @return [Array<Hash>] +{id:, title:, ago:, current:, busy:, supported:}+

@@ -178,8 +178,8 @@ than discovering.
 
 (3) works because of a property `D_rerender_and_replace` already establishes: **rendering is a pure
 function of the accumulated source**, so it can be deferred as easily as it can be moved to another
-thread. `ideas/event-queue.md` uses the same observation to say rendering need not run on the owner
-thread; here it says rendering need not run *at all* until someone looks. The append is a string
+thread. The event-queue idea (graduated; `D_no_event_queue`) used the same observation to say
+rendering need not run on the owner thread; here it says rendering need not run *at all* until someone looks. The append is a string
 concat; the kramdown pass is the cost. So detached ≈ free, and memory stays modest because the HTML
 is the big part and it is derived.
 
@@ -208,8 +208,9 @@ simpler than what exists today:
   proposed exposing it as a CLI flag beside `--port` / `--bind`. That was wrong, and the reason is
   worth keeping: single-writer safety at pool 1 is an *accident of a setting*, not a property of the
   abstraction. A flag labelled "how fast" that silently enables data races is a trap — "correct until
-  someone changes a number, with nothing in the code to say so" is the exact failure mode
-  `ideas/event-queue.md` opens by complaining about.
+  someone changes a number, with nothing in the code to say so" is the exact failure mode the
+  event-queue idea opened by complaining about. (Superseded: `--turns` shipped after all, because
+  the safety came from the partition rather than the pool size — `D_serial_turn_executor`.)
   - **Shipped as a type, not a comment.** `AgentRunner#initialize` takes
     `executor: Concurrent::SerialExecutorService`. `SingleThreadExecutor` and `ImmediateExecutor` are
     that; `FixedThreadPool.new(2)` is not. The constraint is checkable rather than remembered.
@@ -250,11 +251,15 @@ what counts:
 So the executor does not and cannot replace the owner — an executor makes no promise about state,
 and asking it to keep one is how the pinned-pool trap above got created in the first place. They
 compose: **turns are jobs on the executor; the events those jobs emit are posted to the owner** —
-which is exactly `event-queue.md`'s stage 2 (*"the worker thread posts `Event`s instead of calling
-the listener stack"*), unchanged.
+which is exactly the event-queue idea's stage 2 (*"the worker thread posts `Event`s instead of
+calling the listener stack"*), unchanged.
 
 Corollary: **the owner is the precondition for pool > 1**, not something the executor makes
 unnecessary.
+
+> **Both paragraphs above were wrong, 2026-08-28 — `D_no_event_queue`.** The safety never came from
+> the executor *or* from an owner; it comes from the partition this idea itself introduced. `--turns`
+> shipped with no owner thread.
 
 ### Implementation: concurrent-ruby, not hand-rolled
 
@@ -292,7 +297,7 @@ throughout, and Tuile already depends on the gem one layer down. **If the execut
   `RubyLLM::Context`, which reads as safe to share, but the factory should mint one per agent unless
   pikuri says otherwise. Check, don't assume.
 
-## What this does to `ideas/event-queue.md`
+## What this does to the event-queue idea
 
 Its "global, not per-session" answer was right for today but for a shaky reason: not *"because state
 is shared"* but *"because there is currently exactly one conversation"*. Under this direction the
@@ -305,6 +310,12 @@ singular *per session*. Web-shaped means partitioned with one owner per partitio
 So: per-conversation ownership makes the queue *more* necessary, not moot — and it moves this idea
 ahead of that one in the ordering, since there is no point building a global owner for state that is
 about to stop being global.
+
+> **Reversed, 2026-08-28 — `DECISIONS.md` `D_no_event_queue`.** Shipping this idea made the queue
+> *moot*, not more necessary. The partition left each conversation single-writer on its own state,
+> which retired every defect the queue was for; what stayed shared (the registry map, the
+> broadcaster's subscriber list) is sink-shaped and keeps its own small lock. The "global, not
+> per-session" ruling above survives, and is now the standing answer should shared state ever appear.
 
 ## Explicitly not doing
 

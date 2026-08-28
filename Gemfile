@@ -67,10 +67,10 @@ gem 'tomlrb', '~> 2.0'
 # Ruby ships no executor at all, so the alternative is hand-rolling a
 # thread pool, a shutdown protocol and a backpressure policy — exactly the
 # primitives a well-tested library should own. Concretely we take
-# SingleThreadExecutor (production), ImmediateExecutor (specs run turns
-# inline, which deletes a spin-wait helper), and the shutdown/kill
-# protocol. Tuile already depends on it in this family, for the same
-# reason one layer down.
+# FixedThreadPool (production, sized by --turns), ImmediateExecutor (specs
+# run turns inline, which deletes a spin-wait helper), and the
+# shutdown/kill protocol. Tuile already depends on it in this family, for
+# the same reason one layer down.
 #
 # MIT, zero runtime dependencies of its own, and a de-facto Ruby standard
 # (ActiveSupport depends on it).

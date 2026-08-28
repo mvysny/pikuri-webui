@@ -288,8 +288,8 @@ RSpec.describe PikuriWeb::App do
       assert_equal ['hello'], runner.submitted
     end
 
-    # The point of the shared serial executor: a turn elsewhere queues this
-    # one rather than rejecting it.
+    # The point of the shared executor: a turn elsewhere queues this one
+    # rather than rejecting it.
     it 'accepts a message for a conversation while another one is working' do
       registry.list = [live, stored]
       registry.open(live).busy = true

@@ -43,6 +43,7 @@ cli_server = nil
 cli_model  = nil
 port = 4567
 bind = '127.0.0.1'
+turns = 1
 dev = false
 
 parser = OptionParser.new do |opts|
@@ -53,6 +54,9 @@ parser = OptionParser.new do |opts|
   opts.on('--model NAME', "Model identifier (default: #{PikuriWeb::Config::DEFAULT_MODEL})") { |v| cli_model = v }
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
+  opts.on('--turns N', Integer,
+          "Conversations allowed to run a turn at once (default: #{turns}; " \
+          "match your inference server's parallel slots)") { |v| turns = v }
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -65,6 +69,11 @@ begin
 rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
   warn e.message
   warn parser
+  exit 2
+end
+
+if turns < 1
+  warn "--turns must be at least 1, got #{turns}"
   exit 2
 end
 
@@ -118,12 +127,20 @@ system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
 system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
 # Turns run here rather than on a Sinatra request thread, and every
-# conversation shares this one executor. Single-threaded on purpose, and not a
-# tunable: the executor holds no state, so single-writer safety at pool 1 is a
-# property of *this* number rather than of the abstraction, and a second thread
-# would let two conversations write the conversations folder at once. Raising
-# it needs the owner-thread work in ideas/event-queue.md first.
-turn_executor = Concurrent::SingleThreadExecutor.new
+# conversation shares this one executor. The pool size is an *admission gate*,
+# not a correctness device: it caps how many conversations can be mid-turn, so
+# turns don't outnumber the inference server's parallel slots. Match it to
+# llama.cpp's --parallel; the default of 1 suits a server serving one.
+#
+# Nothing in this process needs it to be 1. Per-conversation state is
+# single-writer whatever this number is, because the partition is per
+# conversation and a conversation admits one turn at a time (AgentRunner#submit
+# injects rather than starting a second) — two turns are two transcripts, two
+# listeners, two agents, and two disjoint conversation folders. The tool
+# constants below are shared across every agent by pikuri's own contract, not
+# by this number. What *does* scale with it is load on the inference server,
+# and on the process-wide search limiter noted at the tool wiring.
+turn_executor = Concurrent::FixedThreadPool.new(turns)
 
 # One conversation's whole stack. Every agent this process runs comes from
 # here, which is what keeps the boot-time trifecta report below true of all of
@@ -176,9 +193,19 @@ conversation_factory = lambda do |conversation|
     c.add_listener rate_limited_listener
     c.add_listener token_log
     # Tool instances are shared process-wide (CALCULATOR / WEB_SCRAPE / FETCH
-    # are pikuri constants). Safe only because the executor is serial, so no
-    # two agents are ever inside a tool at once — see the Gemfile and
-    # ideas/per-conversation-agents.md before raising the pool.
+    # are pikuri constants), which is safe by upstream contract rather than by
+    # our pool size: pikuri declares a sharing posture per tool (its
+    # DECISIONS.md, "Every tool declares one of four postures"). CALCULATOR is
+    # +P_stateless+; FETCH and WEB_SCRAPE are +P_shared_benign+, sharing a
+    # process-wide URL cache whose race that doc argues is harmless. WebSearch
+    # is built per wiring for its keys, but is +P_shared_locked+ and paces on
+    # class-level per-provider limiters, so a per-agent instance would throttle
+    # no differently.
+    #
+    # The consequence of --turns > 1 here is latency, not corruption: the
+    # search limiter holds its mutex across the HTTP call, so two agents
+    # searching at once serialize, and one tripping a provider's circuit
+    # breaker cools down the other.
     c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
     c.add_tool Pikuri::Tool::CALCULATOR
     c.add_tool Pikuri::Tool::WEB_SCRAPE

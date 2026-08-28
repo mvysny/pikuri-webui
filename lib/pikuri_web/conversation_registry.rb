@@ -23,9 +23,11 @@ module PikuriWeb
   # == Where the last global lock lives
   #
   # Per-conversation state is single-writer by construction — one agent, one
-  # serial executor, one transcript — so this registry and {ConversationStore}
-  # are what is left that several threads genuinely share. The monitor covers
-  # the resident map; the store's folder is its own problem
+  # transcript, and a conversation that admits one turn at a time — so this
+  # registry and {ConversationStore} are what is left that several threads
+  # genuinely share. That holds at any +--turns+ setting; it comes from the
+  # partition, not from the executor's pool size (`D_serial_turn_executor`).
+  # The monitor covers the resident map; the store's folder is its own problem
   # (`ideas/conversation-store-locking.md`).
   #
   # +Monitor+ rather than +Mutex+ because it is re-entrant: {#rows} and

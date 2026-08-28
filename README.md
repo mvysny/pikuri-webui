@@ -73,6 +73,25 @@ bin/pikuri-web-chat --server http://localhost:8082 --model my-model --port 9292
 
 Ctrl+C stops it. Open browser tabs don't delay the exit.
 
+### How many conversations can think at once
+
+One, by default. Send in a second conversation while the first is working
+and the message is accepted and *queued* — never refused — and that
+conversation says so until its turn starts.
+
+`--turns N` raises the cap. It is there to match your inference server:
+one turn per parallel slot, so `--turns 4` against llama.cpp started with
+`--parallel 4`. Setting it higher than the server has slots doesn't buy
+throughput, it just moves the queue from this process into that one.
+
+```sh
+bin/pikuri-web-chat --turns 4
+```
+
+Note that web searches still serialize across conversations however high
+you set this — the rate limiter that keeps you off provider blocklists is
+scoped to your IP, not to a conversation.
+
 ## Conversations
 
 **+ new conversation** in the status bar saves what you have and clears the

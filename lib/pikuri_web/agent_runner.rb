@@ -32,10 +32,11 @@ module PikuriWeb
   #
   # == Idle, queued, running
   #
-  # The executor is shared and serial, so a turn submitted while *another*
-  # conversation is working waits its turn. That wait is visible — +:queued+ is
-  # not +:running+ — because a conversation showing "thinking" when nothing is
-  # being thought is a lie the status bar should not tell.
+  # The executor is shared and its pool size caps how many conversations run a
+  # turn at once, so a turn submitted while that many are already working waits
+  # for a slot. That wait is visible — +:queued+ is not +:running+ — because a
+  # conversation showing "thinking" when nothing is being thought is a lie the
+  # status bar should not tell.
   #
   # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
   # entry whether it was cancelled while waiting and returns without starting.
@@ -71,11 +72,12 @@ module PikuriWeb
     # @param listener [SseListener] the transcript's renderer, fed directly by
     #   {#restore!}'s replay — the agent's own listener stack wraps it in a
     #   delta rate-limiter that a replay has nothing to say to
-    # @param executor [Concurrent::SerialExecutorService] shared by every
-    #   runner: it is the admission gate that keeps concurrent turns from
-    #   outnumbering the inference server's slots. Serial is load-bearing — see
-    #   the Gemfile's concurrent-ruby paragraph and
-    #   ideas/per-conversation-agents.md
+    # @param executor [Concurrent::ExecutorService] shared by every runner: the
+    #   admission gate that keeps concurrent turns from outnumbering the
+    #   inference server's slots (+--turns+). Its pool size is that cap and
+    #   nothing else — this runner is single-writer over its own conversation
+    #   at any size, because {#submit} injects rather than starting a second
+    #   turn
     # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when present,
     #   its +status_line+ rides along in every status event
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
@@ -126,8 +128,8 @@ module PikuriWeb
 
     # Route one user message: start a turn or inject into the running one.
     #
-    # Never refuses. A turn submitted while another conversation holds the
-    # executor is queued, not rejected — the wait is what {#state} reports.
+    # Never refuses. A turn submitted while the executor's slots are all taken
+    # is queued, not rejected — the wait is what {#state} reports.
     #
     # @param message [String] non-blank user text (App rejects blanks before
     #   calling; Interloper/run_loop double-check)
@@ -177,7 +179,7 @@ module PikuriWeb
     # Interloper's on_change fires from inside pikuri's own enqueue.
     #
     # @return [:idle, :queued, :running] +:queued+ means the job is posted but
-    #   another conversation is still holding the executor
+    #   the executor's slots are all taken by other conversations
     def state = @state
 
     # @return [Boolean] whether a turn is posted and not yet finished

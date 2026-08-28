@@ -77,6 +77,17 @@ the alternatives that were rejected, live one entry per slug in
   there is no UI thread and no marshaling.
   See `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
+- **No owner thread, and no session concept — but if state ever becomes
+  shared, it gets *one global* mechanism.** Single-user server; each
+  browser owns its own state (draft, scroll, theme, and which conversation
+  it reads — that one lives in the URL). The server's state is partitioned
+  per conversation and single-writer for that reason, so there is nothing
+  for an event queue or a coarse lock to own. Should something genuinely
+  shared appear, the answer is one global queue or one global lock —
+  **never a Vaadin-style per-session one**, because a session here owns
+  nothing to guard. {Broadcaster} stays outside either, as a sink.
+  See `D_no_event_queue`.
+
 - **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
   trap** — both run on the far side of Puma's unbounded graceful wait,
   which parked `GET /events` drain threads would otherwise never end.
@@ -128,14 +139,14 @@ the alternatives that were rejected, live one entry per slug in
   anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
-- **Turns run on one shared serial executor, and its pool size of 1 is
-  correctness, not tuning.** Sending never refuses: a turn submitted
-  while another conversation is working is *queued*, which the status bar
-  says out loud. An `Executor` holds no state by contract, so
-  single-writer safety at pool 1 is a property of that number and not of
-  the abstraction — raising it needs an owner thread first
-  (`ideas/event-queue.md`), and would also expose pikuri's shared tool
-  constants. The type says so: `Concurrent::SerialExecutorService`.
+- **Turns run on one shared executor, and its pool size is a load cap, not
+  a correctness device.** Sending never refuses: a turn submitted when the
+  slots are taken is *queued*, which the status bar says out loud. `--turns`
+  exists so turns don't outnumber the inference server's parallel slots;
+  match it to llama.cpp's `--parallel`. Single-writer safety comes from the
+  partition instead — one agent per conversation, and a conversation admits
+  one turn at a time — so it holds at any pool size. Don't rebuild a
+  correctness argument on that number.
   See `D_serial_turn_executor`.
 
 - **Theme is a presentational cookie, not transcript state.** Nine
