@@ -12,8 +12,10 @@ module PikuriWeb
   #   runner.submit('hello')     # => :started (queued on the executor) or :injected
   #   runner.state               # => :idle | :queued | :running
   #   runner.cancel              # dequeue if queued, stop at a tool boundary if running
+  #   runner.discard!            # the conversation was deleted; retire this runner
   #
-  # {#submit} is the single entry point for user text, and it never refuses:
+  # {#submit} is the single entry point for user text, and it never refuses
+  # while the conversation exists:
   #
   # - Idle → post a job running +Pikuri::Agent#run_loop(user_message:)+ on the
   #   shared executor. The listener stack renders everything the loop emits;
@@ -95,6 +97,7 @@ module PikuriWeb
       @mutex = Mutex.new
       @state = :idle
       @abandon = false
+      @discarded = false
       @announced_busy = false
 
       # Claims the interloper's single on_change slot. Without it the
@@ -128,20 +131,26 @@ module PikuriWeb
 
     # Route one user message: start a turn or inject into the running one.
     #
-    # Never refuses. A turn submitted while the executor's slots are all taken
-    # is queued, not rejected — the wait is what {#state} reports.
+    # Never refuses while the conversation exists. A turn submitted while the
+    # executor's slots are all taken is queued, not rejected — the wait is what
+    # {#state} reports. The one non-answer is +:discarded+, which is not a
+    # refusal to queue but a statement that there is no longer a conversation
+    # to queue into ({#discard!}).
     #
     # @param message [String] non-blank user text (App rejects blanks before
     #   calling; Interloper/run_loop double-check)
-    # @return [:started, :injected]
+    # @return [:started, :injected, :discarded]
     def submit(message)
-      starting = @mutex.synchronize do
-        next false if busy?
-
-        @abandon = false
-        @state = :queued
-        true
+      claim = @mutex.synchronize do
+        if @discarded then :discarded
+        elsif busy? then :inject
+        else
+          @abandon = false
+          @state = :queued
+          :start
+        end
       end
+      return :discarded if claim == :discarded
 
       # Both of these run outside the mutex, for the same reason from two
       # directions: they re-enter. An ImmediateExecutor runs the job on this
@@ -151,14 +160,50 @@ module PikuriWeb
       # state above is what makes the gap safe — and an injection landing in
       # it after the turn ended is picked up by the next run_loop's drain
       # anyway, which is the benign race described above.
-      if starting
+      if claim == :start
         @executor.post { run_turn(message) }
       else
         @interloper.inject_user_message(message)
       end
       broadcast_status
-      starting ? :started : :injected
+      claim == :start ? :started : :injected
     end
+
+    # Retire this runner for good: after a successful call it will start no
+    # turn, inject nothing and write no folder, ever again. Refused while a
+    # turn is in flight.
+    #
+    # This exists because a *deleted* conversation could otherwise come back.
+    # +POST /messages+ resolves a runner and then submits to it in separate
+    # steps, so a delete landing in between removed the folder while a request
+    # thread still held a live runner for it — the next turn's save recreated
+    # the directory, and the conversation the user confirmed away was back in
+    # the sidebar one turn later.
+    #
+    # The fix is that this claim and the busy check are *one* step under this
+    # runner's mutex, and {ConversationRegistry#delete} drops the runner only
+    # when it succeeds. Either {#submit} claims the turn first, and this
+    # refuses so the delete is refused too; or this wins, and {#submit} answers
+    # +:discarded+ without starting anything. There is no interleaving where
+    # both proceed, which is why {#persist} needs no check of its own — no turn
+    # can still be in flight past a successful call.
+    #
+    # Not to be confused with +@abandon+, which drops one *queued turn* and is
+    # reset by the next {#submit}. This is one-way and about the conversation.
+    #
+    # @return [Boolean] false when a turn is queued or running, and the caller
+    #   must refuse the delete; true once nothing will ever run here again
+    def discard!
+      @mutex.synchronize do
+        return false if busy?
+
+        @discarded = true
+      end
+      true
+    end
+
+    # @return [Boolean] whether a delete has retired this runner
+    def discarded? = @discarded
 
     # Stop this conversation's turn: drop it before it starts if it is still
     # waiting for the executor, or ask the agent to stop at the next tool

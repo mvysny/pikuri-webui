@@ -16,10 +16,19 @@ RSpec.describe PikuriWeb::ConversationRegistry do
       @conversation = conversation
       @restores = 0
       @busy = false
+      @discarded = false
     end
 
     def restore! = @restores += 1
     def busy? = @busy
+    def discarded? = @discarded
+
+    # As the real one: refuses while busy, one-way once taken.
+    def discard!
+      return false if @busy
+
+      @discarded = true
+    end
   end
 
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
@@ -97,6 +106,18 @@ RSpec.describe PikuriWeb::ConversationRegistry do
       assert_equal :busy, registry.delete(runner.conversation)
       refute_nil registry.resident(runner.conversation.id)
       assert runner.conversation.dir.exist?
+      refute runner.discarded?, 'retired a runner it went on to refuse the delete of'
+    end
+
+    # Dropping the runner from the map is not enough: whoever resolved it a
+    # moment earlier still holds it, and would write the folder back at the
+    # next turn end. Retiring the runner is what closes that.
+    it 'retires the runner it drops, so a stale reference cannot resurrect it' do
+      runner = registry.open(store.create)
+      runner.conversation.dir.mkpath
+
+      assert_equal :deleted, registry.delete(runner.conversation)
+      assert runner.discarded?
     end
 
     # Busy is per conversation now: a turn running elsewhere is no reason to

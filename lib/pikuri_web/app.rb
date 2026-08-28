@@ -109,15 +109,22 @@ module PikuriWeb
     # (Interloper); the browser needs no answer beyond "accepted" — rendering
     # arrives over SSE.
     #
-    # Never refused. A turn submitted when the executor's slots are all taken
-    # by other conversations is queued and reported as such, rather than
-    # rejected: that wait is the whole reason the executor is the admission
-    # gate.
+    # Never refused for being busy. A turn submitted when the executor's slots
+    # are all taken by other conversations is queued and reported as such,
+    # rather than rejected: that wait is the whole reason the executor is the
+    # admission gate. The only 4xx past a blank prompt is a conversation that
+    # has ceased to exist.
     post '/messages' do
       prompt = params['prompt'].to_s
       halt 422, 'prompt must not be blank' if prompt.strip.empty?
 
-      open_conversation(params['conversation']).submit(prompt)
+      runner = open_conversation(params['conversation'])
+      # The same 404 open_conversation gives an id that is already gone,
+      # arriving one step later: a delete can land between resolving the runner
+      # and submitting to it, and answering 204 there would report a turn into
+      # a conversation that no longer exists.
+      halt 404, 'no such conversation' if runner.submit(prompt) == :discarded
+
       status 204
     end
 

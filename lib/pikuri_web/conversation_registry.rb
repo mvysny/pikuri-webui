@@ -72,15 +72,25 @@ module PikuriWeb
     # tombstone (`D_delete_no_undo`).
     #
     # Refused while its turn is in flight, which would otherwise save the
-    # folder back moments after it went. The runner is dropped before the
-    # folder is removed, so a removal that raises leaves nothing resident that
-    # would write the deleted conversation straight back at its next turn end.
+    # folder back moments after it went. Dropping the runner from the map is
+    # not enough on its own: a request thread that resolved the runner just
+    # before this call still holds it, and would resurrect the conversation at
+    # its next turn end. So the refusal is expressed as
+    # {AgentRunner#discard!} — one atomic "is it busy, and if not, retire it"
+    # on the runner's own mutex — rather than as a {AgentRunner#busy?} read
+    # this monitor cannot make atomic against a concurrent +#submit+.
+    #
+    # The runner is still dropped before the folder is removed, so a removal
+    # that raises leaves nothing resident pointing at a half-deleted
+    # conversation; the retired runner it leaves behind is inert by
+    # construction.
     #
     # @param conversation [ConversationStore::Conversation]
     # @return [:deleted, :busy, :failed]
     def delete(conversation)
       @monitor.synchronize do
-        return :busy if @runners[conversation.id]&.busy?
+        runner = @runners[conversation.id]
+        return :busy if runner && !runner.discard!
 
         @runners.delete(conversation.id)
         @store.delete(conversation)

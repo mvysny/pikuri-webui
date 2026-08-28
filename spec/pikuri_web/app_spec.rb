@@ -21,7 +21,7 @@ RSpec.describe PikuriWeb::App do
   # real Transcript so the page has blocks to render.
   class FakeRunner
     attr_reader :conversation, :transcript, :submitted, :cancels
-    attr_accessor :busy
+    attr_accessor :busy, :submit_outcome
 
     def initialize(conversation)
       @conversation = conversation
@@ -29,9 +29,13 @@ RSpec.describe PikuriWeb::App do
       @submitted = []
       @cancels = 0
       @busy = false
+      @submit_outcome = :started
     end
 
-    def submit(message) = @submitted << message
+    def submit(message)
+      @submitted << message
+      @submit_outcome
+    end
     def cancel = @cancels += 1
     def busy? = @busy
     def status_data = { state: @busy ? :running : :idle, busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out' }
@@ -320,6 +324,17 @@ RSpec.describe PikuriWeb::App do
 
     it 'refuses an id that is not a listed conversation' do
       post '/messages', prompt: 'hi', conversation: '../../etc'
+      assert_equal 404, last_response.status
+    end
+
+    # The delete-vs-send race: resolving the runner and submitting to it are
+    # separate steps, so the conversation can go in between. The runner says so
+    # rather than starting a turn that would write the folder back.
+    it 'refuses with 404 when the conversation was deleted after it was resolved' do
+      runner.submit_outcome = :discarded
+
+      post '/messages', prompt: 'hi', conversation: live.id
+
       assert_equal 404, last_response.status
     end
   end

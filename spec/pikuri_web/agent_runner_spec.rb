@@ -237,6 +237,77 @@ RSpec.describe PikuriWeb::AgentRunner do
     end
   end
 
+  # What keeps a deleted conversation deleted. ConversationRegistry#delete
+  # drops the runner from its map, but whoever resolved that runner a moment
+  # earlier still holds it — and a turn started through that stale reference
+  # would recreate the folder at its next save.
+  context '#discard!' do
+    it 'succeeds when idle and leaves nothing that could run' do
+      assert runner.discard!
+      assert runner.discarded?
+    end
+
+    it 'makes submit answer :discarded without starting a turn' do
+      runner.discard!
+
+      assert_equal :discarded, runner.submit('hello')
+      assert_empty agent.messages
+      refute runner.busy?
+    end
+
+    it 'writes no folder for a message submitted after it' do
+      agent.history = history_of('hi')
+      runner.discard!
+      runner.submit('hi')
+
+      refute runner.conversation.dir.exist?
+      assert_empty @root.children
+    end
+
+    it 'queues nothing on the Interloper either' do
+      runner.discard!
+      runner.submit('hello')
+      assert_empty interloper.peek
+    end
+
+    it 'refuses while a turn is running, so the delete is refused too' do
+      runner.submit('hello')
+      wait_until { agent.messages.any? }
+
+      refute runner.discard!
+      refute runner.discarded?
+      assert_equal :injected, runner.submit('second'), 'a refused discard left the runner crippled'
+    end
+
+    # A turn waiting for a slot has started nothing, but cancelling it is still
+    # the user's call: retiring the runner under it would strand the job.
+    # Queued state comes from a gate job holding the executor, as in #cancel.
+    it 'refuses while a turn is queued for an executor slot' do
+      blocker = Concurrent::SingleThreadExecutor.new
+      gate = Thread::Queue.new
+      blocker.post { gate.pop }
+      queued = described_class.new(
+        conversation: conversation, agent: agent, interloper: interloper,
+        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+        listener: listener, transcript: transcript, executor: blocker
+      )
+
+      queued.submit('hello')
+      assert_equal :queued, queued.state
+      refute queued.discard!, 'retired a runner with a turn still waiting for a slot'
+
+      queued.cancel
+      gate.push(:go)
+      wait_until { queued.state == :idle }
+    end
+
+    it 'is one-way: a second call still reports retired' do
+      assert runner.discard!
+      assert runner.discard!
+      assert runner.discarded?
+    end
+  end
+
   context 'persistence at turn end' do
     it 'writes history.json and meta.json into its own conversation' do
       agent.history = history_of('what is 2+2?')

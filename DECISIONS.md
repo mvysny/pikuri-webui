@@ -134,7 +134,10 @@ default than a warning in the README.
 **Consequences.**
 
 - The resurrection under `D_delete_no_undo` is now decided rather than
-  deferred: it stays, and that entry's pointer resolves here.
+  deferred: it stays, and that entry's pointer resolves here. Its
+  *in-process* twin — a request thread holding a runner across a delete —
+  was a separate bug with a separate fix ({AgentRunner#discard!}, 2026-08-28)
+  and no bearing on this entry: one process cannot claim another's runner.
 - `ConversationStore` never grows cross-process consistency. Its atomic
   rename remains all a concurrent reader outside this process gets, and
   the in-process locking question (`ideas/conversation-store-locking.md`)
@@ -520,7 +523,7 @@ attachment (pikuri `DECISIONS.md` `D_history_attachments`): declining to delete 
 removing the *conversation* it belongs to. Attachments are never shared
 between conversations, so nothing is refcounted.
 
-**`meta.json` goes first because `#write_meta` is the commit point.**
+**`meta.json` goes first because it is `#save`'s commit point.**
 Unlinking the envelope is that commit's exact inverse, so a removal that
 dies half-way leaves a conversation *unlisted* rather than one that lists
 and then cannot be opened. Orphaned bytes are the better failure.
@@ -566,9 +569,26 @@ deleting.
   strongest case anything made for a cross-process lock — which was
   weighed on exactly that basis and rejected in `D_no_multi_process_lock`.
 - Nothing new serializes the folder. What keeps a delete from racing the
-  turn-end save is the runner refusing while busy, which is the same
-  discipline `ideas/conversation-store-locking.md` argues should stop
-  being a discipline.
+  turn-end save is the runner refusing while busy — see the bullet below
+  for why that refusal had to become a *claim* rather than a read.
+- **Amended 2026-08-28: dropping the runner is not enough; it has to be
+  retired.** `POST /messages` resolves a runner and submits to it in
+  separate steps, so a delete landing in between removed the folder while
+  a request thread still held a live runner — the next turn's save
+  recreated the directory, and the conversation the user confirmed away
+  came back in the sidebar one turn later, openable, holding its old
+  history plus the new turn. `busy?` could not close it: once the runner
+  is out of {ConversationRegistry}'s map, the registry can never see it
+  busy again. The fix is {AgentRunner#discard!} — one atomic
+  busy-check-and-claim on the *runner's* mutex, called inside the
+  registry's monitor, with the runner dropped only if it succeeds. Either
+  `#submit` claims the turn first and the delete is refused, or the
+  discard wins and `#submit` answers `:discarded` (404 from the route);
+  there is no interleaving where both proceed, so `#persist` needs no
+  check of its own. This is the *in-process* twin of the cross-process
+  resurrection two bullets up, and unlike that one it was reachable by a
+  single user with two tabs — which is why it is fixed rather than
+  accepted.
 - Deleting is the whole answer to retention: still no cap and no
   auto-prune. `rm -r` on the state folder remains a complete reset.
 

@@ -116,15 +116,19 @@ what is guaranteed and by what:
 And the pointer in {ConversationRegistry}'s rdoc — "the store's folder is its own problem
 (`ideas/conversation-store-locking.md`)" — needs to resolve somewhere real once this file goes.
 
-## The residual race, which is a different idea
+## The residual race — found here, fixed elsewhere
 
-Not fixable by a store lock (it is the "no cross-call atomicity" bullet with teeth): a request
-thread that obtained a runner from `registry.open` before a delete can call `submit` on it
-afterwards, and the turn's `persist` writes the deleted folder back. `ConversationRegistry#delete`
-drops the runner from the map first precisely so nothing *resident* resurrects it, but a stale
-reference is outside that. The fix is a one-way "abandoned" flag on the runner, checked in
-`submit`/`persist` — runner state, not store state. Worth its own file if it is worth doing; the
-resurrection shape is otherwise the same one `D_no_multi_process_lock` accepted across processes.
+Worth recording because it is the one real bug this re-audit turned up, and a store lock would
+*not* have caught it (it is the "no cross-call atomicity" bullet with teeth): a request thread
+that obtained a runner from `registry.open` before a delete could call `submit` on it afterwards,
+and the turn's `persist` wrote the deleted folder back. `ConversationRegistry#delete` dropped the
+runner from the map precisely so nothing *resident* resurrected it, but a stale reference was
+outside that — and once the runner is out of the map, `busy?` can never see it again.
+
+Fixed 2026-08-28 as runner state, not store state: `AgentRunner#discard!` is one atomic
+busy-check-and-claim on the runner's mutex, called inside the registry's monitor, and `#submit`
+answers `:discarded` (404 from `POST /messages`) on a retired runner. Written up as an amendment
+in `D_delete_no_undo`'s consequences — nothing about it belongs to this file any more.
 
 ## If this is graduated as a "no"
 

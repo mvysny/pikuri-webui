@@ -48,11 +48,16 @@ the alternatives that were rejected, live one entry per slug in
   type appearing in a class the browser's own state flows through has to
   argue for itself. See `D_pikuri_free_core`.
 
-- **Deleting a conversation is irreversible.** `confirm()` then `rm_r`,
-  `meta.json` unlinked first; no undo, no tombstone, no retention cap.
-  {ConversationRegistry} drops the runner before removing the folder, so
-  nothing writes it back. Refused while *that* conversation is mid-turn.
-  See `D_delete_no_undo`.
+- **Deleting a conversation is irreversible, and it stays deleted.**
+  `confirm()` then `rm_r`, `meta.json` unlinked first; no undo, no
+  tombstone, no retention cap. Refused while *that* conversation is
+  mid-turn — and dropping the runner from the registry is not enough on
+  its own, because a request thread can still hold one it resolved a
+  moment earlier. So the delete *retires* the runner
+  ({AgentRunner#discard!}, one atomic busy-check-and-claim on the
+  runner's mutex) and only then removes the folder; a retired runner
+  starts no turn and writes no folder, so nothing can save the
+  conversation back. See `D_delete_no_undo`.
 
 - **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
   only.** No polyfills, no prefixes for a fourth browser; `:has()`,
@@ -119,7 +124,9 @@ the alternatives that were rejected, live one entry per slug in
 
 - **Mid-loop input goes through `Control::Interloper`, and the input
   stays enabled while busy.** {AgentRunner#submit} starts a turn when
-  idle and injects when busy; it never refuses. Interloper delivers at turn start and at
+  idle and injects when busy; it never refuses for being busy — the one
+  non-answer is a conversation deleted under it.
+  Interloper delivers at turn start and at
   tool-batch completion, so the status bar's queued count (pushed by
   `Interloper#on_change`) exists to make that wait legible.
   See `D_interloper_mid_loop_input`.
@@ -143,8 +150,8 @@ the alternatives that were rejected, live one entry per slug in
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
 - **Turns run on one shared executor, and its pool size is a load cap, not
-  a correctness device.** Sending never refuses: a turn submitted when the
-  slots are taken is *queued*, which the status bar says out loud. `--turns`
+  a correctness device.** Sending never refuses for load: a turn submitted
+  when the slots are taken is *queued*, which the status bar says out loud. `--turns`
   exists so turns don't outnumber the inference server's parallel slots;
   match it to llama.cpp's `--parallel`. Single-writer safety comes from the
   partition instead — one agent per conversation, and a conversation admits
