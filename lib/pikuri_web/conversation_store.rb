@@ -8,28 +8,39 @@ require 'time'
 
 module PikuriWeb
   # The on-disk home of saved conversations: one directory per conversation
-  # under a single root. Minting an id and writing the envelope are separate
-  # steps, because the history itself is written by pikuri in between:
+  # under a single root. Minting an id and committing are separate steps — a
+  # folder per click would litter the root — but a commit is *one* call, and
+  # it writes both halves:
   #
   #   store = ConversationStore.new(root: dir, shell: 'pikuri-web-chat', model: 'qwen3.6')
-  #   conversation = store.create                    # mints an id; no folder yet
-  #   agent.export_history.save(conversation.dir)    # pikuri writes history.json
-  #   store.write_meta(conversation)                 # our envelope, and the commit point
-  #   store.list                                     # everything committed, newest first
+  #   conversation = store.create                            # mints an id; no folder yet
+  #   store.save(conversation, agent.export_history)         # the whole commit
+  #   store.list                                             # everything committed, newest first
+  #
+  # {#save} calling +History#save+ itself, rather than each caller writing
+  # +history.json+ beside the envelope, is what makes this class the single
+  # writer of a conversation's directory: the mode it is created with, the
+  # order the two halves land in, and which one is the commit point are
+  # decided here instead of at every call site.
+  #
+  # That is why this class holds a +Pikuri::+ type where its browser-facing
+  # neighbours do not (`D_pikuri_free_core`): the seam it serves keeps pikuri
+  # out of what reaches the browser, and a folder is not that.
   #
   # The root exists from construction; a conversation's own directory appears
   # with its first save.
   #
-  # Both halves land in the one directory, and each side writes only its own:
+  # Both halves land in the one directory, and each format has exactly one
+  # writer:
   #
   #   2026-08-27T12-03-51Z-3f9a/
   #       history.json   pikuri's — Pikuri::Agent::History#save
   #       attachments/   pikuri's — content-addressed, only if there are any
   #       meta.json      ours — title, timestamps, shell and model
   #
-  # Pikuri-free by design (the seam rule in AGENTS.md): this deals in paths and
-  # plain hashes, never a +Pikuri::Agent::History+ — which is what
-  # +History#save+ taking a *directory* buys.
+  # Otherwise pikuri-light: {#list}, {#find} and {#delete} deal in paths and
+  # plain hashes, and {#save} is the one method that touches a pikuri type at
+  # all.
   #
   # == Implementation details
   #
@@ -40,12 +51,15 @@ module PikuriWeb
   # Directories are created 0700: a conversation holds everything the user
   # typed plus whatever the tools fetched, unencrypted. That covers
   # +attachments/+, which pikuri creates with the default mode — an unreadable
-  # parent is what actually blocks traversal.
+  # parent is what actually blocks traversal. {#save} creates the directory
+  # *before* calling +History#save+ for that reason: a history written into a
+  # directory tightened afterwards was world-readable while it was written.
   #
   # Thread-safe: stateless past its constructor arguments.
   class ConversationStore
-    # Basename of the envelope this class owns. The +history.json+ beside it is
-    # pikuri's, and is never read or written here.
+    # Basename of the envelope this class owns — the format as well as the
+    # write. The +history.json+ beside it is pikuri's format: {#save} triggers
+    # it by handing over the directory, and nothing here ever parses it.
     META_FILE = 'meta.json'
 
     # +meta.json+'s format version. Bumped only for a change an old reader
@@ -125,12 +139,12 @@ module PikuriWeb
     # conversation holds its place in the list however long it goes on being
     # written to, and ordering never opens a file.
     #
-    # A directory without +meta.json+ is not listed — {#write_meta} is the
-    # commit point, so that is a save interrupted between pikuri's half and
-    # ours. One whose +meta.json+ is unreadable, or stamped by a schema this
-    # version doesn't know, comes back +supported: false+ rather than being
-    # dropped: a conversation the user can see and not open beats one that
-    # silently isn't there.
+    # A directory without +meta.json+ is not listed — that file is {#save}'s
+    # commit point, so such a directory is a save interrupted between the
+    # history and the envelope. One whose +meta.json+ is unreadable, or
+    # stamped by a schema this version doesn't know, comes back
+    # +supported: false+ rather than being dropped: a conversation the user
+    # can see and not open beats one that silently isn't there.
     #
     # No index file fronts the per-conversation +meta.json+ reads: an index is
     # a cache of the directory, and it drifts from it. They are fine into the
@@ -160,7 +174,7 @@ module PikuriWeb
     #
     #   store.delete(store.find(params['id']))   # => true
     #
-    # +meta.json+ is unlinked *before* the folder, inverting {#write_meta}'s
+    # +meta.json+ is unlinked *before* the folder, inverting {#save}'s
     # commit point: a removal that dies half-way then leaves a conversation
     # unlisted, rather than one that lists and cannot be opened.
     #
@@ -182,19 +196,49 @@ module PikuriWeb
       true
     end
 
-    # Write +meta.json+, creating the conversation's directory if pikuri has
-    # not already — and re-asserting 0700 either way, since +History#save+
-    # creates it with the default mode.
+    # Commit a conversation to disk: create its directory 0700, write the
+    # history into it, then write our +meta.json+.
     #
-    # Call it *after* the history: +history.json+ is the conversation,
-    # +meta.json+ is what says it is worth listing, so an interrupted save
-    # leaves an unlisted conversation rather than a listed empty one.
+    #   store.save(conversation, agent.export_history)
+    #
+    # The three steps are in this order because each one guards the next:
+    #
+    # - **0700 first**, so +history.json+ and +attachments/+ are never briefly
+    #   readable by other accounts while they are being written. +History#save+
+    #   would otherwise create the directory itself, at the default mode, and
+    #   +attachments/+ with it.
+    # - **The history before the envelope**, because +meta.json+ is the commit
+    #   point ({#list} skips a directory without one): a save that dies
+    #   half-way leaves an *unlisted* conversation rather than a listed empty
+    #   one, and {#delete} inverts the same order for the same reason.
+    #
+    # An empty history still commits — whether a conversation with no messages
+    # is worth saving is the caller's call, not the folder's ({AgentRunner}
+    # skips it).
+    #
+    # @param conversation [Conversation] from {#create}, {#list} or {#find}
+    # @param history [Pikuri::Agent::History] the payload; anything answering
+    #   +#save(Pathname)+ does, which is what makes this method testable
+    #   without an agent
+    # @param updated_at [Time] last-activity stamp; the sidebar's sort key
+    # @return [Pathname] the conversation's directory
+    def save(conversation, history, updated_at: Time.now)
+      mkdir_private(conversation.dir)
+      history.save(conversation.dir)
+      write_meta(conversation, updated_at: updated_at)
+      conversation.dir
+    end
+
+    private
+
+    # Write +meta.json+ — the commit point, hence {#save}'s last step and
+    # never a step of its own. Assumes {#save} has already created the
+    # directory 0700.
     #
     # @param conversation [Conversation]
-    # @param updated_at [Time] last-activity stamp; the sidebar's sort key
+    # @param updated_at [Time]
     # @return [Pathname] the file written
-    def write_meta(conversation, updated_at: Time.now)
-      mkdir_private(conversation.dir)
+    def write_meta(conversation, updated_at:)
       path = conversation.dir / META_FILE
       atomic_write(path, "#{JSON.pretty_generate(
         'schema' => SCHEMA,
@@ -207,8 +251,6 @@ module PikuriWeb
       )}\n")
       path
     end
-
-    private
 
     # One listing row, or nil for a directory that is not a committed
     # conversation.

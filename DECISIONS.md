@@ -421,9 +421,10 @@ conversations folder, and pikuri's shared tool constants. Both were audited
 when `--turns` was added, and neither holds.
 
 - **The folder.** Two turn-ends write two *disjoint subdirectories*.
-  {ConversationStore#write_meta} touches only `conversation.dir/meta.json`,
-  through a sibling temp file and a rename inside that same directory; the
-  shared root is created in the constructor and otherwise only enumerated.
+  {ConversationStore#save} touches only that one conversation's directory —
+  `history.json` and `meta.json` both, each through a sibling temp file and
+  a rename inside it; the shared root is created in the constructor and
+  otherwise only enumerated.
   A listing concurrent with a save was already correct by design — `#row`
   takes a read's own `ENOENT` as the answer rather than checking first. And
   one directory can never have two writers, because a conversation admits
@@ -976,36 +977,55 @@ it. The boundary itself is pikuri's decision, not ours — as of 0.0.7 it
 moved off `after_tool_result` to tool-batch completion, and AGENTS.md's
 documented caveat had to be corrected to match.
 
-## D_pikuri_free_core — All `Pikuri::*` references live in three adapters plus the boot script (2026-06-04)
+## D_pikuri_free_core — No `Pikuri::*` type reaches what the browser sees; server-side classes use them freely (2026-06-04)
 
-**Status:** Accepted, shipped 2026-06-04; widened from two adapters to
-three on 2026-08-27, when {HistoryReplay} joined to turn a saved
-`Agent::History` back into the `Agent::Event` stream. The count is not
-the invariant — "translation happens at named boundaries, and nowhere
-else" is — but each addition should have to argue for itself, as that
-one did: the alternative was a `History → blocks` builder, which puts
-block kinds in a second place (`D_rerender_and_replace`'s trifecta
-would stop being one).
+**Status:** Accepted, shipped 2026-06-04 as "three adapters plus the boot
+script"; widened to include {HistoryReplay} on 2026-08-27; **restated
+2026-08-28 as a boundary rather than a list of classes**, when
+{ConversationStore#save} took over writing `history.json` and therefore
+took a `Pikuri::Agent::History`. The count was never the invariant —
+"translation happens at named boundaries, and nowhere else" is — and the
+list of names had begun to read as the rule.
 
 **Context.** This project tracks pikuri master (`D_track_pikuri_master`),
-so pikuri's surface moves under it by design.
+so pikuri's surface moves under it by design. What that costs depends
+entirely on *where* the types are: a pikuri type in the rendering path
+prices an upgrade at a sweep of every file the browser's state flows
+through, while one in a disk utility prices it at that utility.
 
-**Decision.** `Pikuri::*` appears only in `bin/pikuri-web-chat`
-(boot/wiring) and in the adapters — {SseListener}, {AgentRunner} and
-{HistoryReplay}. {Transcript}, {Broadcaster}, {StreamingMessage},
-{MarkdownRenderer}, {ConversationStore} and {App} are Pikuri-free: they
-speak ids, kinds, HTML strings, paths and queues.
+**Decision.** The line is the browser, not a file count. **Nothing that
+reaches what the browser sees speaks a pikuri type:** {Transcript},
+{Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
+{ConversationRegistry}, {Config} and {App} deal in ids, kinds, HTML
+strings, paths and queues. **Server-side of that line, pikuri types are
+used freely** — `bin/pikuri-web-chat` (boot/wiring), {SseListener},
+{AgentRunner}, {HistoryReplay}, and {ConversationStore#save}.
+
+**Rejected: keeping {ConversationStore} on the Pikuri-free side by taking
+a block** — `store.save(conversation) { |dir| history.save(dir) }`, the
+store yielding a `Pathname` and never holding a `History`. Built first,
+then reverted: it preserved the letter of the old list at the cost of an
+indirection that explained nothing, and the seam it was defending is not
+one the store sits on. What settles it is that the refactor *relocates* a
+pikuri call rather than adding one — `History#save` had exactly one call
+site before ({AgentRunner#persist}) and has exactly one after (the
+store), so the upgrade cost the seam exists to bound did not move at all.
+A utility method that owns a directory is the right owner of what goes
+into it.
 
 **Rejected: letting Pikuri types spread to whatever needs them.** Passing
 a `Pikuri::Agent::Event` into {Transcript} is the shortest path and it
 prices every future pikuri upgrade at a full-project sweep. With the seam
-held, a shifted surface costs rewriting two files — the same fork-or-swap
-rationale as the TUI's.
+held, a shifted surface costs rewriting the adapters — the same
+fork-or-swap rationale as the TUI's.
 
 **Consequences.** The adapters translate at the boundary, which
 occasionally means a small unwrapping that would be unnecessary if the
 event travelled whole. That cost is the decision, not an oversight.
-{Config} deliberately joins the Pikuri-free side (`D_schema_complete_config`).
+{Config} deliberately stays on the Pikuri-free side even though it is
+server-side, because its schema is the *file's*, not pikuri's
+(`D_schema_complete_config`) — the boundary licenses pikuri types where
+they help, it does not require them.
 
 ## D_rerender_and_replace — Re-render the whole message per delta; don't port the TUI's block-cutter (2026-06-04)
 

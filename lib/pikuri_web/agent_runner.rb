@@ -264,8 +264,12 @@ module PikuriWeb
       nil
     end
 
-    # Write this conversation to disk: pikuri's +history.json+, then our
-    # +meta.json+.
+    # Write this conversation to disk, through {ConversationStore#save} — the
+    # store owns the directory's mode, the order the two halves land in and
+    # which one commits, so all this decides is *whether* to save.
+    #
+    # An empty history is not worth a folder, and that judgement is the only
+    # part of persistence that belongs to the agent rather than to the store.
     #
     # Filesystem failures are logged, not raised — a full disk must not take
     # the conversation down with it, and this runs inside the turn job's
@@ -276,8 +280,7 @@ module PikuriWeb
       history = @agent.export_history
       return if history.messages.empty?
 
-      history.save(@conversation.dir)
-      @conversations.write_meta(@conversation)
+      @conversations.save(@conversation, history)
     rescue StandardError => e
       PikuriWeb.logger.error("saving conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
     end

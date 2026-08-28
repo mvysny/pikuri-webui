@@ -263,7 +263,7 @@ RSpec.describe PikuriWeb::AgentRunner do
 
     it 'logs a save failure instead of killing the turn job' do
       agent.history = history_of('hi')
-      def conversations.write_meta(*) = raise(Errno::ENOSPC)
+      def conversations.save(*) = raise(Errno::ENOSPC)
 
       log = capture_log do
         runner.submit('hi')

@@ -38,12 +38,15 @@ the alternatives that were rejected, live one entry per slug in
   around them. Anything beyond that is a bug or scope creep. (The
   project's premise rather than a fork, so no `D_` entry.)
 
-- **The seam: `Pikuri::*` appears only in `bin/pikuri-web-chat`,
-  {SseListener}, {AgentRunner} and {HistoryReplay}.** {Transcript},
-  {Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
-  {ConversationStore}, {ConversationRegistry}, {Config} and {App} are
-  Pikuri-free — they speak ids, kinds, HTML strings, paths and queues. A
-  fourth adapter has to argue for itself. See `D_pikuri_free_core`.
+- **The seam: no `Pikuri::*` type reaches what the browser sees.**
+  {Transcript}, {Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
+  {ConversationRegistry}, {Config} and {App} are Pikuri-free — they speak
+  ids, kinds, HTML strings, paths and queues, so a shifted pikuri surface
+  never costs a sweep of the rendering path. Server-side of that line,
+  pikuri types are used freely: `bin/pikuri-web-chat`, {SseListener},
+  {AgentRunner}, {HistoryReplay} and {ConversationStore#save}. A pikuri
+  type appearing in a class the browser's own state flows through has to
+  argue for itself. See `D_pikuri_free_core`.
 
 - **Deleting a conversation is irreversible.** `confirm()` then `rm_r`,
   `meta.json` unlinked first; no undo, no tombstone, no retention cap.
@@ -210,8 +213,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
   saved `Agent::History` back into the events that produced it.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
-  the conversations folder: mints ids, owns `meta.json`, lists what is
-  saved, deletes a folder. Pikuri-free.
+  the conversations folder: mints ids, owns the whole commit (`#save`
+  takes the history and writes both halves), lists what is saved, deletes
+  a folder.
 - `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
   "6 hours ago" for sidebar rows; server-rendered, hence stale-tolerant.
 - `lib/pikuri_web/transcript.rb` — one conversation's rendered blocks,

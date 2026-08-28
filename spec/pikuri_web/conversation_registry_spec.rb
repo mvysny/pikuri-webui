@@ -128,7 +128,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
     it 'does not list a resident conversation twice once it is saved' do
       conversation = registry.open(store.create).conversation
-      store.write_meta(conversation)
+      store.save(conversation, Pikuri::Agent::History.new(messages: []))
 
       assert_equal 1, registry.rows.size
     end
