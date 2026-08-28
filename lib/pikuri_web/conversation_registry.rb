@@ -20,21 +20,20 @@ module PikuriWeb
   # Pikuri-free: the agent-shaped work lives entirely behind +factory+, so this
   # class only ever holds and hands out {AgentRunner}s.
   #
-  # == Where the last global lock lives
+  # == Thread-safety
   #
-  # Per-conversation state is single-writer by construction — one agent, one
-  # transcript, and a conversation that admits one turn at a time — so this
-  # registry and {ConversationStore} are what is left that several threads
-  # genuinely share. That holds at any +--turns+ setting; it comes from the
-  # partition, not from the executor's pool size (`D_serial_turn_executor`).
-  # The monitor covers the resident map; the store's folder is its own problem
-  # (`ideas/conversation-store-locking.md`).
+  # Thread-safe, and the last thing here that needs to be. Per-conversation
+  # state is single-writer by construction — one agent, one transcript, and a
+  # conversation that admits one turn at a time — so this registry is what is
+  # left that several threads genuinely share. That holds at any +--turns+
+  # setting; it comes from the partition, not from the executor's pool size
+  # (`D_serial_turn_executor`). The monitor covers the resident map;
+  # {ConversationStore}'s own doc covers the folder.
   #
   # +Monitor+ rather than +Mutex+ because it is re-entrant: {#rows} and
   # {#delete} both consult the resident map through helpers that lock, and a
-  # plain mutex would deadlock on itself.
-  #
-  # Thread-safe.
+  # plain mutex would deadlock on itself. It does not, however, reach inside a
+  # runner — hence {AgentRunner#discard!} for the one place that must.
   class ConversationRegistry
     # @param store [ConversationStore] the folder: mints ids, lists what is
     #   saved, removes a folder
@@ -72,18 +71,15 @@ module PikuriWeb
     # tombstone (`D_delete_no_undo`).
     #
     # Refused while its turn is in flight, which would otherwise save the
-    # folder back moments after it went. Dropping the runner from the map is
-    # not enough on its own: a request thread that resolved the runner just
-    # before this call still holds it, and would resurrect the conversation at
-    # its next turn end. So the refusal is expressed as
-    # {AgentRunner#discard!} — one atomic "is it busy, and if not, retire it"
-    # on the runner's own mutex — rather than as a {AgentRunner#busy?} read
-    # this monitor cannot make atomic against a concurrent +#submit+.
+    # folder back moments after it went.
     #
-    # The runner is still dropped before the folder is removed, so a removal
-    # that raises leaves nothing resident pointing at a half-deleted
-    # conversation; the retired runner it leaves behind is inert by
-    # construction.
+    # {AgentRunner#discard!} rather than a {AgentRunner#busy?} read, because
+    # dropping the runner from the map does not reach the copy a request
+    # thread resolved a moment ago — that one would resurrect the conversation
+    # at its next turn end, and this monitor cannot serialize against the
+    # runner's own +#submit+. Retire it, then remove the folder: a removal
+    # that raises leaves an inert runner rather than a live one pointing at a
+    # half-deleted conversation.
     #
     # @param conversation [ConversationStore::Conversation]
     # @return [:deleted, :busy, :failed]

@@ -119,10 +119,8 @@ module PikuriWeb
       halt 422, 'prompt must not be blank' if prompt.strip.empty?
 
       runner = open_conversation(params['conversation'])
-      # The same 404 open_conversation gives an id that is already gone,
-      # arriving one step later: a delete can land between resolving the runner
-      # and submitting to it, and answering 204 there would report a turn into
-      # a conversation that no longer exists.
+      # A delete can land between resolving the runner and submitting to it,
+      # so this is open_conversation's own 404, one step late.
       halt 404, 'no such conversation' if runner.submit(prompt) == :discarded
 
       status 204

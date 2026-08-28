@@ -54,8 +54,8 @@ module PikuriWeb
   # because +Event::ToolResult+ fires before ruby_llm appends the tool message
   # and nothing fires when it lands.
   #
-  # Part of the Pikuri seam: this class, SseListener and HistoryReplay are the
-  # only lib/ files that reference +Pikuri::*+.
+  # Server-side of the pikuri seam, so it names pikuri types freely
+  # (`D_pikuri_free_core`).
   #
   # Thread-safe.
   class AgentRunner
@@ -131,11 +131,10 @@ module PikuriWeb
 
     # Route one user message: start a turn or inject into the running one.
     #
-    # Never refuses while the conversation exists. A turn submitted while the
-    # executor's slots are all taken is queued, not rejected — the wait is what
-    # {#state} reports. The one non-answer is +:discarded+, which is not a
-    # refusal to queue but a statement that there is no longer a conversation
-    # to queue into ({#discard!}).
+    # Never refuses for being busy: a turn submitted while the executor's slots
+    # are all taken is queued, not rejected — the wait is what {#state}
+    # reports. +:discarded+ is not a refusal either, but the answer that this
+    # conversation no longer exists ({#discard!}).
     #
     # @param message [String] non-blank user text (App rejects blanks before
     #   calling; Interloper/run_loop double-check)
@@ -169,27 +168,20 @@ module PikuriWeb
       claim == :start ? :started : :injected
     end
 
-    # Retire this runner for good: after a successful call it will start no
-    # turn, inject nothing and write no folder, ever again. Refused while a
-    # turn is in flight.
+    # Retire this runner for good: it will start no turn, inject nothing and
+    # write no folder again. One-way, and refused while a turn is in flight —
+    # so a deleter asks for the folder and the turn in one move:
     #
-    # This exists because a *deleted* conversation could otherwise come back.
-    # +POST /messages+ resolves a runner and then submits to it in separate
-    # steps, so a delete landing in between removed the folder while a request
-    # thread still held a live runner for it — the next turn's save recreated
-    # the directory, and the conversation the user confirmed away was back in
-    # the sidebar one turn later.
+    #   return :busy if runner && !runner.discard!   # then remove the folder
     #
-    # The fix is that this claim and the busy check are *one* step under this
-    # runner's mutex, and {ConversationRegistry#delete} drops the runner only
-    # when it succeeds. Either {#submit} claims the turn first, and this
-    # refuses so the delete is refused too; or this wins, and {#submit} answers
-    # +:discarded+ without starting anything. There is no interleaving where
-    # both proceed, which is why {#persist} needs no check of its own — no turn
-    # can still be in flight past a successful call.
+    # Deliberately a *claim*, not a {#busy?} read followed by a flag: the
+    # busy check and the retirement are one step under this runner's mutex, so
+    # either {#submit} claims the turn first and this refuses, or this wins
+    # and {#submit} answers +:discarded+. No interleaving lets both proceed —
+    # which is why {#persist} carries no check of its own.
     #
-    # Not to be confused with +@abandon+, which drops one *queued turn* and is
-    # reset by the next {#submit}. This is one-way and about the conversation.
+    # Not +@abandon+, which drops one *queued turn* and is reset by the next
+    # {#submit}. This is about the conversation, and permanent.
     #
     # @return [Boolean] false when a turn is queued or running, and the caller
     #   must refuse the delete; true once nothing will ever run here again
@@ -309,12 +301,9 @@ module PikuriWeb
       nil
     end
 
-    # Write this conversation to disk, through {ConversationStore#save} — the
-    # store owns the directory's mode, the order the two halves land in and
-    # which one commits, so all this decides is *whether* to save.
-    #
-    # An empty history is not worth a folder, and that judgement is the only
-    # part of persistence that belongs to the agent rather than to the store.
+    # Write this conversation to disk. The store owns the how; the only
+    # judgement here is that a history with no messages does not deserve a
+    # folder.
     #
     # Filesystem failures are logged, not raised — a full disk must not take
     # the conversation down with it, and this runs inside the turn job's

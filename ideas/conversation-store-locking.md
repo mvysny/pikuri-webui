@@ -95,26 +95,21 @@ left says it is *unnecessary*, which is the better place to stand:
 5. **Adding it later is a local change.** Now that one method owns the whole write path, the
    lock is a two-line diff whenever a real reason appears. Nothing is being deferred at a cost.
 
-## What the complaint *actually* is — and its one-sentence fix
+## What the complaint *actually* was — fixed 2026-08-28
 
-The store's rdoc says **"Thread-safe: stateless past its constructor arguments"**, which is a
-true claim about the *object* sitting where a reader looks for a claim about the *folder*. That
-is the whole of the legitimate finding, and a `Monitor` is not its fix — a sentence is. Name
-what is guaranteed and by what:
+The store's rdoc said **"Thread-safe: stateless past its constructor arguments"** — a true claim
+about the *object*, sitting exactly where a reader looks for a claim about the *folder*. That was
+the whole of the legitimate finding, and a `Monitor` was never its fix; prose was. The class now
+carries a `== Thread-safety` section naming what is guaranteed and by what: the object holds no
+mutable state; one directory has one writer at a time, from the partition
+(`D_conversation_owns_agent`) rather than from this class; both files are written
+temp-file-and-rename, which is all a reader in another process gets
+(`D_no_multi_process_lock`); `#row` takes a read's own `ENOENT` as the answer, so a listing needs
+no coordination with a save or a delete; and cross-call sequences are *not* atomic — `find` then
+`delete` has a gap.
 
-- the object holds no mutable state, so concurrent calls need no lock here;
-- one conversation's directory has one writer at a time, which comes from the partition
-  (`D_conversation_owns_agent`) and not from anything in this class — and since the `#save`
-  refactor that writer goes through this class, so the claim is at least about the right scope;
-- `meta.json` is written temp-file-and-rename, which is what a reader *outside this process*
-  gets and all it gets (`D_no_multi_process_lock`);
-- `#row` treats a read's own `ENOENT` as "not listed", so a listing concurrent with a save or a
-  delete is correct without coordination;
-- cross-call sequences are not atomic — `find` then `delete` has a gap, and callers tolerate
-  the conversation having vanished.
-
-And the pointer in {ConversationRegistry}'s rdoc — "the store's folder is its own problem
-(`ideas/conversation-store-locking.md`)" — needs to resolve somewhere real once this file goes.
+{ConversationRegistry}'s rdoc pointer now resolves to that section instead of to this file, so
+nothing in `lib/` depends on this file surviving.
 
 ## The residual race — found here, fixed elsewhere
 
@@ -137,11 +132,12 @@ construction rather than by lock, with the five reasons above and the RW-lock-bu
 paragraph as the rejected alternatives, plus a flat invariant in **Scope decisions**. Note in it
 that the half-the-folder objection was *removed by refactor* — `#save` shipped as part of this
 graduation — so a future reader does not resurrect an argument that was retired rather than
-rejected. The rdoc sentence above is the only code change left.
+rejected. **No code change is left**: `#save`, the rdoc and the registry's pointer all shipped,
+so graduating is writing the entry and deleting this file.
 
 `#save` itself is worth a line of its own in that entry (or its own `D_` if it grows one): the
-store owns a conversation's directory, and a caller hands it a payload writer rather than
-writing beside it. Its **Layout** line in `AGENTS.md` is updated already.
+store owns a conversation's directory, history included, so nothing writes beside it. Its
+**Layout** line in `AGENTS.md` is updated already.
 
 Trigger to reopen the lock: a store operation that spans two directories (a move, a merge, an
 index file), or a second writer to one conversation's folder — either breaks the disjointness
