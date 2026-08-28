@@ -128,14 +128,12 @@ body {
   text-decoration: none;
 }
 
-/* Two independent marks: `current` is the row this tab has open, `live` is the
-   one holding the agent. Usually the same row, and then the accent bar simply
-   sits on a dotted edge. */
+/* `current` is the row this tab has open. Independent of whether it is busy —
+   a turn runs in a conversation, not in a tab. */
 .conversation.current { border-left-color: var(--accent); }
-.conversation.live { border-left-style: dotted; border-left-color: var(--fg-muted); }
-.conversation.current.live { border-left-style: solid; border-left-color: var(--accent); }
 
-/* The turn-in-progress dot, shown only on the live row. */
+/* The turn-in-progress dot. On a row that is not the current one, it is the
+   whole point: that conversation is working while you read this one. */
 .conversation-busy {
   float: right;
   color: var(--accent);

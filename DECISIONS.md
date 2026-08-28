@@ -84,6 +84,108 @@ design or the invariant.
 
 ---
 
+## D_conversation_owns_agent — A conversation owns its agent; a tab owns which conversation it views (2026-08-28)
+
+**Status:** Accepted, shipped 2026-08-28. {ConversationRegistry} holds one
+{AgentRunner} per conversation opened — its own `Agent`, `Interloper`,
+`Cancellable`, `TokenLog`, {Transcript} and {SseListener} — and
+{Broadcaster} addresses frames per conversation.
+
+**Context.** Everything before this had *one* agent and one transcript, so
+"which conversation is live" was server state and every tab followed it
+(`D_single_shared_conversation`). That model has no precedent in any web
+app: it is tmux in a browser. Slack is the counter-example — its channel
+selection lives in the URL, and the session exists only for auth. A tab
+should be free to read one conversation while another works.
+
+**Decision.** A runner *is* a conversation, for its whole life. No
+switching, no live pointer. `GET /c/:id` opens one, minting and replaying
+its history on first visit; the tab's EventSource subscribes to that id;
+`POST /messages` and `POST /cancel` both name their conversation. What
+falls out is worth naming, because it is most of the value:
+
+- **The whole switch machinery went away** — `new_conversation`,
+  `load_conversation`, `delete_conversation`, and the ordering hazard where
+  a `Reset` emitted before the live pointer moved got stamped with the
+  outgoing conversation.
+- **Nothing refuses because something *else* is busy.** Only delete
+  refuses, and only for the conversation actually in flight.
+
+**Rejected: minting a runner only on first *send*, viewing from a
+throwaway replay.** Cheaper in memory, and it was what shipped one commit
+earlier. Dropped because a tab reading a not-yet-resident conversation
+would then apply frames whose block ids agree with its snapshot only
+because both replay the same events into a fresh {Transcript} — correct by
+an argument spanning two classes, which is the kind of thing this codebase
+keeps trying to delete. Minting on view costs one agent per conversation
+*opened in a session*, which for a single user is nothing.
+
+**Rejected: reaping idle runners.** Nothing is ever dropped except on
+delete. Add reaping if residency ever actually hurts; a cleverer minting
+rule is the wrong lever.
+
+**Consequences.**
+
+- The registry and {ConversationStore} are now the only genuinely shared
+  mutable state. The registry has a `Monitor`; the folder's own
+  consistency is still open (`ideas/conversation-store-locking.md`).
+- `HistoryReplay.snapshot` became dead code and was removed.
+- Rendering a detached conversation is not optimized: with a serial
+  executor only one conversation renders at a time anyway, so the
+  accumulate-don't-render idea only pays at pool > 1.
+
+## D_serial_turn_executor — Turns run on one shared serial executor, and pool size 1 is correctness (2026-08-28)
+
+**Status:** Accepted, shipped 2026-08-28 as
+`Concurrent::SingleThreadExecutor`, injected into every {AgentRunner}.
+
+**Context.** A turn blocks on the LLM for minutes, so it cannot run on a
+Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations
+own their own agents, "how many turns at once" stops being implied by
+"how many agents".
+
+**Decision.** One process-wide serial executor. Its queue *is* the
+admission gate: submitting always succeeds, and a turn waiting for a busy
+executor reports `:queued` rather than being rejected. Cancelling a queued
+turn needs nothing from pikuri — the job checks a flag on entry and returns
+without starting.
+
+**The pool size is not a tunable, and the type says so.** `executor:` is
+typed `Concurrent::SerialExecutorService`, which `SingleThreadExecutor` and
+`ImmediateExecutor` satisfy and `FixedThreadPool.new(2)` does not. An
+`Executor`'s contract is `submit(block) → result`: it holds no state by
+design, so single-writer safety at pool 1 is a property of *that number*
+rather than of the abstraction, and it would evaporate silently when
+someone raised it. Two writers would mean two agents writing the
+conversations folder at once, and two agents inside pikuri's shared tool
+constants (`CALCULATOR` / `WEB_SCRAPE` / `FETCH`) at once.
+
+**Rejected: exposing pool size as a `--parallel` flag.** Proposed, then
+dropped: a dial labelled "how fast" that silently enables data races is a
+trap. Raising it needs the owner-thread work in `ideas/event-queue.md`
+first, and a thread-safety answer for the tool constants from pikuri.
+
+**Rejected: hand-rolling the pool on stdlib `Queue`.** Ruby ships no
+executor, so the alternative is writing a pool, a shutdown protocol and a
+backpressure policy by hand. `concurrent-ruby` is a new direct dependency
+(the first `Concurrent::` in the pikuri family — pikuri itself is stdlib
+`Mutex` throughout) and earns its Gemfile paragraph on exactly that.
+
+**Rejected: treating the executor as the event queue.** They share a
+mechanism and have opposite contracts — this one exists *to* block, an
+owner thread must never block. See `ideas/event-queue.md`.
+
+**Consequences.**
+
+- Shutdown drops whatever is running: saves land at turn end, and
+  `turn_executor.shutdown` from the `:state, :stop` hook deliberately does
+  not wait (waiting there would re-create the parked-thread bug
+  `D_shutdown_on_state_stop` exists to prevent). Accepted — single user,
+  rare restarts.
+- Specs inject `ImmediateExecutor` to run turns inline, which deleted one
+  hand-rolled spin-waiter. The examples that are *about* the busy state
+  keep a real thread.
+
 ## D_delete_no_undo — Deleting a conversation is irreversible, and the live one rolls onto a fresh conversation (2026-08-28)
 
 **Status:** Accepted, shipped 2026-08-28 as `ConversationStore#delete`,

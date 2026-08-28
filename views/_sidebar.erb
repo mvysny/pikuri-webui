@@ -1,37 +1,36 @@
 <%# The conversation list. Rendered into index.erb's <nav id="sidebar">, and
     served on its own by GET /conversations?viewing=<id> so app.js can drop a
-    fresh copy into that nav when the list or the live conversation changes.
+    fresh copy into that nav when the list changes.
 
-    Each row is a link, because opening a conversation is now a GET with no
-    side effects — a prefetching browser can follow it harmlessly. Sending a
-    message is what makes a conversation live, so rows stay enabled mid-turn:
-    reading another conversation while this one works is the point.
+    Each row is a link, because opening a conversation is a GET with no side
+    effects — a prefetching browser can follow it harmlessly.
 
-    Two different marks: `current` is the row this tab is looking at, `live` is
-    the one the agent is on. They part company the moment you navigate away,
-    and `live` is where a turn's output is landing.
+    Two independent marks: `current` is the row this tab has open, `busy` is a
+    conversation with a turn in flight. A busy row that is not the current one
+    is the whole point — that turn is running while you read something else.
 
     Delete stays a POST — it is the one destructive thing here — in its own
     form beside the link rather than around it, since a form inside an anchor
-    is invalid HTML. It is still refused mid-turn. %>
+    is invalid HTML. It is refused only for a conversation actually mid-turn,
+    which is per row now, not global. %>
 <ul class="conversations">
   <% conversations.each do |c| %>
   <li>
     <a href="/c/<%= c[:id] %>"
-       class="conversation<%= ' current' if c[:current] %><%= ' live' if c[:live] %><%= ' unsupported' unless c[:supported] %>"
+       class="conversation<%= ' current' if c[:current] %><%= ' unsupported' unless c[:supported] %>"
        aria-current="<%= c[:current] ? 'page' : 'false' %>"
        title="<%= c[:title] %>">
       <span class="conversation-title"><%= c[:title] %></span>
       <span class="conversation-time"><%= c[:supported] ? c[:ago] : 'unsupported format' %></span>
-      <% if c[:live] && busy %>
+      <% if c[:busy] %>
       <span class="conversation-busy" aria-label="a turn is running here" title="a turn is running here">●</span>
       <% end %>
     </a>
     <form method="post" action="/conversations/<%= c[:id] %>/delete">
       <button type="submit" class="conversation-delete"
               aria-label="Delete the conversation <%= c[:title] %>"
-              title="<%= busy ? 'the agent is mid-turn' : 'Delete this conversation' %>"
-              <%= 'disabled' if busy %>>&times;</button>
+              title="<%= c[:busy] ? 'a turn is running here' : 'Delete this conversation' %>"
+              <%= 'disabled' if c[:busy] %>>&times;</button>
     </form>
   </li>
   <% end %>

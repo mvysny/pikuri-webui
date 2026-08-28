@@ -118,7 +118,29 @@ Two things worth carrying into stage 2:
 - **`current` and `live` are now different marks** in the sidebar, and the CSS carries both. That
   distinction is what stage 2's "busy elsewhere" affordance builds on.
 
-### Stage 2 — a conversation owns its agent (the expensive one)
+### Stage 2 — a conversation owns its agent — **done 2026-08-28**
+
+Shipped as `D_conversation_owns_agent` and `D_serial_turn_executor`. What is
+left of this file below is the design notes those entries were written from;
+**graduate the rest of it** — the remaining live items are the detach-rendering
+question and the reaping question, both of which only matter at pool > 1.
+
+Two things worth carrying forward that the decision entries do not say:
+
+- **A bug this stage introduced and fixed:** `submit` held the runner's mutex
+  across `inject_user_message`, whose `on_change` callback re-enters through
+  `status_data`. Ruby's `Mutex` is not re-entrant, so a mid-turn injection
+  deadlocked. Both the post and the inject now happen outside the lock. **Any
+  callback pikuri fires synchronously is a re-entry hazard**; the interloper's
+  is the one we know about.
+- **The busy dot needs its own frame.** A `status` frame reaches only the tabs
+  reading that conversation — exactly the ones that can already see the turn.
+  The sidebar's per-row dot is the only sign a conversation you are *not*
+  looking at is working, and it is server-rendered, so the runner broadcasts an
+  unaddressed `conversations` frame on each idle↔busy transition. Found by
+  driving a browser; the specs had no opinion.
+
+### Stage 2 as originally planned
 
 - **Topic-addressed fan-out.** `Broadcaster#subscribe(conversation_id)`, and `broadcast` gains a
   topic. This is the "fan-out stops being a broadcast" cost `D_single_shared_conversation` named.

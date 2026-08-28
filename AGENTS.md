@@ -14,8 +14,8 @@ all pikuri. We own the web shell only.
 
 ## Status
 
-Scaffold complete: Sinatra app, SSE plumbing, listener/runner adapters,
-boot script, specs. Not yet exercised against a live llama.cpp server.
+Working against a live llama.cpp server: turns stream, conversations save
+and reopen, and a turn keeps running while you read another conversation.
 
 Tracks pikuri **master**, not a release: `pikuri-core` / `pikuri-pdf` are
 path dependencies on `../pikuri`. Upgrades follow pikuri's `CHANGELOG.md`
@@ -41,14 +41,14 @@ the alternatives that were rejected, live one entry per slug in
 - **The seam: `Pikuri::*` appears only in `bin/pikuri-web-chat`,
   {SseListener}, {AgentRunner} and {HistoryReplay}.** {Transcript},
   {Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
-  {ConversationStore}, {Config} and {App} are Pikuri-free — they speak
-  ids, kinds, HTML strings, paths and queues. A fourth adapter has to
-  argue for itself. See `D_pikuri_free_core`.
+  {ConversationStore}, {ConversationRegistry}, {Config} and {App} are
+  Pikuri-free — they speak ids, kinds, HTML strings, paths and queues. A
+  fourth adapter has to argue for itself. See `D_pikuri_free_core`.
 
-- **Deleting a conversation is irreversible, and the live one rolls onto a
-  fresh conversation.** `confirm()` then `rm_r`, `meta.json` unlinked
-  first; no undo, no tombstone, no retention cap. Deleting the live one
-  clears the agent *without saving it*. Both refuse while busy.
+- **Deleting a conversation is irreversible.** `confirm()` then `rm_r`,
+  `meta.json` unlinked first; no undo, no tombstone, no retention cap.
+  {ConversationRegistry} drops the runner before removing the folder, so
+  nothing writes it back. Refused while *that* conversation is mid-turn.
   See `D_delete_no_undo`.
 
 - **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
@@ -58,23 +58,24 @@ the alternatives that were rejected, live one entry per slug in
   iPhone *layout* does not work yet (`ideas/phone-layout.md`).
   See `D_target_browsers`.
 
-- **The transcript is server-authoritative.** {Transcript} holds the
-  rendered blocks; `GET /` renders the full snapshot and SSE carries
-  only deltas. Never introduce client-only conversation state.
+- **The transcript is server-authoritative.** {Transcript} holds one
+  conversation's rendered blocks; `GET /c/:id` renders the full snapshot
+  and SSE carries only deltas. Never introduce client-only conversation
+  state.
   See `D_server_authoritative_transcript`.
 
 - **A saved conversation is `history.json` plus our `meta.json`, and
   nothing else.** Blocks are re-derived by replaying synthesized events
   through {SseListener}, never stored — so old conversations get today's
-  renderer and today's CSS, and there is one transcript, rebuilt on load
-  rather than swapped. No rendered HTML on disk, no second renderer.
+  renderer and today's CSS. A runner replays its history once, when the
+  registry mints it. No rendered HTML on disk, no second renderer.
   See `D_replay_from_history`.
 
-- **The threading rule.** The agent loop runs on a worker thread owned
-  by {AgentRunner} — never on a Sinatra request thread. Thread-safety
-  lives in the sinks ({Transcript}, {Broadcaster}), not in their
-  callers; there is no UI thread and no marshaling.
-  See `D_worker_thread_agent_loop`.
+- **The threading rule.** The agent loop runs as a job on the shared
+  executor — never on a Sinatra request thread. Thread-safety lives in
+  the sinks ({Transcript}, {Broadcaster}) and in {ConversationRegistry};
+  there is no UI thread and no marshaling.
+  See `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
 - **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
   trap** — both run on the far side of Puma's unbounded graceful wait,
@@ -104,7 +105,7 @@ the alternatives that were rejected, live one entry per slug in
 
 - **Mid-loop input goes through `Control::Interloper`, and the input
   stays enabled while busy.** {AgentRunner#submit} starts a turn when
-  idle and injects when busy. Interloper delivers at turn start and at
+  idle and injects when busy; it never refuses. Interloper delivers at turn start and at
   tool-batch completion, so the status bar's queued count (pushed by
   `Interloper#on_change`) exists to make that wait legible.
   See `D_interloper_mid_loop_input`.
@@ -116,20 +117,26 @@ the alternatives that were rejected, live one entry per slug in
   own tool set and its own trifecta report.
   See `D_chat_only_entry_point`.
 
-- **One *live* agent, but every browser browses freely — and single-user
-  for good.** One agent and one live transcript, in-process. Which
-  conversation a *tab* views is that tab's own state and lives in the URL
-  (`GET /c/:id`); a conversation the agent is not on is replayed from its
-  history per request. Sending is what makes a conversation live, and it
-  is the only thing that refuses mid-turn. No sessions, no auth, no
-  accounts: a second person runs their own process under their own OS
-  account. `--bind` defaults to 127.0.0.1 and anything else is the
-  operator's risk. See `D_single_shared_conversation`.
-  **Still to come:** an agent per conversation, so a turn can run while
-  you read something else — `ideas/per-conversation-agents.md`. Until
-  then SSE is one undivided feed and every frame carries the live
-  conversation's id for the client to filter on; don't add state that
-  assumes one transcript is the only one.
+- **A conversation owns its agent; a tab owns which one it views — and
+  single-user for good.** {ConversationRegistry} holds one {AgentRunner}
+  per conversation opened, each with its own agent, history and
+  transcript. Which conversation a tab views is that tab's own state and
+  lives in the URL (`GET /c/:id`), and SSE frames are addressed per
+  conversation, so a turn runs on undisturbed while you read something
+  else. No sessions, no auth, no accounts: a second person runs their own
+  process under their own OS account. `--bind` defaults to 127.0.0.1 and
+  anything else is the operator's risk.
+  See `D_single_shared_conversation`, `D_conversation_owns_agent`.
+
+- **Turns run on one shared serial executor, and its pool size of 1 is
+  correctness, not tuning.** Sending never refuses: a turn submitted
+  while another conversation is working is *queued*, which the status bar
+  says out loud. An `Executor` holds no state by contract, so
+  single-writer safety at pool 1 is a property of that number and not of
+  the abstraction — raising it needs an owner thread first
+  (`ideas/event-queue.md`), and would also expose pikuri's shared tool
+  constants. The type says so: `Concurrent::SerialExecutorService`.
+  See `D_serial_turn_executor`.
 
 - **Theme is a presentational cookie, not transcript state.** Nine
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
@@ -165,30 +172,33 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `PikuriWeb.logger`.
 - `lib/pikuri_web/version.rb` — `PikuriWeb::VERSION`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
-  `GET /` (the live conversation), `GET /c/:id` (any conversation),
-  `GET /events` (SSE), `POST /messages` (selects its target first),
+  `GET /` (redirects to the newest), `GET /c/:id` (one conversation),
+  `GET /events?conversation=` (SSE, per conversation), `POST /messages`,
   `POST /cancel`, `GET`/`POST /conversations`,
-  `POST /conversations/:id/delete`. Collaborators injected via
-  class-level settings.
+  `POST /conversations/:id/delete`. Every route names the conversation it
+  acts on. Registry + broadcaster injected via class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
-- `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, owns
-  the worker thread, the start-vs-inject (Interloper) decision and the
-  live conversation (saves at turn end, loads or deletes one on request);
-  broadcasts status.
+- `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, one
+  conversation's agent, transcript and turn lifecycle: restore, the
+  start-vs-inject (Interloper) decision, idle/queued/running, the save at
+  turn end; broadcasts status.
+- `lib/pikuri_web/conversation_registry.rb` — `PikuriWeb::ConversationRegistry`,
+  the resident runners: mints one per conversation opened, deletes, and
+  serves the sidebar rows. Pikuri-free.
 - `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
-  saved `Agent::History` back into the events that produced it; also
-  `snapshot`, the same replay into throwaway blocks for viewing.
+  saved `Agent::History` back into the events that produced it.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
   the conversations folder: mints ids, owns `meta.json`, lists what is
   saved, deletes a folder. Pikuri-free.
 - `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
   "6 hours ago" for sidebar rows; server-rendered, hence stale-tolerant.
-- `lib/pikuri_web/transcript.rb` — server-authoritative rendered-block
-  store; thread-safe.
-- `lib/pikuri_web/broadcaster.rb` — SSE frame formatting + fan-out to
-  per-connection queues; thread-safe.
+- `lib/pikuri_web/transcript.rb` — one conversation's rendered blocks,
+  server-authoritative; thread-safe.
+- `lib/pikuri_web/broadcaster.rb` — SSE frame formatting + fan-out,
+  addressed per conversation so a turn reaches only the tabs reading it;
+  thread-safe.
 - `lib/pikuri_web/streaming_message.rb` — per-turn delta accumulator
   (append / finalize lifecycle), web descendant of the TUI's
   StreamingMarkdownBuffer.
@@ -203,8 +213,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/app.js` — the project's entire JavaScript; see above.
 - `public/style.css` — hand-written chat layout; block kinds mirror
   the TUI's visual language (muted thinking, cyan tool lines).
-- `bin/pikuri-web-chat` — boot script: config load, agent + tools +
-  Interloper wiring, the trifecta report, Puma start (server settings and
+- `bin/pikuri-web-chat` — boot script: config load, the conversation
+  factory (agent + tools + Interloper, one wiring for every
+  conversation), the shared turn executor, the trifecta report, Puma start (server settings and
   the shutdown hook). Same flags as the TUI plus `--port` / `--bind` /
   `--dev`; never an `--api-key`.
 

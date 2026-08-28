@@ -4,19 +4,11 @@
 // page by block id and keeps the status bar in sync.
 'use strict';
 
-// Which conversation this tab has open, and whether the agent is on it.
-// `viewing` is fixed for the life of the page (it came from the URL); `live`
-// moves, because another tab can send into a different conversation and take
-// the agent with it — every frame names the live conversation, so each one
-// re-answers the question.
+// The conversation this tab has open, fixed for the life of the page: it came
+// from the URL, and it is what the EventSource subscribes to. Everything this
+// file receives is already about this conversation — the server does the
+// addressing, so there is nothing here to filter.
 const viewing = document.documentElement.dataset.conversation;
-let live = document.documentElement.dataset.live === 'true';
-
-// Transcript frames belong to whatever conversation the agent is on. Applying
-// one to a tab reading a different conversation would interleave two
-// transcripts, so drop them. (Server-side per-conversation subscriptions are
-// what replace this; until then the fan-out really is a broadcast.)
-const mine = (data) => data.conversation === viewing;
 
 const transcript = document.getElementById('transcript');
 const sidebar = document.getElementById('sidebar');
@@ -49,23 +41,16 @@ const upsertBlock = ({ id, kind, html }) => {
   if (stick) transcript.scrollTop = transcript.scrollHeight;
 };
 
-const updateStatus = ({ busy, pending, tokens, conversation }) => {
-  live = conversation === viewing;
-  statusState.textContent = live ? (busy ? 'busy' : 'idle') : (busy ? 'busy elsewhere' : 'not live');
-  statusPending.textContent = live && pending > 0 ? `${pending} queued` : '';
-  statusTokens.textContent = live ? tokens : '';
-  // Cancel would stop whichever turn is running, which from a tab reading
-  // another conversation is not the one on screen.
-  cancelBtn.hidden = !busy || !live;
-  // The server refuses a new conversation mid-turn (409); matching that here
-  // keeps the control from looking broken. Rows stay clickable throughout —
-  // reading another conversation while this one works is the point — but
-  // delete is still refused.
-  newBtn.disabled = busy;
-  sidebar.querySelectorAll('.conversation-delete').forEach((btn) => {
-    btn.disabled = busy;
-    btn.title = busy ? 'the agent is mid-turn' : 'Delete this conversation';
-  });
+// `queued` means the turn is accepted but another conversation is holding the
+// executor. Saying so beats showing "busy" for a turn that has not started.
+const updateStatus = ({ state, busy, pending, tokens }) => {
+  statusState.textContent = state === 'queued' ? 'waiting for a free slot' : state;
+  statusPending.textContent = pending > 0 ? `${pending} queued` : '';
+  statusTokens.textContent = tokens;
+  cancelBtn.hidden = !busy;
+  // Nothing else is gated on busy any more: sending queues rather than
+  // refusing, a new conversation touches no existing one, and delete is
+  // refused per row by the server's own re-render of the sidebar.
 };
 
 // The sidebar's list, re-rendered by the server. Every conversation change
@@ -77,24 +62,15 @@ const refreshSidebar = () =>
     .then((r) => r.text())
     .then((html) => { sidebar.innerHTML = html; });
 
-const es = new EventSource('/events');
-const onFrame = (handler) => (e) => {
-  const data = JSON.parse(e.data);
-  if (mine(data)) handler(data);
-};
-es.addEventListener('block', onFrame(upsertBlock));
-es.addEventListener('remove', onFrame(({ id }) => document.getElementById(id)?.remove()));
-// Status is not filtered: a frame naming a *different* live conversation is
-// precisely how this tab learns it is no longer the live one.
+// Subscribed to this tab's conversation: the server sends only its frames,
+// plus the server-wide `conversations` signal.
+const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
+es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
+es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
 es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
-// The live conversation was cleared or swapped out from under this tab, and it
-// is still ours — so empty in place rather than reloading, which keeps a
-// half-typed message. The sidebar changed too (a row for what was just saved,
-// and the live marker moved), so pull the server's markup back in.
-es.addEventListener('reset', onFrame(() => {
-  transcript.replaceChildren();
-  refreshSidebar();
-}));
+// This conversation's transcript was emptied — a history load replaying into
+// it. Emptying in place rather than reloading keeps a half-typed message.
+es.addEventListener('reset', () => transcript.replaceChildren());
 // A conversation was deleted somewhere — this tab or another. Nothing about
 // the transcript changed unless a `reset` said so, only the list.
 es.addEventListener('conversations', refreshSidebar);
@@ -114,10 +90,11 @@ composer.addEventListener('submit', (e) => {
   promptEl.focus();
   fetch('/messages', { method: 'POST', body }).then((r) => {
     if (r.ok) return;
-    // 409: a turn is running in another conversation, so this one cannot take
-    // the agent yet. Hand the text back instead of swallowing it.
+    // Sending is never refused for being busy — a turn queues. So a failure
+    // here is the conversation having gone away underneath this tab; hand the
+    // text back rather than swallowing it.
     promptEl.value = text;
-    statusState.textContent = r.status === 409 ? 'busy elsewhere — not sent' : 'not sent';
+    statusState.textContent = 'not sent';
   });
 });
 
@@ -128,12 +105,14 @@ promptEl.addEventListener('keydown', (e) => {
   }
 });
 
-cancelBtn.addEventListener('click', () => fetch('/cancel', { method: 'POST' }));
+cancelBtn.addEventListener('click', () => {
+  const body = new FormData();
+  body.set('conversation', viewing);
+  fetch('/cancel', { method: 'POST', body });
+});
 
-// The fresh conversation has an id this page is not showing, so follow it
-// rather than clearing in place. Other tabs stay put, on a conversation that
-// is now saved and no longer live — which is the wanted behaviour, not a
-// side effect.
+// The fresh conversation has its own URL, so follow it. Other tabs stay
+// exactly where they are — nothing about their conversation changed.
 newBtn.addEventListener('click', () => {
   fetch('/conversations', { method: 'POST' })
     .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))

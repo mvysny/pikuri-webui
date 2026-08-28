@@ -3,18 +3,16 @@
 require 'pikuri/testing' # opt-in scaffolding, not loaded by pikuri-core boot
 require 'tmpdir'
 
-# The whole slice wired as production wires it: a real Pikuri::Agent over a
-# scripted transport, the real listener stack, and a real store over a temp
-# directory. What the unit specs cannot show is that the events the agent
-# actually emits drive the transcript and the save the way the fakes assume.
-RSpec.describe 'saving a conversation and starting a new one' do
+# The whole slice wired as production wires it: a real registry over a real
+# factory, real Pikuri::Agents over scripted transports, the real listener
+# stack, and a real store over a temp directory. What the unit specs cannot
+# show is that the events the agent actually emits drive the transcript, the
+# save and the SSE addressing the way the fakes assume.
+RSpec.describe 'conversations end to end' do
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
-  let(:transcript) { PikuriWeb::Transcript.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
-  let(:interloper) { Pikuri::Agent::Control::Interloper.new }
-  let(:cancellable) { Pikuri::Agent::Control::Cancellable.new }
-  let(:conversations) do
+  let(:store) do
     PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'fake-model')
   end
 
@@ -27,277 +25,185 @@ RSpec.describe 'saving a conversation and starting a new one' do
     def on_user_message(_ctx, _content) = '<skill name="writing-rdoc">the whole SKILL.md body</skill>'
   end
 
-  let(:listener) { PikuriWeb::SseListener.new(transcript: transcript, broadcaster: broadcaster) }
   let(:extensions) { [] }
 
-  let(:agent) do
-    transport = Pikuri::Testing.fake_transport do |llm|
-      llm.tool_call('calculator', expression: '2 + 2')
-      llm.reply('The answer is 4.')
-      llm.reply('A fresh start.')
-    end
-    Pikuri::Agent.new(
-      transport: transport,
-      system_prompt: 'test agent',
-      cancellable: cancellable,
-      interloper: interloper
-    ) do |c|
-      c.add_listener listener
-      c.add_tool Pikuri::Tool::CALCULATOR
-      extensions.each { |extension| c.add_extension extension }
+  # Runs turns inline on the calling thread, so #submit returns with the turn
+  # finished and the save landed — no waiting, no timeout, no flake.
+  let(:executor) { Concurrent::ImmediateExecutor.new }
+
+  # Everything a conversation owns, wired exactly as bin/pikuri-web-chat wires
+  # it — one stack per conversation, sharing only the broadcaster, the store
+  # and the executor.
+  let(:factory) do
+    lambda do |conversation|
+      interloper = Pikuri::Agent::Control::Interloper.new
+      cancellable = Pikuri::Agent::Control::Cancellable.new
+      transcript = PikuriWeb::Transcript.new
+      listener = PikuriWeb::SseListener.new(
+        transcript: transcript, broadcaster: broadcaster, conversation: conversation.id
+      )
+      transport = Pikuri::Testing.fake_transport do |llm|
+        llm.tool_call('calculator', expression: '2 + 2')
+        llm.reply('The answer is 4.')
+        llm.reply('A fresh start.')
+      end
+      agent = Pikuri::Agent.new(
+        transport: transport,
+        system_prompt: 'test agent',
+        cancellable: cancellable,
+        interloper: interloper
+      ) do |c|
+        c.add_listener listener
+        c.add_tool Pikuri::Tool::CALCULATOR
+        extensions.each { |extension| c.add_extension extension }
+      end
+      agents << agent
+
+      PikuriWeb::AgentRunner.new(
+        conversation: conversation, agent: agent, interloper: interloper,
+        cancellable: cancellable, broadcaster: broadcaster, conversations: store,
+        transcript: transcript, listener: listener, executor: executor
+      )
     end
   end
 
-  let(:runner) do
-    PikuriWeb::AgentRunner.new(
-      agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations, listener: listener,
-      # Runs the turn inline on this thread, so #submit returns with the turn
-      # finished and the save landed — no waiting, no timeout, no flake.
-      executor: Concurrent::ImmediateExecutor.new
-    )
-  end
+  let(:agents) { [] }
+  let(:registry) { PikuriWeb::ConversationRegistry.new(store: store, factory: factory) }
+  let(:runner) { registry.open(store.create) }
+  let(:transcript) { runner.transcript }
 
-  after { agent.close }
+  after { agents.each(&:close) }
 
-  def run_turn(message) = runner.submit(message)
+  def event_types(frames) = frames.map { |f| f[/event: (\w+)/, 1] }
 
   it 'renders the turn, then saves exactly what the agent holds' do
     dir = runner.conversation.dir
-    run_turn('What is 2 + 2?')
+    runner.submit('What is 2 + 2?')
 
     assert_equal %i[user tool_call tool_result assistant], transcript.to_a.map(&:kind)
 
     history = Pikuri::Agent::History.load(dir)
     assert_equal %w[user assistant tool assistant], history.messages.map(&:role)
-    assert_equal history, agent.export_history
     # The truncation the transcript applies is the shell's, not the file's.
     assert_equal 'What is 2 + 2?', history.messages.first.content
     assert_equal 1, JSON.parse((dir / 'meta.json').read).fetch('schema')
   end
 
-  # What a tab viewing a conversation the agent has moved off of renders from:
-  # the same blocks, re-derived, with the live transcript untouched.
-  it 'snapshots a conversation the agent is no longer on' do
-    saved = runner.conversation
-    run_turn('What is 2 + 2?')
-    live_blocks = transcript.to_a
-    runner.new_conversation
+  # The property this whole design exists for. Two conversations, two agents,
+  # two transcripts: work in one is invisible to the other, and a tab reading
+  # the second is never sent the first one's frames.
+  context 'two conversations at once' do
+    it 'keeps transcripts, histories and SSE frames apart' do
+      first = registry.open(store.create)
+      second = registry.open(store.create)
+      watching_second = broadcaster.subscribe(second.conversation.id)
 
-    snapshot = PikuriWeb::HistoryReplay.snapshot(saved.dir)
+      first.submit('What is 2 + 2?')
 
-    assert_equal live_blocks.map(&:kind), snapshot.map(&:kind)
-    assert_equal live_blocks.map(&:html), snapshot.map(&:html)
-    # The live transcript is the fresh conversation's, and stayed empty.
-    assert_empty transcript.to_a
-  end
+      refute_empty first.transcript.to_a
+      assert_empty second.transcript.to_a
+      assert_empty drain_frames(watching_second)
+      refute (second.conversation.dir / 'history.json').exist?
+    end
 
-  # The switch emits a Reset and then the replayed blocks. They describe the
-  # conversation being switched *to*, so they have to be stamped with its id —
-  # stamped with the outgoing one they would be dropped by the tab that asked
-  # for the switch and applied by the tabs that did not, which is backwards.
-  it 'stamps a switch onto the incoming conversation, not the outgoing one' do
-    saved = runner.conversation
-    run_turn('What is 2 + 2?')
-    runner.new_conversation
-    fresh = runner.conversation
-    queue = broadcaster.subscribe
+    it 'sends a turn frames only to the tabs reading that conversation' do
+      first = registry.open(store.create)
+      watching_first = broadcaster.subscribe(first.conversation.id)
 
-    assert_equal :loaded, runner.load_conversation(saved)
+      first.submit('What is 2 + 2?')
 
-    stamps = drain_frames(queue).map { |f| JSON.parse(f[/data: (.*)/, 1])['conversation'] }
-    refute_empty stamps
-    assert_equal [saved.id], stamps.uniq
-    refute_includes stamps, fresh.id
-  end
+      assert_includes event_types(drain_frames(watching_first)), 'block'
+    end
 
-  it 'reports an unreadable conversation as nil rather than raising' do
-    log = capture_log { assert_nil PikuriWeb::HistoryReplay.snapshot(@root / 'nope') }
-    assert_includes log, 'previewing conversation'
-  end
+    it 'leaves each conversation with its own turn state' do
+      first = registry.open(store.create)
+      second = registry.open(store.create)
 
-  it 'clears the live conversation and keeps the saved one readable' do
-    saved = runner.conversation
-    run_turn('What is 2 + 2?')
-    queue = broadcaster.subscribe
+      first.submit('What is 2 + 2?')
 
-    assert_equal :started, runner.new_conversation
-
-    assert_empty transcript.to_a
-    assert_includes drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }, 'reset'
-    assert_empty agent.export_history.messages
-    assert_equal 4, Pikuri::Agent::History.load(saved.dir).messages.size
+      assert_equal :idle, first.state
+      assert_equal :idle, second.state
+      refute second.busy?
+    end
   end
 
   # What Q_store_format (b) rests on: the file holds only messages, and the
-  # blocks are re-derived. These are the specs that catch a drift between what
-  # the agent emits live and what HistoryReplay synthesizes — including the
-  # <system-reminder> envelope, whose tag is a private constant upstream that
-  # HistoryReplay has to mirror.
-  context 'replaying a saved conversation' do
+  # blocks are re-derived. Reopening is the path a browser takes when it comes
+  # back to a conversation after a restart.
+  context 'reopening a saved conversation' do
     def rendered(store) = store.to_a.map { |b| [b.kind, b.html] }
 
-    # A listener with nowhere to broadcast, fed only from disk.
-    def replay_into(transcript, dir)
-      listener = PikuriWeb::SseListener.new(transcript: transcript, broadcaster: PikuriWeb::Broadcaster.new)
-      PikuriWeb::HistoryReplay.events(Pikuri::Agent::History.load(dir)).each { |e| listener.on_event(e) }
-    end
-
     it 'rebuilds the transcript the live turn produced, block for block' do
-      dir = runner.conversation.dir
-      run_turn('What is 2 + 2?')
+      conversation = runner.conversation
+      runner.submit('What is 2 + 2?')
+      produced = rendered(transcript)
 
-      restored = PikuriWeb::Transcript.new
-      replay_into(restored, dir)
+      # A second registry over the same folder: what a restarted process sees.
+      reopened = PikuriWeb::ConversationRegistry.new(store: store, factory: factory)
+                                                .open(store.find(conversation.id))
 
-      assert_equal rendered(transcript), rendered(restored)
+      assert_equal produced, rendered(reopened.transcript)
     end
 
     context 'with an extension injecting a reference block' do
       let(:extensions) { [SkillInjector.new] }
 
       it 'renders it as the one-line notice, not the wrapped body' do
-        dir = runner.conversation.dir
-        run_turn('What is 2 + 2?')
+        conversation = runner.conversation
+        runner.submit('What is 2 + 2?')
+        produced = rendered(transcript)
 
-        restored = PikuriWeb::Transcript.new
-        replay_into(restored, dir)
+        reopened = PikuriWeb::ConversationRegistry.new(store: store, factory: factory)
+                                                  .open(store.find(conversation.id))
 
-        assert_includes rendered(transcript).map(&:last).join, 'loaded skill: writing-rdoc'
-        assert_equal rendered(transcript), rendered(restored)
+        assert_includes produced.map(&:last).join, 'loaded skill: writing-rdoc'
+        assert_equal produced, rendered(reopened.transcript)
       end
     end
 
+    # What reopening does on the way in and a turn end does on the way out,
+    # with no turn between: the file the agent writes back has to be the file
+    # it was handed.
     it 'round-trips the folder unchanged' do
       dir = runner.conversation.dir
-      run_turn('What is 2 + 2?')
+      runner.submit('What is 2 + 2?')
       before = (dir / 'history.json').read
 
-      agent.load_history!(Pikuri::Agent::History.load(dir))
-      agent.export_history.save(dir)
+      PikuriWeb::ConversationRegistry.new(store: store, factory: factory)
+                                     .open(store.find(runner.conversation.id))
+      agents.last.export_history.save(dir)
 
       assert_equal before, (dir / 'history.json').read
     end
-  end
 
-  context '#load_conversation' do
-    it 'brings back the transcript and the history of a conversation left behind' do
-      first = runner.conversation
-      run_turn('What is 2 + 2?')
-      was_rendered = transcript.to_a.map { |b| [b.kind, b.html] }
-      runner.new_conversation
-      run_turn('Hello again')
-
-      saved = conversations.list.find { |c| c.id == first.id }
-      assert_equal :loaded, runner.load_conversation(saved)
-
-      assert_equal first.id, runner.conversation.id
-      assert_equal was_rendered, transcript.to_a.map { |b| [b.kind, b.html] }
-      assert_equal Pikuri::Agent::History.load(first.dir), agent.export_history
-    end
-
-    it 'saves the conversation it is leaving' do
-      first = runner.conversation
-      run_turn('What is 2 + 2?')
-      runner.new_conversation
-      second = runner.conversation
-      run_turn('Hello again')
-
-      runner.load_conversation(conversations.list.find { |c| c.id == first.id })
-
-      assert_equal %w[user assistant], Pikuri::Agent::History.load(second.dir).messages.map(&:role)
-    end
-
-    it 'tells every tab to empty before the restored blocks arrive' do
-      first = runner.conversation
-      run_turn('What is 2 + 2?')
-      runner.new_conversation
-      queue = broadcaster.subscribe
-
-      runner.load_conversation(conversations.list.find { |c| c.id == first.id })
-
-      events = drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
-      assert_equal 'reset', events.first
-      assert_equal 4, events.count('block')
-    end
-
-    it 'is a no-op on the conversation already live' do
-      run_turn('What is 2 + 2?')
-      rendered_before = transcript.to_a.map(&:id)
-      saved = conversations.list.find { |c| c.id == runner.conversation.id }
-
-      assert_equal :current, runner.load_conversation(saved)
-      assert_equal rendered_before, transcript.to_a.map(&:id)
-    end
-
-    it 'leaves the live conversation alone when the stored history is unreadable' do
-      first = runner.conversation
-      run_turn('What is 2 + 2?')
-      runner.new_conversation
-      run_turn('Hello again')
-      (first.dir / 'history.json').write('{"version": 1, "messages": ')
-
-      saved = conversations.list.find { |c| c.id == first.id }
-      log = capture_log { assert_equal :failed, runner.load_conversation(saved) }
-
-      assert_includes log, 'loading conversation'
-      assert_equal %w[user assistant], agent.export_history.messages.map(&:role)
-      assert_equal :assistant, transcript.to_a.last.kind
+    it 'restores nothing, quietly, for a conversation never saved' do
+      fresh = registry.open(store.create)
+      assert_empty fresh.transcript.to_a
     end
   end
 
-  context '#delete_conversation' do
-    it 'empties the transcript and takes the folder, when the live one goes' do
-      live = runner.conversation
-      run_turn('What is 2 + 2?')
-      queue = broadcaster.subscribe
+  context 'deleting' do
+    it 'removes the folder and forgets the runner' do
+      runner.submit('What is 2 + 2?')
+      conversation = runner.conversation
 
-      assert_equal :deleted, runner.delete_conversation(live)
+      assert_equal :deleted, registry.delete(conversation)
 
-      # The reset arrives from the agent's own Event::Reset through the real
-      # listener — the same path #new_conversation uses.
-      assert_includes drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }, 'reset'
-      assert_empty transcript.to_a
-      assert_empty agent.export_history.messages
-      refute live.dir.exist?
-      refute_equal live.id, runner.conversation.id
-      assert_empty conversations.list
+      refute conversation.dir.exist?
+      assert_nil registry.resident(conversation.id)
     end
 
-    it 'removes a stored conversation without touching the live transcript' do
-      first = runner.conversation
-      run_turn('What is 2 + 2?')
-      runner.new_conversation
-      run_turn('Hello again')
+    it 'does not resurrect the folder from a runner that is gone' do
+      runner.submit('What is 2 + 2?')
+      conversation = runner.conversation
+      registry.delete(conversation)
 
-      assert_equal :deleted, runner.delete_conversation(conversations.find(first.id))
+      # The old runner still exists in this spec's hand, but the registry has
+      # dropped it: reopening mints a fresh one over an empty folder.
+      reopened = registry.open(store.create)
+      reopened.submit('and again?')
 
-      refute first.dir.exist?
-      assert_equal [runner.conversation.id], conversations.list.map(&:id)
-      assert_equal %w[user assistant], agent.export_history.messages.map(&:role)
-      assert_equal :assistant, transcript.to_a.last.kind
+      refute conversation.dir.exist?
     end
-
-    it 'does not resurrect the folder on the next turn' do
-      live = runner.conversation
-      run_turn('What is 2 + 2?')
-      runner.delete_conversation(live)
-      run_turn('Hello again')
-
-      refute live.dir.exist?, 'the turn-end save wrote the deleted conversation back'
-      assert_equal [runner.conversation.id], conversations.list.map(&:id)
-    end
-  end
-
-  it 'saves the next turn into the new conversation, leaving the old alone' do
-    first = runner.conversation
-    run_turn('What is 2 + 2?')
-    runner.new_conversation
-    second = runner.conversation
-    run_turn('Hello again')
-
-    refute_equal first.dir, second.dir
-    assert_equal %w[user assistant], Pikuri::Agent::History.load(second.dir).messages.map(&:role)
-    assert_equal 4, Pikuri::Agent::History.load(first.dir).messages.size
   end
 end

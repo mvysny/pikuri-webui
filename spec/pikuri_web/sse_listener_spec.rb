@@ -6,8 +6,8 @@
 RSpec.describe PikuriWeb::SseListener do
   let(:transcript) { PikuriWeb::Transcript.new }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
-  let(:listener) { described_class.new(transcript: transcript, broadcaster: broadcaster) }
-  let(:queue) { broadcaster.subscribe }
+  let(:listener) { described_class.new(transcript: transcript, broadcaster: broadcaster, conversation: 'c-1') }
+  let(:queue) { broadcaster.subscribe('c-1') }
 
   def event_types(frames)
     frames.map { |f| f[/event: (\w+)/, 1] }

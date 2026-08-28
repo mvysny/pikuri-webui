@@ -3,247 +3,209 @@
 require 'pikuri-core'
 
 module PikuriWeb
-  # Owns the submit/inject decision and runs turns off the request thread —
-  # the web host's answer to the TUI's "the agent loop blocks on the LLM and
-  # must not run on the UI thread" rule, where the protected resource is
-  # the Sinatra request thread instead.
+  # One conversation's agent, transcript and turn lifecycle. A runner *is* a
+  # conversation — the one it was built for, for as long as it exists — so
+  # there is no switching here, and no "live" conversation to switch away
+  # from. {ConversationRegistry} holds one per conversation anyone has opened.
   #
-  # {#submit} is the single entry point for user text:
+  #   runner.restore!            # replay what is on disk, once, at mint time
+  #   runner.submit('hello')     # => :started (queued on the executor) or :injected
+  #   runner.state               # => :idle | :queued | :running
+  #   runner.cancel              # dequeue if queued, stop at a tool boundary if running
   #
-  # - Agent idle → post a job running
-  #   +Pikuri::Agent#run_loop(user_message:)+ on the injected executor. The
-  #   listener stack renders everything the loop emits; nothing here touches
-  #   the transcript.
-  # - Agent busy → +Pikuri::Agent::Control::Interloper#inject_user_message+.
-  #   The agent drains the queue at turn start and once each tool batch
-  #   completes, emitting +UserTurn(mid_loop: true)+, so the injection
-  #   renders through the same listener path as a normal turn. An
-  #   injection placed while the model is mid-response still waits for
-  #   that boundary, which is why the input stays enabled while busy and
-  #   the status bar carries the queued count.
+  # {#submit} is the single entry point for user text, and it never refuses:
   #
-  # The race between "the job finishes" and "submit checks {#busy?}" is
-  # benign by pikuri's own design: the queue survives across runs, so a
-  # message injected into a just-finished loop is picked up by the next
-  # {#submit}'s fresh +run_loop+ drain. The @mutex serializes submits
-  # against each other and against {#new_conversation}, and covers the
-  # save at turn end — so it is held across a few ms of disk I/O.
+  # - Idle → post a job running +Pikuri::Agent#run_loop(user_message:)+ on the
+  #   shared executor. The listener stack renders everything the loop emits;
+  #   nothing here touches the transcript.
+  # - Busy → +Pikuri::Agent::Control::Interloper#inject_user_message+. The
+  #   agent drains the queue at turn start and once each tool batch completes,
+  #   emitting +UserTurn(mid_loop: true)+, so the injection renders through the
+  #   same listener path as a normal turn. An injection placed while the model
+  #   is mid-response still waits for that boundary, which is why the input
+  #   stays enabled while busy and the status bar carries the queued count.
   #
-  # == Why the executor must be serial
+  # The race between "the job finishes" and "submit checks {#busy?}" is benign
+  # by pikuri's own design: the queue survives across runs, so a message
+  # injected into a just-finished loop is picked up by the next {#submit}'s
+  # fresh +run_loop+ drain.
   #
-  # +executor:+ is typed +SerialExecutorService+ rather than any executor,
-  # and that is a correctness constraint, not a performance one: one turn at
-  # a time is what keeps a single agent's history, its listener's per-turn
-  # streaming state and the conversation folder single-writer. A pool of two
-  # would run two +run_loop+s over the same agent. Raising concurrency is a
-  # matter of more *agents* on more serial executors, never of widening this
-  # one.
+  # == Idle, queued, running
   #
-  # Status changes (busy/idle/pending counts) are broadcast as SSE
-  # +status+ events; {#status_data} serves the same hash to +GET /+ for
-  # the initial page render.
+  # The executor is shared and serial, so a turn submitted while *another*
+  # conversation is working waits its turn. That wait is visible — +:queued+ is
+  # not +:running+ — because a conversation showing "thinking" when nothing is
+  # being thought is a lie the status bar should not tell.
+  #
+  # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
+  # entry whether it was cancelled while waiting and returns without starting.
+  # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop.
   #
   # == Persistence
   #
-  # This class owns *which* conversation is live, because it owns the agent
-  # whose history that is:
-  #
-  #   runner.new_conversation                        # => :started — saved, cleared, fresh id
-  #   runner.load_conversation(store.list.first)     # => :loaded — saved, then replaced
-  #   runner.delete_conversation(store.list.first)   # => :deleted — removed, never saved
-  #
-  # Saves happen at *turn end*, from the turn job's ensure, so a history
-  # is never exported mid-+complete+ and {#busy?} staying true until the save
+  # Saves happen at *turn end*, from the turn job's ensure, so a history is
+  # never exported mid-+complete+ and {#busy?} staying true until the save
   # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
-  # loses that turn — and saving per *message* instead would not fix it: there
-  # is no event to hang that on, because +Event::ToolResult+ fires before
-  # ruby_llm appends the tool message and nothing fires when it lands.
+  # loses that turn — accepted (single user, rare restarts) — and saving per
+  # *message* instead would not fix it: there is no event to hang that on,
+  # because +Event::ToolResult+ fires before ruby_llm appends the tool message
+  # and nothing fires when it lands.
   #
   # Part of the Pikuri seam: this class, SseListener and HistoryReplay are the
   # only lib/ files that reference +Pikuri::*+.
+  #
+  # Thread-safe.
   class AgentRunner
+    # @param conversation [ConversationStore::Conversation] the one this runner
+    #   is for, fixed for its lifetime
     # @param agent [Pikuri::Agent] fully wired agent (listeners, tools,
-    #   interloper:, cancellable: — built in bin/pikuri-web-chat)
+    #   interloper:, cancellable: — built by the factory in bin/pikuri-web-chat)
     # @param interloper [Pikuri::Agent::Control::Interloper] the same
     #   instance passed to the agent's +interloper:+ kwarg
     # @param cancellable [Pikuri::Agent::Control::Cancellable] the same
     #   instance passed to the agent's +cancellable:+ kwarg
     # @param broadcaster [Broadcaster] SSE fan-out for +status+ events
-    # @param conversations [ConversationStore] where turns get saved; the
-    #   live conversation is minted from it here and re-minted by
-    #   {#new_conversation}
-    # @param listener [SseListener] the transcript's renderer, fed directly
-    #   by {#load_conversation}'s replay — the agent's own listener stack
-    #   wraps it in a delta rate-limiter that a replay has nothing to say to
-    # @param executor [Concurrent::SerialExecutorService] where turns run —
-    #   +SingleThreadExecutor+ in the app, +ImmediateExecutor+ in specs (turns
-    #   run inline, so no spec has to wait for a thread). The serial type is
-    #   load-bearing; see *Why the executor must be serial* above
-    # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when
-    #   present, its +status_line+ rides along in every status event
-    #   (the web status bar's token/context readout)
-    def initialize(agent:, interloper:, cancellable:, broadcaster:, conversations:, listener:,
-                   executor:, token_log: nil)
+    # @param conversations [ConversationStore] where turns get saved
+    # @param transcript [Transcript] this conversation's blocks, which +GET
+    #   /c/:id+ renders as its snapshot
+    # @param listener [SseListener] the transcript's renderer, fed directly by
+    #   {#restore!}'s replay — the agent's own listener stack wraps it in a
+    #   delta rate-limiter that a replay has nothing to say to
+    # @param executor [Concurrent::SerialExecutorService] shared by every
+    #   runner: it is the admission gate that keeps concurrent turns from
+    #   outnumbering the inference server's slots. Serial is load-bearing — see
+    #   the Gemfile's concurrent-ruby paragraph and
+    #   ideas/per-conversation-agents.md
+    # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when present,
+    #   its +status_line+ rides along in every status event
+    def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
+                   conversations:, transcript:, listener:, executor:, token_log: nil)
+      @conversation = conversation
       @agent = agent
-      @executor = executor
       @interloper = interloper
       @cancellable = cancellable
       @broadcaster = broadcaster
       @conversations = conversations
+      @transcript = transcript
       @listener = listener
+      @executor = executor
       @token_log = token_log
       @mutex = Mutex.new
-      @running = false
-      self.conversation = conversations.create
+      @state = :idle
+      @abandon = false
+      @announced_busy = false
 
       # Claims the interloper's single on_change slot. Without it the
-      # queued-count badge only moves when a request happens to hit
-      # {#submit} or a turn ends — the agent's own mid-loop drain would
-      # leave the browser showing a stale "2 queued" for the rest of the
-      # turn. Fires on the agent's loop thread; {Broadcaster} is the sink
-      # that makes that safe.
+      # queued-count badge only moves when a request happens to hit {#submit}
+      # or a turn ends — the agent's own mid-loop drain would leave the browser
+      # showing a stale "2 queued" for the rest of the turn.
       @interloper.on_change = ->(_count) { broadcast_status }
     end
 
-    # Route one user message: start a turn or inject mid-loop.
+    # @return [ConversationStore::Conversation]
+    attr_reader :conversation
+
+    # @return [Transcript] this conversation's rendered blocks
+    attr_reader :transcript
+
+    # Replay what is stored for this conversation into the agent and the
+    # transcript. Called once, when the registry mints this runner.
     #
-    # @param message [String] non-blank user text (App rejects blanks
-    #   before calling; Interloper/run_loop double-check)
-    # @return [:started, :injected]
-    def submit(message)
-      result = @mutex.synchronize do
-        if busy?
-          @interloper.inject_user_message(message)
-          :injected
-        else
-          @running = true
-          :started
-        end
-      end
-      # Outside the mutex: an ImmediateExecutor runs the job on this thread,
-      # and run_turn's ensure re-takes this same non-reentrant mutex. @running
-      # is claimed already, so a submit landing in the gap injects.
-      @executor.post { run_turn(message) } if result == :started
-      broadcast_status
-      result
+    # A conversation with nothing on disk (brand new, or never saved because it
+    # holds no messages) restores to empty, which is already correct.
+    #
+    # @return [Boolean] whether a stored history was found and loaded
+    def restore!
+      history = stored_history
+      return false if history.nil?
+
+      @agent.load_history!(history)
+      HistoryReplay.events(history).each { |event| @listener.on_event(event) }
+      true
     end
 
-    # Request a gentle stop of the in-flight turn (next tool boundary —
-    # +Cancellable+'s semantic). No-op when idle: the agent resets the
-    # flag at the start of each turn, so a stale cancel can't poison the
-    # next one — but skipping the set keeps the log honest.
+    # Route one user message: start a turn or inject into the running one.
+    #
+    # Never refuses. A turn submitted while another conversation holds the
+    # executor is queued, not rejected — the wait is what {#state} reports.
+    #
+    # @param message [String] non-blank user text (App rejects blanks before
+    #   calling; Interloper/run_loop double-check)
+    # @return [:started, :injected]
+    def submit(message)
+      starting = @mutex.synchronize do
+        next false if busy?
+
+        @abandon = false
+        @state = :queued
+        true
+      end
+
+      # Both of these run outside the mutex, for the same reason from two
+      # directions: they re-enter. An ImmediateExecutor runs the job on this
+      # thread, and run_turn's ensure re-takes this non-reentrant mutex;
+      # inject_user_message fires the Interloper's on_change synchronously,
+      # which broadcasts status and reads back through here. Claiming the
+      # state above is what makes the gap safe — and an injection landing in
+      # it after the turn ended is picked up by the next run_loop's drain
+      # anyway, which is the benign race described above.
+      if starting
+        @executor.post { run_turn(message) }
+      else
+        @interloper.inject_user_message(message)
+      end
+      broadcast_status
+      starting ? :started : :injected
+    end
+
+    # Stop this conversation's turn: drop it before it starts if it is still
+    # waiting for the executor, or ask the agent to stop at the next tool
+    # boundary if it is already running. No-op when idle.
     #
     # @return [void]
     def cancel
-      @cancellable.cancel! if busy?
+      @mutex.synchronize do
+        @abandon = true if @state == :queued
+        @cancellable.cancel! if @state == :running
+      end
+      broadcast_status
       nil
     end
 
-    # @return [Boolean] whether a turn is posted and not yet finished —
-    #   queued and running are one state here, because a serial executor will
-    #   run what it has accepted and the save has not landed until it does
+    # Deliberately unlocked, like {#busy?}: a single ivar read is atomic under
+    # the GVL, and locking here would deadlock the status broadcast that the
+    # Interloper's on_change fires from inside pikuri's own enqueue.
+    #
+    # @return [:idle, :queued, :running] +:queued+ means the job is posted but
+    #   another conversation is still holding the executor
+    def state = @state
+
+    # @return [Boolean] whether a turn is posted and not yet finished
     def busy?
-      @running
+      @state != :idle
     end
 
-    # @return [ConversationStore::Conversation] the live conversation — the
-    #   one the agent's history belongs to and turns are saved into
-    def conversation
-      @mutex.synchronize { @conversation }
-    end
-
-    # Save the live conversation, clear the agent, and mint a fresh one.
+    # Status payload shared by SSE +status+ events and the initial page render.
     #
-    # The transcript is not touched here: +clear_conversation+ emits
-    # +Event::Reset+, and {SseListener} is what empties the transcript and
-    # every open tab.
-    #
-    # Refuses while a turn is in flight — pikuri's +clear_conversation+ is
-    # explicitly not safe against a running +run_loop+, and discarding
-    # someone's turn because they clicked a button is worse than refusing.
-    #
-    # @return [:started, :busy, :empty] +:empty+ when the conversation holds no
-    #   messages: nothing to save, nothing to clear.
-    def new_conversation
-      outcome = @mutex.synchronize { switch_conversation }
-      # TokenLog zeroes its context readout on Reset, so the status bar is
-      # stale until this lands.
-      broadcast_status if outcome == :started
-      outcome
-    end
-
-    # Save the live conversation and put a stored one in its place: the agent's
-    # history, and the transcript every browser is looking at.
-    #
-    #   runner.load_conversation(store.list.first)   # => :loaded
-    #
-    # The transcript is rebuilt rather than swapped: +load_history!+ emits
-    # +Event::Reset+, which empties it and every open tab, and {HistoryReplay}
-    # then refills it through the same {SseListener} a live turn renders
-    # through. So there is only ever one transcript, and a saved conversation
-    # comes back with today's Markdown renderer and today's CSS.
-    #
-    # Refuses while a turn is in flight, for the same reason
-    # {#new_conversation} does. The refusal is also what makes feeding the
-    # listener from a request thread safe: {SseListener} keeps unguarded
-    # per-turn streaming state, and nothing can be emitting into it while this
-    # holds the mutex and no loop is running.
-    #
-    # @param conversation [ConversationStore::Conversation] from
-    #   +ConversationStore#list+ — a listed conversation rather than an id, so
-    #   no caller ever turns user input into a path
-    # @return [:loaded, :busy, :current, :failed] +:current+ when it is
-    #   already live (nothing to do); +:failed+ when the stored history could
-    #   not be read, in which case the live conversation is untouched
-    def load_conversation(conversation)
-      outcome = @mutex.synchronize { switch_to(conversation) }
-      # TokenLog reseeds its context readout from Event::HistoryLoaded, so the
-      # status bar is stale until this lands.
-      broadcast_status if outcome == :loaded
-      outcome
-    end
-
-    # Delete a conversation, stored or live: the folder goes, and the live one
-    # takes the agent's history with it.
-    #
-    #   runner.delete_conversation(store.list.first)   # => :deleted
-    #
-    # Deleting the live conversation is {#new_conversation} *without the save*
-    # — the point is not to keep it. The transcript empties itself, as it does
-    # for a fresh conversation: +clear_conversation+ emits +Event::Reset+ and
-    # {SseListener} does the rest.
-    #
-    # The agent is cleared before the folder is removed, so a removal that
-    # raises leaves an emptied agent rather than one whose next turn-end save
-    # would write the deleted conversation straight back.
-    #
-    # @param conversation [ConversationStore::Conversation] from
-    #   +ConversationStore#list+ — a listed conversation rather than an id, so
-    #   no caller ever turns user input into a path
-    # @return [:deleted, :busy, :failed] +:busy+ while a turn is in flight,
-    #   which would otherwise save the folder back moments after it went
-    def delete_conversation(conversation)
-      outcome, live = @mutex.synchronize { discard(conversation) }
-      # Only the live conversation resets the agent, and TokenLog zeroes its
-      # context readout on Event::Reset.
-      broadcast_status if live
-      @broadcaster.broadcast(event: :conversations, data: {}) if outcome == :deleted
-      outcome
-    end
-
-    # Status payload shared by SSE +status+ events and +GET /+'s initial
-    # render.
-    #
-    # @return [Hash] +{busy:, pending:, tokens:}+ — +pending+ is the
+    # @return [Hash] +{state:, busy:, pending:, tokens:}+ — +pending+ is the
     #   count of queued mid-loop injections; +tokens+ is TokenLog's
     #   preformatted status line ('' when absent)
     def status_data
       {
+        state: state,
         busy: busy?,
         pending: @interloper.size,
         tokens: @token_log&.status_line.to_s
       }
     end
+
+    # @return [Pikuri::Agent::Trifecta] the advisory tool-exposure map, for the
+    #   boot script's one-time report
+    def trifecta = @agent.trifecta
+
+    # @return [Boolean] whether this conversation holds no messages, so nothing
+    #   would be saved and its folder need not survive
+    def empty? = @agent.export_history.messages.empty?
 
     private
 
@@ -257,109 +219,59 @@ module PikuriWeb
     # @param message [String]
     # @return [void]
     def run_turn(message)
+      return if claim_running == :abandoned
+
       @agent.run_loop(user_message: message)
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      # Save before clearing @running: a #new_conversation slipping into the
-      # gap would re-point @conversation, and this save would then land the
-      # finished turn in the fresh conversation's folder.
       @mutex.synchronize do
         persist
-        @running = false
+        @state = :idle
       end
       broadcast_status
     end
 
-    # {#new_conversation}'s body; the caller holds @mutex.
+    # Move from queued to running, unless {#cancel} got here first — which is
+    # how a queued turn is dropped without the executor needing to support
+    # dequeuing.
     #
-    # @return [:started, :busy, :empty]
-    def switch_conversation
-      return :busy if busy?
-
-      history = @agent.export_history
-      return :empty if history.messages.empty?
-
-      persist(history)
-      # Re-point before clearing: +clear_conversation+ emits the +Reset+ that
-      # empties the transcript, and it has to be stamped with the conversation
-      # it belongs to — the fresh one. Stamped with the outgoing id, tabs still
-      # reading that conversation would wipe a transcript that is now a
-      # perfectly good saved one.
-      self.conversation = @conversations.create
-      @agent.clear_conversation
-      :started
-    end
-
-    # {#load_conversation}'s body; the caller holds @mutex.
-    #
-    # @param conversation [ConversationStore::Conversation]
-    # @return [:loaded, :busy, :current, :failed]
-    def switch_to(conversation)
-      return :busy if busy?
-      return :current if conversation.id == @conversation.id
-
-      # Read before writing: a corrupt or missing history.json must leave the
-      # live conversation exactly as it was, not half-swapped.
-      history = stored_history(conversation)
-      return :failed if history.nil?
-
-      persist
-      # Persist the outgoing one, then re-point *before* emitting anything: the
-      # +Reset+ and the replayed blocks describe the incoming conversation, and
-      # a frame stamped with the outgoing id would be dropped by the very tab
-      # that asked for the switch — and applied by the tabs that did not.
-      self.conversation = conversation
-      @agent.load_history!(history)
-      HistoryReplay.events(history).each { |event| @listener.on_event(event) }
-      :loaded
-    end
-
-    # {#delete_conversation}'s body; the caller holds @mutex.
-    #
-    # @param conversation [ConversationStore::Conversation]
-    # @return [Array(Symbol, Boolean)] the outcome, and whether the deleted
-    #   conversation was the live one
-    def discard(conversation)
-      return [:busy, false] if busy?
-
-      live = conversation.id == @conversation.id
-      if live
-        # Re-point before clearing, as in {#switch_conversation}: the +Reset+
-        # belongs to the fresh conversation that replaces this one.
-        self.conversation = @conversations.create
-        @agent.clear_conversation
+    # @return [:running, :abandoned]
+    def claim_running
+      abandoned = @mutex.synchronize do
+        @state = :running unless @abandon
+        @abandon
       end
-      @conversations.delete(conversation)
-      [:deleted, live]
-    rescue StandardError => e
-      PikuriWeb.logger.error("deleting conversation #{conversation.id} failed (#{e.class}: #{e.message})")
-      [:failed, live]
+      return :running unless abandoned
+
+      @mutex.synchronize { @state = :idle }
+      broadcast_status
+      :abandoned
     end
 
-    # @param conversation [ConversationStore::Conversation]
-    # @return [Pikuri::Agent::History, nil] nil when the folder cannot be read
-    #   — a file someone edited or a half-written save is the library's to
-    #   report and ours to survive, unlike a raise from the load itself
-    def stored_history(conversation)
-      Pikuri::Agent::History.load(conversation.dir)
+    # @return [Pikuri::Agent::History, nil] nil when this conversation has
+    #   nothing stored, or when what is stored cannot be read — a file someone
+    #   edited or a half-written save is the library's to report and ours to
+    #   survive, unlike a raise from the load itself
+    def stored_history
+      return nil unless (@conversation.dir / 'history.json').file?
+
+      Pikuri::Agent::History.load(@conversation.dir)
     rescue Pikuri::Agent::History::Error, SystemCallError => e
-      PikuriWeb.logger.error("loading conversation #{conversation.id} failed (#{e.class}: #{e.message})")
+      PikuriWeb.logger.error("loading conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
       nil
     end
 
-    # Write the live conversation to disk: pikuri's +history.json+, then our
+    # Write this conversation to disk: pikuri's +history.json+, then our
     # +meta.json+.
     #
     # Filesystem failures are logged, not raised — a full disk must not take
     # the conversation down with it, and this runs inside the turn job's
     # ensure, where a raise would escape.
     #
-    # @param history [Pikuri::Agent::History] the snapshot to write; a
-    #   parameter because exporting copies attachment bytes, so a caller
-    #   holding one already must not make a second
     # @return [void]
-    def persist(history = @agent.export_history)
+    def persist
+      history = @agent.export_history
       return if history.messages.empty?
 
       history.save(@conversation.dir)
@@ -368,24 +280,32 @@ module PikuriWeb
       PikuriWeb.logger.error("saving conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
     end
 
-    # Point the live conversation at +conversation+, and tell the
-    # {Broadcaster} which id to stamp on outgoing frames so a tab viewing a
-    # different conversation can drop them.
-    #
-    # Deliberately takes no lock: every caller past the constructor already
-    # holds @mutex, and Ruby's Mutex will not re-enter.
-    #
-    # @param conversation [ConversationStore::Conversation]
-    # @return [void]
-    def conversation=(conversation)
-      @conversation = conversation
-      @broadcaster.conversation_id = conversation.id
-      nil
-    end
-
     # @return [void]
     def broadcast_status
-      @broadcaster.broadcast(event: :status, data: status_data)
+      @broadcaster.broadcast(event: :status, data: status_data, conversation: @conversation.id)
+      announce_busy_change
+    end
+
+    # Tell *every* tab the sidebar changed when this conversation starts or
+    # stops working.
+    #
+    # The status frame above only reaches tabs reading this conversation, and
+    # they are precisely the ones that can already see the turn. The per-row
+    # dot is the only sign a conversation you are *not* looking at is working,
+    # and it is server-rendered, so somebody has to ask for a fresh list.
+    #
+    # Only on the transition: a status frame fires per streamed injection
+    # count, and re-fetching the sidebar for each would be silly.
+    #
+    # @return [void]
+    def announce_busy_change
+      changed = @mutex.synchronize do
+        was = @announced_busy
+        @announced_busy = busy?
+        was != @announced_busy
+      end
+      @broadcaster.broadcast(event: :conversations, data: {}) if changed
+      nil
     end
   end
 end

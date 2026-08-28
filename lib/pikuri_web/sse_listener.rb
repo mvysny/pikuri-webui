@@ -51,12 +51,17 @@ module PikuriWeb
     # renderers stay visually consistent.
     MAX_TOOL_RESULT_CHARS = 200
 
-    # @param transcript [Transcript] server-side block store
+    # @param transcript [Transcript] this conversation's block store
     # @param broadcaster [Broadcaster] SSE fan-out to connected browsers
-    def initialize(transcript:, broadcaster:)
+    # @param conversation [String, nil] id every frame is addressed to, so it
+    #   reaches only the tabs showing this conversation. +nil+ broadcasts to
+    #   everyone, which is what a throwaway listener rendering a snapshot
+    #   wants — it has no subscribers at all
+    def initialize(transcript:, broadcaster:, conversation: nil)
       super()
       @transcript = transcript
       @broadcaster = broadcaster
+      @conversation = conversation
       @assistant = nil
       @thinking = nil
       @thinking_streamed = false
@@ -172,7 +177,7 @@ module PikuriWeb
       @thinking = nil
       @thinking_streamed = false
       @transcript.clear
-      @broadcaster.broadcast(event: :reset, data: {})
+      @broadcaster.broadcast(event: :reset, data: {}, conversation: @conversation)
     end
 
     # Append one finished block: store it and announce it.
@@ -182,7 +187,8 @@ module PikuriWeb
     # @return [void]
     def add_block(kind, html)
       block = @transcript.add(kind: kind, html: html)
-      @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html })
+      @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html },
+                             conversation: @conversation)
     end
 
     # Open a streamed block: an empty transcript block claims the id and
@@ -206,7 +212,8 @@ module PikuriWeb
     # @return [void]
     def push_stream(kind, message, html)
       @transcript.update(message.id, html)
-      @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html })
+      @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },
+                             conversation: @conversation)
     end
 
     # Close out the assistant streaming message.
@@ -224,7 +231,7 @@ module PikuriWeb
       case mode
       when :wipe
         @transcript.remove(@assistant.id)
-        @broadcaster.broadcast(event: :remove, data: { id: @assistant.id })
+        @broadcaster.broadcast(event: :remove, data: { id: @assistant.id }, conversation: @conversation)
       when :preserve
         # Block keeps its content; drop the handle below.
       else

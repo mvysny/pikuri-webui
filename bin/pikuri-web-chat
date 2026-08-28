@@ -92,7 +92,6 @@ Pikuri::Extractors::PDF.register
 
 # — the Pikuri-free plumbing —
 
-transcript = PikuriWeb::Transcript.new
 broadcaster = PikuriWeb::Broadcaster.new
 
 # Everything this shell persists lives under one folder named after the
@@ -102,9 +101,7 @@ broadcaster = PikuriWeb::Broadcaster.new
 # too, never straight into Paths.state.
 state_root = Pikuri::Paths.state / 'pikuri-web-chat'
 
-# Saved conversations fill the sidebar. Loading one back works
-# (AgentRunner#load_conversation) but no route reaches it yet, so the only
-# switch a user can make is "+ new conversation".
+# Saved conversations fill the sidebar; opening one mints its agent.
 conversations = PikuriWeb::ConversationStore.new(
   root: state_root / 'conversations',
   shell: 'pikuri-web-chat',
@@ -117,82 +114,101 @@ conversations = PikuriWeb::ConversationStore.new(
 
 # — the agent (same wiring as bin/pikuri-tui-chat, plus the Interloper) —
 
-cancel_flag = Pikuri::Agent::Control::Cancellable.new
-interloper = Pikuri::Agent::Control::Interloper.new
-
 system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
 system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
-# Constructed up front so the Agent's ListenerList and the AgentRunner
-# (for the status bar's token readout) see the same TokenLog instance.
-token_log = Pikuri::Agent::Listener::TokenLog.new
-
-sse_listener = PikuriWeb::SseListener.new(transcript: transcript, broadcaster: broadcaster)
-
-# Coalesce streaming delta chunks at 15 fps before they reach the
-# kramdown-rendering SseListener: a fast llama.cpp can emit dozens of
-# deltas per second and re-rendering + broadcasting every one is wasted
-# work the user can't perceive. flush_pending_on_non_delta: false because
-# the Assistant / Thinking bookend events re-render the authoritative
-# final content (see StreamingMessage#finalize), so emitting the trailing
-# 0–66 ms of buffered deltas right before that is pure waste.
-rate_limited_listener = Pikuri::Agent::Listener::RateLimited.new(
-  sse_listener,
-  fps: 15,
-  flush_pending_on_non_delta: false
-)
-
-# The connection (api_base / api_key) rides the transport's own per-chat
-# RubyLLM::Context — pikuri needs no process-global RubyLLM.configure, and
-# from_openai_server normalizes a server value that already ends in /v1.
-# The connection's context_window (an explicit cap for a server pikuri's
-# llama.cpp /props probe can't reach) rides it too; nil defers to that
-# probe.
-agent = Pikuri::Agent.new(
-  transport: Pikuri::Agent::ChatTransport.from_openai_server(
-    server: llm.server,
-    model: llm.model,
-    api_key: api_key,
-    context_window: llm.context_window
-  ),
-  system_prompt: system_prompt,
-  step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
-  cancellable: cancel_flag,
-  interloper: interloper,
-  streaming: true
-) do |c|
-  c.add_listener rate_limited_listener
-  c.add_listener token_log
-  c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
-  c.add_tool Pikuri::Tool::CALCULATOR
-  c.add_tool Pikuri::Tool::WEB_SCRAPE
-  c.add_tool Pikuri::Tool::FETCH
-end
-
-# Turns run here rather than on a Sinatra request thread. Single-threaded on
-# purpose, and not a tunable: one agent's history, its listener's per-turn
-# state and the conversation folder are all single-writer, so a second thread
-# would run two run_loops over the same agent. More concurrency means more
-# agents on more serial executors — which is what
-# ideas/per-conversation-agents.md is for.
+# Turns run here rather than on a Sinatra request thread, and every
+# conversation shares this one executor. Single-threaded on purpose, and not a
+# tunable: the executor holds no state, so single-writer safety at pool 1 is a
+# property of *this* number rather than of the abstraction, and a second thread
+# would let two conversations write the conversations folder at once. Raising
+# it needs the owner-thread work in ideas/event-queue.md first.
 turn_executor = Concurrent::SingleThreadExecutor.new
 
-runner = PikuriWeb::AgentRunner.new(
-  agent: agent,
-  interloper: interloper,
-  cancellable: cancel_flag,
-  broadcaster: broadcaster,
-  conversations: conversations,
-  listener: sse_listener,
-  executor: turn_executor,
-  token_log: token_log
-)
+# One conversation's whole stack. Every agent this process runs comes from
+# here, which is what keeps the boot-time trifecta report below true of all of
+# them — a second wiring with an extra tool would silently invalidate it.
+conversation_factory = lambda do |conversation|
+  cancel_flag = Pikuri::Agent::Control::Cancellable.new
+  interloper = Pikuri::Agent::Control::Interloper.new
+  # Constructed up front so the Agent's ListenerList and the AgentRunner (for
+  # the status bar's token readout) see the same TokenLog instance.
+  token_log = Pikuri::Agent::Listener::TokenLog.new
+
+  transcript = PikuriWeb::Transcript.new
+  sse_listener = PikuriWeb::SseListener.new(
+    transcript: transcript, broadcaster: broadcaster, conversation: conversation.id
+  )
+
+  # Coalesce streaming delta chunks at 15 fps before they reach the
+  # kramdown-rendering SseListener: a fast llama.cpp can emit dozens of
+  # deltas per second and re-rendering + broadcasting every one is wasted
+  # work the user can't perceive. flush_pending_on_non_delta: false because
+  # the Assistant / Thinking bookend events re-render the authoritative
+  # final content (see StreamingMessage#finalize), so emitting the trailing
+  # 0–66 ms of buffered deltas right before that is pure waste.
+  rate_limited_listener = Pikuri::Agent::Listener::RateLimited.new(
+    sse_listener,
+    fps: 15,
+    flush_pending_on_non_delta: false
+  )
+
+  # The connection (api_base / api_key) rides the transport's own per-chat
+  # RubyLLM::Context — pikuri needs no process-global RubyLLM.configure, and
+  # from_openai_server normalizes a server value that already ends in /v1.
+  # The connection's context_window (an explicit cap for a server pikuri's
+  # llama.cpp /props probe can't reach) rides it too; nil defers to that
+  # probe. One transport per agent: they share no mutable state, but pikuri
+  # makes no promise that they could.
+  agent = Pikuri::Agent.new(
+    transport: Pikuri::Agent::ChatTransport.from_openai_server(
+      server: llm.server,
+      model: llm.model,
+      api_key: api_key,
+      context_window: llm.context_window
+    ),
+    system_prompt: system_prompt,
+    step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
+    cancellable: cancel_flag,
+    interloper: interloper,
+    streaming: true
+  ) do |c|
+    c.add_listener rate_limited_listener
+    c.add_listener token_log
+    # Tool instances are shared process-wide (CALCULATOR / WEB_SCRAPE / FETCH
+    # are pikuri constants). Safe only because the executor is serial, so no
+    # two agents are ever inside a tool at once — see the Gemfile and
+    # ideas/per-conversation-agents.md before raising the pool.
+    c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
+    c.add_tool Pikuri::Tool::CALCULATOR
+    c.add_tool Pikuri::Tool::WEB_SCRAPE
+    c.add_tool Pikuri::Tool::FETCH
+  end
+
+  PikuriWeb::AgentRunner.new(
+    conversation: conversation,
+    agent: agent,
+    interloper: interloper,
+    cancellable: cancel_flag,
+    broadcaster: broadcaster,
+    conversations: conversations,
+    transcript: transcript,
+    listener: sse_listener,
+    executor: turn_executor,
+    token_log: token_log
+  )
+end
+
+registry = PikuriWeb::ConversationRegistry.new(store: conversations, factory: conversation_factory)
 
 # The advisory lethal-trifecta map, printed once at boot: which of private
 # data / untrusted content / egress this tool set actually holds, and
 # which tool contributes each leg. Never blocks — this shell wires
 # web_search + web_scrape + fetch, so it is expected to report egress.
-puts agent.trifecta.render
+#
+# Read off the conversation a fresh visitor would land on, which also warms it:
+# one factory means this report describes every agent, not just this one.
+puts registry.default.then { |c| registry.open(c) }.trifecta.render
 
 # SSE heartbeat: a comment frame every 15 s. A write attempt is the only
 # way to notice a silently vanished browser, whose /events drain loop
@@ -204,10 +220,8 @@ Thread.new do
   end
 end
 
-PikuriWeb::App.set :transcript, transcript
 PikuriWeb::App.set :broadcaster, broadcaster
-PikuriWeb::App.set :runner, runner
-PikuriWeb::App.set :conversations, conversations
+PikuriWeb::App.set :registry, registry
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
 # neither mode: the agent, its listener stack and the runner's worker
