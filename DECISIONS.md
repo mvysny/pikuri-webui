@@ -84,6 +84,111 @@ design or the invariant.
 
 ---
 
+## D_no_store_lock — `ConversationStore` gets no lock; the folder is consistent by construction, and the store owns the whole write path (2026-08-28)
+
+**Status:** Accepted 2026-08-28. Nothing to ship *as a lock*: this is a
+decision not to build one. What did ship in the same pass is the thing
+that made the decision honest — {ConversationStore#save} taking the
+history and owning the whole commit — plus the rdoc that stops
+overclaiming. The idea file that argued for the lock across three
+rewrites is graduated into this entry.
+
+**Context.** The store's consistency rested on a *discipline* nobody
+stated: writes went through {AgentRunner}'s mutex, reads ran from
+Sinatra request threads, and the class's rdoc said "Thread-safe:
+stateless past its constructor arguments" — a true claim about the
+*object*, sitting exactly where a reader looks for a claim about the
+*folder*. Every mechanical argument for a lock has since been settled
+elsewhere:
+
+- **N writers arrived and were audited clean.** Per-conversation agents
+  (`D_conversation_owns_agent`) mean several turn-ends write at once, but
+  into *disjoint subdirectories*, and one directory can never have two
+  writers because a conversation admits one turn at a time. The audit is
+  in `D_serial_turn_executor`, and it is why `--turns > 1` shipped
+  without a lock.
+- **Reads are already serialized.** Nothing in {App} holds a store;
+  every call goes through {ConversationRegistry}, whose monitor wraps
+  `#list`, `#find`, `#create` and `#delete`.
+- **The listing already tolerates concurrency.** `#row` takes a read's
+  own `ENOENT` as the answer instead of checking `file?` first, so a scan
+  concurrent with a save or a delete is correct with no coordination.
+
+**Decision.** No lock in `ConversationStore`, and no plan for one. What
+holds the folder together is named in the class's `== Thread-safety`
+section: the partition gives one writer per directory, both files are
+written temp-file-and-rename, `#row` absorbs the races a listing can
+see, and cross-call sequences are explicitly *not* atomic — `#find` then
+`#delete` has a gap and callers tolerate the conversation vanishing
+inside it.
+
+**The store owns the whole write path, history included.** Previously
+{AgentRunner#persist} wrote both halves itself — `history.save(dir)`
+then `store.write_meta` — which left the store claiming a folder it
+wrote half of. `#save` now creates the directory 0700, calls
+`History#save`, then writes `meta.json` as the commit point, and
+`write_meta` is private. This is what lets the decision above rest on
+"unnecessary" rather than on "impossible": a lock that could only ever
+guard our half of the directory would have been the same
+claim-wider-than-the-mechanism problem in a new place. Two things fell
+out of it beyond the lock question — a history is no longer written into
+a default-mode directory and tightened afterwards (`History#save`
+creates `attachments/` *before* it `mkpath`s the conversation directory,
+so the contents were briefly world-readable), and "an interrupted save
+leaves the conversation unlisted" became a spec instead of a comment,
+because the store can now be interrupted between the two halves where
+two separate calls could not be. The seam question this raised — a
+pikuri type in the store — is `D_pikuri_free_core`.
+
+**Rejected: `Concurrent::ReentrantReadWriteLock`.** An RWLock buys
+parallel readers, which pays only under read contention with long read
+critical sections; `#list` is a directory scan of a few hundred `stat`s
+for a single user with a handful of tabs. **Do not re-argue this on
+dependency cost** — the note that killed it for two rewrites ("a
+genuinely new direct dependency, and the only non-stdlib lock in the
+pikuri family") is void: `concurrent-ruby` is in the bundle for the turn
+executor (`D_serial_turn_executor`), so the gem is free and it *still*
+loses. If a sidebar ever measures badly the fix is the index file
+`#list` already rejects, not a fancier lock.
+
+**Rejected: a plain stdlib `Monitor`** (re-entrant, because `#find` calls
+`#list` and a `Mutex` would deadlock on itself — the accidental
+threading bug the lock was meant to prevent, introduced by the lock).
+Four reasons, past the fact that it fixes nothing:
+
+- It would serialize operations that are already safe to interleave.
+- **It invites the false argument it was meant to prevent.** A monitor in
+  the store reads as *the* reason the folder is consistent, and the next
+  reader relaxes the atomic rename or puts the `file?` check back — the
+  only two mechanisms that work against a second process or against
+  pikuri's own writes. `D_serial_turn_executor` warns in exactly this
+  shape: distrust a correctness claim resting on the wrong mechanism.
+- It would be the third lock, needing a documented ordering (registry or
+  runner outermost, store innermost, never the reverse). Forced in
+  practice, still a cost to carry for no benefit.
+- Since `#save` owns the history write, any lock around it would hold
+  across `history.json` + `attachments/` — the longest filesystem
+  operation here — where it would once have held only a rename. That is
+  the one argument an RWLock has left, and it argues for no lock around
+  the write at all.
+
+**Consequences.**
+
+- **Adding a lock later is a two-line diff**, now that one method owns
+  the write path. Nothing is deferred at a cost, which is the whole
+  reason not to speculate.
+- **The trigger to reopen:** a store operation spanning two directories
+  (a move, a merge, an index file), or a second writer to one
+  conversation's folder. Either breaks the disjointness the audit rests
+  on.
+- **An in-process lock was never the answer to a second process** and
+  cannot be sold as one (`D_no_multi_process_lock`).
+- The one real bug this re-audit turned up was not a store problem at
+  all: a request thread holding a runner across a delete could resurrect
+  the conversation, fixed as runner state ({AgentRunner#discard!}) and
+  written up in `D_delete_no_undo`'s consequences. A store lock would not
+  have caught it — a lock per method is not a transaction.
+
 ## D_no_multi_process_lock — A second process against one state root is a user mistake, not a supported configuration; last-writer-wins stands (2026-08-28)
 
 **Status:** Accepted 2026-08-28. Nothing to ship: this is a decision *not*
@@ -140,9 +245,9 @@ default than a warning in the README.
   and no bearing on this entry: one process cannot claim another's runner.
 - `ConversationStore` never grows cross-process consistency. Its atomic
   rename remains all a concurrent reader outside this process gets, and
-  the in-process locking question (`ideas/conversation-store-locking.md`)
-  is independent of this entry — an in-process lock never bought anything
-  across processes anyway.
+  the in-process locking question is independent of this entry — settled
+  separately in `D_no_store_lock`, and an in-process lock never bought
+  anything across processes anyway.
 - **The one trigger that reopens this: a shared state root.**
   `D_per_shell_state_root` deliberately keeps each shell's conversations
   under its own folder, so today's only colliders are two copies of *this*
@@ -367,8 +472,8 @@ tabs alone; server-side last-viewed is this decision reversed.
 **Consequences.**
 
 - The registry and {ConversationStore} are now the only genuinely shared
-  mutable state. The registry has a `Monitor`; the folder's own
-  consistency is still open (`ideas/conversation-store-locking.md`).
+  mutable state. The registry has a `Monitor`; the folder needs no lock of
+  its own, for the reasons in `D_no_store_lock`.
 - `HistoryReplay.snapshot` became dead code and was removed.
 - Rendering a detached conversation is not optimized: the
   accumulate-don't-render idea only pays at `--turns` > 1, which

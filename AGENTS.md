@@ -166,6 +166,17 @@ the alternatives that were rejected, live one entry per slug in
   nothing outside `style.css` reads a raw color.
   See `D_theme_cookie`.
 
+- **{ConversationStore} has no lock, and does not need one.** One writer
+  per conversation directory (from the per-conversation partition, not
+  from the class), temp-file-and-rename for both files, and a `#row` that
+  takes a read's own `ENOENT` as the answer. `#save` owns the whole
+  commit — directory 0700, then `History#save`, then `meta.json` as the
+  commit point — so nothing writes beside it and no caller decides the
+  order. Cross-call sequences (`#find` then `#delete`) are deliberately
+  *not* atomic. Don't add a `Monitor` for safety: it would serialize what
+  is already safe to interleave and invite a correctness argument resting
+  on the wrong mechanism. See `D_no_store_lock`.
+
 - **One process per state root — and nothing enforces it, ever.** Two
   `pikuri-web-chat` processes sharing `conversations/` silently overwrite
   each other's turns and can resurrect a deleted conversation;
