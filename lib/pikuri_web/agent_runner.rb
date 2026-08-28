@@ -43,7 +43,9 @@ module PikuriWeb
   # Saves happen at *turn end*, from the worker thread's ensure, so a history
   # is never exported mid-+complete+ and {#busy?} staying true until the save
   # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
-  # loses that turn.
+  # loses that turn — and saving per *message* instead would not fix it: there
+  # is no event to hang that on, because +Event::ToolResult+ fires before
+  # ruby_llm appends the tool message and nothing fires when it lands.
   #
   # Part of the Pikuri seam: this class, SseListener and HistoryReplay are the
   # only lib/ files that reference +Pikuri::*+.

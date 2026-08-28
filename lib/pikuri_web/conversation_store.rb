@@ -132,6 +132,10 @@ module PikuriWeb
     # dropped: a conversation the user can see and not open beats one that
     # silently isn't there.
     #
+    # No index file fronts the per-conversation +meta.json+ reads: an index is
+    # a cache of the directory, and it drifts from it. They are fine into the
+    # hundreds — measure a slow sidebar before trading that away.
+    #
     # @return [Array<Conversation>]
     def list
       @root.children.filter_map { |dir| row(dir) }.sort_by(&:id).reverse

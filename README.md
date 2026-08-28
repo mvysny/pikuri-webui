@@ -115,6 +115,11 @@ said anything in leaves nothing behind. Turns are saved as they finish, so
 quitting keeps the conversation; a restart starts you in a fresh one with
 all the old ones a click away in the sidebar.
 
+Run one at a time. A second `pikuri-web-chat` on another port shares that
+folder, and each writes `history.json` whole, so two of them in the same
+conversation will quietly overwrite each other's turns. Nothing stops you;
+there is no lock yet.
+
 Only `history.json` is stored — what you see on screen is rebuilt from it
 each time, so a rendering or styling fix reaches every old conversation
 too.

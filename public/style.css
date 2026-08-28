@@ -143,6 +143,9 @@ body {
 
 .conversation.unsupported .conversation-title { color: var(--fg-muted); }
 
+/* Not a <details> drawer, tempting as a zero-JS one is: CSS cannot force it
+   open, so it would be collapsible on wide screens too, or start collapsed
+   everywhere. */
 @media (max-width: 48rem) {
   body { flex-direction: column; }
 
