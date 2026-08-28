@@ -291,9 +291,29 @@ rule is the wrong lever.
   mutable state. The registry has a `Monitor`; the folder's own
   consistency is still open (`ideas/conversation-store-locking.md`).
 - `HistoryReplay.snapshot` became dead code and was removed.
+- **Device continuity is what mirroring was buying, and it is gone.**
+  Picking up the iPad no longer shows what the desktop shows. Real but
+  weak, and if it is ever wanted back the answer is a "last viewed
+  conversation" cookie on the `D_theme_cookie` precedent — never making
+  every tab follow one selection again.
 - Rendering a detached conversation is not optimized: the
   accumulate-don't-render idea only pays at `--turns` > 1, which
-  `D_serial_turn_executor` now allows but does not default to.
+  `D_serial_turn_executor` now allows but does not default to. If it is
+  ever built, the choice is already made and the two losing readings are
+  why. *Render always, fan out selectively* (what ships today) re-runs
+  kramdown at 15 fps for a conversation nobody is watching — the single
+  most expensive thing the server does, per `D_rerender_and_replace`.
+  *Drop the transcript and replay on attach* is cheapest while detached
+  but shows a hole where the streaming answer is, because `history.json`
+  holds no in-flight partial message. **Accumulate, don't render** wins
+  by keeping the {StreamingMessage} appends and the block structure while
+  skipping the kramdown pass and the broadcast, then rendering once on
+  attach — which works because `D_rerender_and_replace` already makes the
+  HTML a pure function of the accumulated source, so it defers as easily
+  as it moves threads. Open when it is picked up: whether
+  `Listener::RateLimited`'s 15 fps timer should be wired at all for a
+  detached conversation. Probably not, but it is pikuri's class — check
+  whether a listener stack can be rebuilt mid-life before assuming.
 
 ## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count (2026-08-28)
 
