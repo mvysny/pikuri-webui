@@ -285,17 +285,24 @@ keeps trying to delete. Minting on view costs one agent per conversation
 delete. Add reaping if residency ever actually hurts; a cleverer minting
 rule is the wrong lever.
 
+**Rejected: device continuity, and it was never wanted.** Mirroring's one
+apparent benefit was that every browser showed the same conversation, so
+opening the iPad landed you where the desktop was. Independent browsers
+are the *goal*, not the price: two tabs reading two conversations is the
+feature, and a view that follows you between devices is the same
+behaviour wearing a friendlier name. So this is not a cost to be paid
+back later — do not reintroduce global selection state to buy it. If some
+future ask genuinely needs a landing spot better than "the newest
+conversation" ({ConversationRegistry#default}), it is a per-browser
+`last_viewed` cookie on the `D_theme_cookie` precedent, which leaves other
+tabs alone; server-side last-viewed is this decision reversed.
+
 **Consequences.**
 
 - The registry and {ConversationStore} are now the only genuinely shared
   mutable state. The registry has a `Monitor`; the folder's own
   consistency is still open (`ideas/conversation-store-locking.md`).
 - `HistoryReplay.snapshot` became dead code and was removed.
-- **Device continuity is what mirroring was buying, and it is gone.**
-  Picking up the iPad no longer shows what the desktop shows. Real but
-  weak, and if it is ever wanted back the answer is a "last viewed
-  conversation" cookie on the `D_theme_cookie` precedent — never making
-  every tab follow one selection again.
 - Rendering a detached conversation is not optimized: the
   accumulate-don't-render idea only pays at `--turns` > 1, which
   `D_serial_turn_executor` now allows but does not default to. If it is
