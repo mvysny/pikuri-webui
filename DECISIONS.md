@@ -84,6 +84,110 @@ design or the invariant.
 
 ---
 
+## D_one_shell_two_layouts — One `index.erb` for the phone and the desktop; the difference is placement, so it is CSS's (2026-08-28)
+
+**Status:** Accepted, shipped 2026-08-28. The phone layout is the
+Claude-Mobile shape: `#topbar`'s ☰ opens `#drawer` as a full-screen
+conversation list, the composer is one growing row with a yellow ↑, and
+the status bar drops to a line of text.
+
+**Context.** The iPhone was the one target in `D_target_browsers` that
+did not work, and the shape asked for is visibly a different screen from
+the desktop's sidebar-beside-chat. The obvious move is a second template
+picked per device.
+
+**Decision.** One markup tree, two layouts, selected by `@media
+(max-width: 40rem)` in `public/style.css`. `#drawer` *is* the desktop
+sidebar column — the same element and the same `_sidebar.erb` partial —
+restyled to `position: fixed; inset: 0`; `#topbar` and `#drawer-header`
+are each hidden in the layout that has no use for them. Nothing is
+per-device: resizing a window crosses the breakpoint live.
+
+The breakpoint is **40rem**, not the 48rem it replaces, because iPad
+portrait is 768px = exactly 48rem — so the old query matched on an iPad
+and handed a *desktop* target the phone fallback.
+
+**Rejected: a second `index.erb` (or `mobile.erb`).** Four arguments, any
+one of which is close to sufficient:
+
+- *The block-kind contract triples.* `AGENTS.md` **Conventions** already
+  says a new block kind means touching {SseListener}, `index.erb` and
+  `style.css`. A second shell makes that four files forever, to buy a
+  divergence that is one media query.
+- *`app.js` would have to branch.* It reaches a dozen elements by id.
+  Two shells means either the same ids in both — in which case the second
+  file is a copy, not a variant — or per-layout branches in the one file
+  whose whole premise is minimalism (`D_no_js_build_step`).
+- *Choosing a shell means UA sniffing, and UA is the wrong signal here
+  specifically.* iPadOS Safari reports as a Mac, so the one distinction
+  this project's browser decision turns on — iPad counts as desktop — is
+  the one the UA string lies about. Width is the real signal, it is free
+  in CSS, and it stays testable by resizing a desktop window.
+- *A response that varies by device needs `Vary`*, and cannot fix itself
+  when the device rotates.
+
+**The line, for the next time this comes up:** different *placement* is
+CSS's; different *content* — a shorter transcript, thinking blocks
+suppressed, a summarized view — would be a template's. If content ever
+diverges, the split is by *fragment* (`_composer.erb`, `_topbar.erb`)
+shared between two thin shells, never two copies of the page, and
+selected by an explicit URL or cookie rather than by UA.
+
+**Rejected: dropping the status bar on the phone,** which is what Claude
+Mobile does. The queued count is load-bearing here — it is how a
+mid-turn injection's wait is made legible
+(`D_interloper_mid_loop_input`) and how a *queued* turn is distinguished
+from a refused one (`D_serial_turn_executor`). It stays, as one line of
+text; its two buttons move instead.
+
+**Rejected: one button that is ↑ when idle and ■ when busy.** The
+prettier phone composer, and it silently costs the feature: sending
+mid-turn *injects*, so an arrow that becomes a stop button takes
+injection away exactly when it is useful. Send and stop stay two
+controls, stop revealed by `busy`.
+
+**Rejected: the zero-JS checkbox drawer** (`:has(:checked)` and two
+`<label for>`s) — it genuinely covers open, close and select, since
+tapping a row is a page load. But a full-screen overlay that is not a
+modal leaves the chat behind it tabbable and readable to a screen
+reader, and `inert` is a DOM property, not a selector. `app.js` owns the
+toggle for that one attribute's sake, and gets Escape-to-close with it.
+**Rejected alongside it: `<dialog>` + `showModal()`**, which would hand
+over focus containment for free but has to be an in-flow sidebar on the
+desktop and a top-layer modal on the phone; mixing the `open` attribute
+with `showModal()` for that is worse than the ten lines it saves.
+
+**Consequences.**
+
+- **`+ new conversation` and the theme toggle now live in the drawer
+  footer on *both* layouts.** They could not be duplicated per layout
+  (one id, one element), and the phone's status bar is text-only. This is
+  the one change the desktop sees, and it reads better anyway: starting a
+  conversation belongs with the list of conversations.
+- The breakpoint is written twice — `style.css`'s media query and
+  `app.js`'s `matchMedia`, which closes the drawer when the layout
+  changes so `inert` cannot strand a chat column nothing covers. They
+  must move together.
+- The composer is one auto-grown row on the desktop too, and its
+  keyboard hint moved from the placeholder to a `title`: a paragraph of
+  placeholder wraps to three lines at phone width, and Chrome sizes an
+  empty textarea to its *wrapped placeholder*, so auto-grow opened the
+  box at three lines before a character was typed.
+- **Phone landscape is what a width-only query gets wrong.** An iPhone 15
+  landscape is 852×393: it passes 40rem onto the desktop layout, with a
+  20rem sidebar taking a third of the width and a 393px column holding
+  transcript, composer and status bar. Unfixed on purpose — adding
+  `(max-height: 26rem)` to the query is the cheap catch if anyone
+  actually chats in landscape.
+- **Verified in a resized desktop Chromium, not on a phone.** What is
+  measured: the 40rem/48rem breakpoint against iPad portrait, 44px tap
+  targets, auto-grow capping at 40vh, no horizontal page scroll at 320px,
+  `inert`/Escape/resize-guard, both palettes. What a real iPhone still
+  owes an answer on: `dvh` against Safari's shrinking chrome, the
+  on-screen keyboard under `interactive-widget=resizes-content`,
+  `env(safe-area-inset-*)`, and whether an always-visible per-row ✕
+  mis-taps in practice (see `D_delete_no_undo`).
+
 ## D_no_store_lock — `ConversationStore` gets no lock; the folder is consistent by construction, and the store owns the whole write path (2026-08-28)
 
 **Status:** Accepted 2026-08-28. Nothing to ship *as a lock*: this is a
@@ -665,10 +769,21 @@ deleting.
   share; a future titles or search feature should reuse the same signal.
 - The ✕ is revealed on hover and `:focus-within`, and shown
   unconditionally under `@media (hover: none)` — on a touch device the row
-  itself is a submit button, so a tap selects the conversation instead of
-  revealing anything (`D_target_browsers`). The reveal uses `opacity`, not
+  itself is a link, so a tap opens the conversation instead of revealing
+  anything (`D_target_browsers`). The reveal uses `opacity`, not
   `display`/`visibility`, or the button would leave the tab order and
   `:focus-within` could never fire.
+- **Every row keeps its own ✕ on the phone, at 44px**
+  (`D_one_shell_two_layouts`). *Rejected: the ✕ on the current row only.*
+  It reads as a mis-tap defense, and there is already a `confirm()` by
+  name in front of the delete, so a mis-tap costs a dialog and not a
+  conversation — while a full-screen drawer has the width the 12rem
+  sidebar did not. It also degrades badly: delete is refused mid-turn, so
+  the row you are viewing is the likeliest one to be undeletable, and
+  "only the current row is deletable" can mean nothing is. *Also
+  rejected: an iOS-style `Edit` toggle* revealing all the ✕s — the
+  fallback if 44px targets turn out to mis-tap on hardware, not the
+  starting point.
 - **A second process can resurrect what you deleted**, by saving its own
   live copy at the next turn end. Accepted as a limitation, and the
   strongest case anything made for a cross-process lock — which was
@@ -699,8 +814,9 @@ deleting.
 
 ## D_target_browsers — Firefox on the desktop, Safari on iPad and iPhone; greenfield only, no polyfills (2026-08-28)
 
-**Status:** Accepted 2026-08-28. The iPhone layout is *not* shipped — see
-Consequences.
+**Status:** Accepted 2026-08-28. All three targets have a layout as of
+2026-08-28 (`D_one_shell_two_layouts`); the iPhone's is unverified on a
+real device — see Consequences.
 
 **Context.** The delete button's hover-reveal was the first change whose
 correctness depended on which browsers count, and "modern browsers" is
@@ -719,16 +835,35 @@ unanswered, and in practice it means testing on whatever is open.
 
 **Consequences.**
 
-- **The iPhone layout does not work, and that is deferred, not denied.**
-  There is a `@media (max-width: 48rem)` fallback that stacks the sidebar
-  into a 20vh strip, and nobody has opened it on a phone. Tracked in
-  `ideas/phone-layout.md`, which leads with the finding that the real
-  blocker is not CSS: reaching this app from a phone means `--bind`
-  leaving 127.0.0.1, and there is no auth (`D_single_shared_conversation`).
-- That breakpoint is on the wrong side of the iPad: portrait is 768px,
-  exactly 48rem, so `max-width: 48rem` matches and an iPad in portrait
-  gets the phone fallback today. Contradicts treating iPads as desktops;
-  fix belongs with the phone layout.
+- **The iPhone has a layout, and it is still unverified on hardware.**
+  `D_one_shell_two_layouts` is the shape and what it measured in a
+  resized desktop browser; what it could not measure is exactly the
+  iOS-specific half (`dvh` against Safari's shrinking chrome, the
+  on-screen keyboard, `env(safe-area-inset-*)`).
+- **A phone layout is not a phone *recommendation*, and the split is
+  deliberate.** Reaching this app from a phone means `--bind` leaving
+  127.0.0.1 with no auth and no sessions
+  (`D_single_shared_conversation`) and an unencrypted conversations
+  folder — a LAN bind hands the whole history to anything on the wifi.
+  The layout exposes nothing on its own, so it shipped ahead of that
+  question; what must not follow from it is `README.md` starting to
+  suggest the phone, or a nice phone UI becoming the argument for a
+  casual `--bind 0.0.0.0`. The options nobody has costed: a bearer token
+  the desktop prints as a QR code, basic auth over a self-signed cert
+  (iOS trust-store friction), an SSH tunnel from the phone, a
+  tailnet-only bind. An honest outcome is that none of them land and the
+  README keeps saying "you are exposing your conversations, here is the
+  flag".
+- **A PWA is downstream of that same question,** and only worth it once
+  it has an answer: an installed icon that opens a dead page whenever the
+  desktop is asleep is worse than a bookmark. It would need a
+  `manifest.json` plus the legacy `apple-mobile-web-app-*` metas (verify
+  what current iOS honours rather than trusting a note), and standalone
+  mode removes the URL bar — which takes the shrinking-viewport problem
+  with it, so the two halves are friendlier together than apart. **No
+  service worker**: the page is a server-rendered snapshot of
+  server-authoritative state (`D_server_authoritative_transcript`), so an
+  offline shell would have no transcript to show.
 - A change that needs a polyfill or a build step to reach a fourth browser
   is out of scope twice over — here and under `D_no_js_build_step`.
 
@@ -859,9 +994,10 @@ state is per-*browser*, not per-conversation, and the page it affects is
 kept live by one long SSE connection that a reload destroys.
 
 **Decision.** Both palettes live in `public/style.css` as `--dark-*` /
-`--light-*`, and the rest of the file reads only the nine semantic tokens
-it already used; dark stays the default under `:root`, and
-`:root[data-theme='light']` remaps the same nine. `GET /` resolves the
+`--light-*`, and the rest of the file reads only the semantic tokens
+(nine at first, eleven since the send button — see Consequences); dark
+stays the default under `:root`, and `:root[data-theme='light']` remaps
+the same set. `GET /` resolves the
 `theme` cookie against an allowlist and renders `data-theme` onto
 `<html>`, so a light-theme user never sees a dark first paint. `app.js`
 flips the attribute and rewrites the cookie in place.
@@ -877,6 +1013,16 @@ what it says rather than becoming "…except theme".
 project, and it is the precedent a future per-browser preference should
 follow. A new themed colour means adding it to both palettes *and* both
 mappings; nothing outside `style.css` may read a raw colour.
+
+`--send` / `--send-fg` (2026-08-28) are the procedure's first exercise —
+the phone composer's yellow ↑ (`D_one_shell_two_layouts`). Two tokens
+rather than one because the glyph needs its own value per palette, and
+**not `--notice`**, tempting as it is for already being yellow:
+`--notice` means "the agent said something noteworthy", and spending it
+on a control muddies the kind→colour mapping that block kinds are
+contracted on. Both palettes carry a real yellow with a dark glyph
+(≥8:1) rather than a darkened one with white — the light theme's button
+has to still read as yellow.
 
 ## D_chat_only_entry_point — The trifecta promise belongs to the boot script, not to the project (2026-08-27)
 

@@ -61,10 +61,22 @@ the alternatives that were rejected, live one entry per slug in
 
 - **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
   only.** No polyfills, no prefixes for a fourth browser; `:has()`,
-  `:focus-within`, `@media (hover: none)`, `dvh` and
-  `SubmitEvent#submitter` are all fair game. iPads count as desktops. The
-  iPhone *layout* does not work yet (`ideas/phone-layout.md`).
+  `:focus-within`, `@media (hover: none)`, `dvh`, `inert` and
+  `SubmitEvent#submitter` are all fair game. iPads count as desktops, so
+  no breakpoint may sit at or above their 768px portrait width. The
+  iPhone layout is unverified on hardware, and a layout is not a phone
+  *recommendation* — `--bind` off loopback still has no auth.
   See `D_target_browsers`.
+
+- **One `index.erb` for the phone and the desktop; the difference is
+  placement, so it is CSS's.** `#drawer` *is* the desktop sidebar column
+  — same element, same `_sidebar.erb` — restyled to a full-screen overlay
+  under `@media (max-width: 40rem)`, where `#topbar`'s ☰ opens it. No UA
+  sniffing, no second shell, no device branch in `app.js`: different
+  *content* would be a template's job, different placement never is. The
+  breakpoint is written twice (`style.css`, and `app.js`'s `matchMedia`
+  that keeps `inert` from stranding) and the two move together.
+  See `D_one_shell_two_layouts`.
 
 - **The transcript is server-authoritative.** {Transcript} holds one
   conversation's rendered blocks; `GET /c/:id` renders the full snapshot
@@ -163,11 +175,12 @@ the alternatives that were rejected, live one entry per slug in
   correctness argument on that number.
   See `D_serial_turn_executor`.
 
-- **Theme is a presentational cookie, not transcript state.** Nine
+- **Theme is a presentational cookie, not transcript state.** Eleven
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
   renders `data-theme` onto `<html>` and app.js rewrites the cookie in
   place. A new themed color means both palettes and both mappings, and
-  nothing outside `style.css` reads a raw color.
+  nothing outside `style.css` reads a raw color. Never repurpose a block
+  kind's color for a control.
   See `D_theme_cookie`.
 
 - **{ConversationStore} has no lock, and does not need one.** One writer
@@ -253,12 +266,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/config.rb` — `PikuriWeb::Config`, the layered TOML
   loader for `~/.config/pikuri/config.toml`; port of pikuri-tui's
   `Shared::Config`, schema-complete, Pikuri-free.
-- `views/index.erb` — the page shell; server-rendered snapshot.
+- `views/index.erb` — the page shell; server-rendered snapshot. Carries
+  the phone's `#topbar` and the `#drawer` wrapper around the sidebar in
+  every response — CSS decides which layout shows.
 - `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
-  and served alone by `GET /conversations` for in-place refresh.
+  and served alone by `GET /conversations` for in-place refresh. The
+  drawer's chrome sits *outside* it, so this stays only the list.
 - `public/app.js` — the project's entire JavaScript; see above.
-- `public/style.css` — hand-written chat layout; block kinds mirror
-  the TUI's visual language (muted thinking, cyan tool lines).
+- `public/style.css` — hand-written chat layout, two layouts off one
+  breakpoint; block kinds mirror the TUI's visual language (muted
+  thinking, cyan tool lines).
 - `bin/pikuri-web-chat` — boot script: config load, the conversation
   factory (agent + tools + Interloper, one wiring for every
   conversation), the shared turn executor, the trifecta report, Puma start (server settings and

@@ -1,57 +1,98 @@
 <!DOCTYPE html>
-<!-- The page shell: a conversation sidebar beside the chat column.
-     Server-rendered snapshot of the transcript and status bar;
-     public/app.js then connects an EventSource and applies deltas.
-     Block divs are addressed by their transcript id — the SSE `block`
-     event upserts by id, `remove` deletes by id.
+<!-- The page shell — one markup tree, two layouts. Wide: `#drawer` is the
+     conversation column beside the chat, its header hidden. Narrow: `#drawer`
+     is a full-screen overlay the `#topbar` menu button opens, and `#topbar` is
+     what is hidden the other way round. Nothing here is per-device: the split
+     is media queries in style.css, so resizing a window crosses it live.
+     See DECISIONS.md D_one_shell_two_layouts.
 
-     `data-theme` carries the resolved `theme` cookie so the first paint
-     is already in the right palette; the toggle's label names the theme
-     it switches *to*, and app.js keeps both in sync after a click.
+     Server-rendered snapshot of the transcript and status bar; public/app.js
+     then connects an EventSource and applies deltas. Block divs are addressed
+     by their transcript id — the SSE `block` event upserts by id, `remove`
+     deletes by id.
+
+     `data-theme` carries the resolved `theme` cookie so the first paint is
+     already in the right palette; the toggle's label names the theme it
+     switches *to*, and app.js keeps both in sync after a click.
 
      `data-conversation` names what this tab is showing. It is also what the
      EventSource subscribes to, so the server sends this tab only its own
-     conversation's frames — a turn running elsewhere never arrives here. -->
+     conversation's frames — a turn running elsewhere never arrives here.
+
+     `interactive-widget=resizes-content` is what keeps the composer above
+     iOS's on-screen keyboard instead of behind it. -->
 <html lang="en" data-theme="<%= theme %>" data-conversation="<%= conversation %>">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>pikuri-web</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+  <title><%= title %> · pikuri-web</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <nav id="sidebar" aria-label="Conversations"><%==
-    erb(:_sidebar, layout: false, locals: { conversations: conversations })
-  %></nav>
+  <!-- The conversation column, and the phone's drawer. The chrome sits *around*
+       the nav rather than inside it: GET /conversations replaces the nav's
+       innerHTML on every list change, and anything in there would need event
+       delegation plus a theme-cookie read in that route. -->
+  <div id="drawer">
+    <header id="drawer-header">
+      <button type="button" id="drawer-close" aria-label="Close the conversation list">&times;</button>
+    </header>
+
+    <nav id="sidebar" aria-label="Conversations"><%==
+      erb(:_sidebar, layout: false, locals: { conversations: conversations })
+    %></nav>
+
+    <!-- Starting a conversation belongs with the list of conversations. It also
+         has to live somewhere the phone can reach with the status bar stripped
+         to one line of text — and duplicating these per layout would mean
+         duplicate ids. -->
+    <footer id="drawer-footer">
+      <button type="button" id="new-conversation" class="flat-button"
+              title="Start a fresh conversation">+ new conversation</button>
+      <button type="button" id="theme-toggle" class="flat-button"
+              title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"
+              aria-label="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"><%=
+        theme == 'dark' ? '☀ light' : '☾ dark'
+      %></button>
+    </footer>
+  </div>
 
   <div id="chat">
+    <header id="topbar">
+      <button type="button" id="drawer-open" aria-label="Show the conversation list"
+              aria-expanded="false">&#9776;</button>
+      <span id="topbar-title"><%= title %></span>
+    </header>
+
     <main id="transcript">
       <% blocks.each do |block| %>
       <div class="block <%= block.kind %>" id="<%= block.id %>"><%== block.html %></div>
       <% end %>
     </main>
 
+    <!-- Send and stop stay two buttons: sending mid-turn injects, so an arrow
+         that becomes a stop square while busy would cost the injection
+         (D_interloper_mid_loop_input). The stop button appears beside it.
+
+         The composer precedes the status bar, as on the desktop it always has;
+         the phone layout swaps them with `order` rather than a DOM reshuffle. -->
     <form id="composer">
       <input type="hidden" name="conversation" value="<%= conversation %>">
-      <textarea name="prompt" id="prompt" rows="3" autofocus
-                placeholder="Message… (Enter to send, Shift+Enter for newline; sending mid-turn injects)"></textarea>
-      <div class="composer-buttons">
-        <button type="submit" id="send">Send</button>
-        <button type="button" id="cancel" <%= 'hidden' unless status[:busy] %>>Cancel</button>
-      </div>
+      <!-- The hint is a title, not the placeholder: a paragraph of placeholder
+           wraps to three lines in a phone-width composer, and Chrome sizes an
+           empty textarea to its wrapped placeholder, so app.js's auto-grow
+           opens the box at three lines before a character is typed. -->
+      <textarea name="prompt" id="prompt" rows="1" autofocus placeholder="Message…"
+                title="Enter to send, Shift+Enter for newline; sending mid-turn injects"></textarea>
+      <button type="submit" id="send" aria-label="Send" title="Send">&#8593;</button>
+      <button type="button" id="cancel" aria-label="Stop this turn" title="Stop this turn"
+              <%= 'hidden' unless status[:busy] %>>&#9632;</button>
     </form>
 
     <footer id="status-bar">
       <span id="status-state"><%= status[:state] == :queued ? 'waiting for a free slot' : status[:state] %></span>
       <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
       <span id="status-tokens"><%= status[:tokens] %></span>
-      <button type="button" id="new-conversation" class="status-button"
-              title="Start a fresh conversation">+ new conversation</button>
-      <button type="button" id="theme-toggle" class="status-button"
-              title="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"
-              aria-label="Switch to the <%= theme == 'dark' ? 'light' : 'dark' %> theme"><%=
-        theme == 'dark' ? '☀ light' : '☾ dark'
-      %></button>
     </footer>
   </div>
 

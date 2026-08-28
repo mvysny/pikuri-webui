@@ -67,6 +67,7 @@ module PikuriWeb
         status: runner.status_data,
         conversations: conversation_rows(viewing: runner.conversation.id),
         conversation: runner.conversation.id,
+        title: runner.conversation.title,
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME
       }
     end

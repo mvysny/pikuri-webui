@@ -196,8 +196,36 @@ RSpec.describe PikuriWeb::App do
       runner.busy = true
       get_live
       assert_includes last_response.body, '+ new conversation'
-      refute_includes last_response.body, 'id="new-conversation" class="status-button"
-              title="Start a fresh conversation" disabled'
+      refute_match(/id="new-conversation"[^>]*disabled/, last_response.body)
+    end
+
+    it 'titles the page and the top bar with the conversation' do
+      get_live
+      assert_includes last_response.body, '<title>the open one · pikuri-web</title>'
+      assert_includes last_response.body, '<span id="topbar-title">the open one</span>'
+    end
+
+    # Sending mid-turn injects, so the arrow cannot become the stop button —
+    # that would cost the injection (D_interloper_mid_loop_input).
+    it 'keeps send and stop as two controls, revealing stop only while busy' do
+      get_live
+      assert_match(/id="send"/, last_response.body)
+      assert_match(/id="cancel"[^>]*hidden/, last_response.body)
+
+      runner.busy = true
+      get_live
+      assert_match(/id="send"/, last_response.body)
+      refute_match(/id="cancel"[^>]*hidden/, last_response.body)
+    end
+
+    # One shell, two layouts (D_one_shell_two_layouts): the phone's chrome is
+    # in every response, and only CSS decides which half is showing.
+    it 'ships the drawer chrome and the top bar to every browser' do
+      get_live
+      assert_includes last_response.body, 'id="drawer"'
+      assert_includes last_response.body, 'id="drawer-open"'
+      assert_includes last_response.body, 'id="drawer-close"'
+      assert_includes last_response.body, 'id="topbar"'
     end
   end
 

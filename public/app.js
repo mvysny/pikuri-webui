@@ -11,7 +11,10 @@
 const viewing = document.documentElement.dataset.conversation;
 
 const transcript = document.getElementById('transcript');
+const chat = document.getElementById('chat');
 const sidebar = document.getElementById('sidebar');
+const drawerOpenBtn = document.getElementById('drawer-open');
+const drawerCloseBtn = document.getElementById('drawer-close');
 const composer = document.getElementById('composer');
 const promptEl = document.getElementById('prompt');
 const cancelBtn = document.getElementById('cancel');
@@ -78,6 +81,19 @@ es.addEventListener('conversations', refreshSidebar);
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
 
+// One growing row rather than a fixed three, so the phone's composer costs the
+// transcript only the lines actually typed. `height: 0` first, or scrollHeight
+// reports the current height instead of the content's; the offset/client delta
+// adds back the border a `box-sizing: border-box` height has to include. CSS
+// caps the growth (`max-height`) and takes over scrolling from there.
+const autogrow = () => {
+  promptEl.style.height = '0';
+  promptEl.style.height =
+    `${promptEl.scrollHeight + promptEl.offsetHeight - promptEl.clientHeight}px`;
+};
+promptEl.addEventListener('input', autogrow);
+autogrow();
+
 // Submit stays enabled while the agent is busy: the server routes
 // mid-turn sends through pikuri's Interloper (delivered at the next
 // tool boundary), so "type while it works" is a feature, not an error.
@@ -87,6 +103,7 @@ composer.addEventListener('submit', (e) => {
   if (!text.trim()) return;
   const body = new FormData(composer); // before clearing: it reads the textarea
   promptEl.value = '';
+  autogrow();
   promptEl.focus();
   fetch('/messages', { method: 'POST', body }).then((r) => {
     if (r.ok) return;
@@ -94,6 +111,7 @@ composer.addEventListener('submit', (e) => {
     // here is the conversation having gone away underneath this tab; hand the
     // text back rather than swallowing it.
     promptEl.value = text;
+    autogrow();
     statusState.textContent = 'not sent';
   });
 });
@@ -140,6 +158,27 @@ sidebar.addEventListener('submit', (e) => {
     else refreshSidebar();
   });
 });
+
+// The phone's conversation drawer: a full-screen overlay over the chat. Only
+// the class is CSS's business — `inert` is the reason this is not the zero-JS
+// checkbox trick, since an overlay that is not a modal leaves the chat behind
+// it tabbable and readable to a screen reader.
+//
+// Opening a conversation needs nothing here: rows are links, so a tap is a page
+// load and the page that arrives has the drawer closed by construction.
+const setDrawer = (open) => {
+  document.body.classList.toggle('drawer-open', open);
+  chat.inert = open;
+  drawerOpenBtn.setAttribute('aria-expanded', String(open));
+};
+
+drawerOpenBtn.addEventListener('click', () => setDrawer(true));
+drawerCloseBtn.addEventListener('click', () => setDrawer(false));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setDrawer(false); });
+// Leaving the phone layout with the drawer open would strand `inert` on a chat
+// column that is no longer covered by anything. Keep the query in sync with
+// style.css's own breakpoint.
+matchMedia('(max-width: 40rem)').addEventListener('change', () => setDrawer(false));
 
 // Theme toggle. The cookie is the store — the server reads it back on
 // the next GET / and renders `data-theme` into the shell, so this only
