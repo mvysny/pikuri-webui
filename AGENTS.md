@@ -156,6 +156,15 @@ the alternatives that were rejected, live one entry per slug in
   nothing outside `style.css` reads a raw color.
   See `D_theme_cookie`.
 
+- **One process per state root — and nothing enforces it, ever.** Two
+  `pikuri-web-chat` processes sharing `conversations/` silently overwrite
+  each other's turns and can resurrect a deleted conversation;
+  last-writer-wins is accepted, `README.md` warns, and no `flock` is
+  coming. A second process buys nothing a single one doesn't already do,
+  so don't add lock state for it. Revisit only if a state root shared
+  across shells lands (`D_per_shell_state_root`).
+  See `D_no_multi_process_lock`.
+
 - **All state under one folder named after the shell.**
   `~/.local/state/pikuri/pikuri-web-chat/`, derived once in the boot
   script as `state_root`; anything new this shell persists goes beside

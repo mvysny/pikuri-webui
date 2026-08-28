@@ -145,8 +145,11 @@ turn end, and shutdown does not wait for one.
 
 Run one at a time. A second `pikuri-web-chat` on another port shares that
 folder, and each writes `history.json` whole, so two of them in the same
-conversation will quietly overwrite each other's turns. Nothing stops you;
-there is no lock yet.
+conversation will quietly overwrite each other's turns — and one of them
+can write back a conversation the other just deleted. Nothing stops you,
+and nothing will: there is no lock, deliberately. A single process already
+serves every tab you care to open and runs turns in different
+conversations side by side, so the second one only costs you.
 
 Only `history.json` is stored — what you see on screen is rebuilt from it
 each time, so a rendering or styling fix reaches every old conversation

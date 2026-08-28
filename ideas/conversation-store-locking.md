@@ -74,7 +74,8 @@ a number to justify the paragraph.
 ## What the lock does *not* buy — don't oversell it in the rdoc
 
 - **Nothing across processes.** A second `pikuri-web-chat` is outside any in-process lock; that is
-  the accepted limitation in `ideas/multi-process-locking.md`.
+  the accepted limitation in `DECISIONS.md` `D_no_multi_process_lock`, and it is accepted for good —
+  so this idea can never be sold as fixing it.
 - **No cross-call atomicity.** `find` then `delete` is two locked ops with a gap, so delete still has
   to tolerate the conversation having vanished. A lock per method is not a transaction.
 - **It does not replace the `row` TOCTOU fix.** `row` checks `(dir / META_FILE).file?` and *then*

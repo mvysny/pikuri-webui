@@ -84,6 +84,70 @@ design or the invariant.
 
 ---
 
+## D_no_multi_process_lock — A second process against one state root is a user mistake, not a supported configuration; last-writer-wins stands (2026-08-28)
+
+**Status:** Accepted 2026-08-28. Nothing to ship: this is a decision *not*
+to build a cross-process lock. The idea file that argued for one is
+graduated into this entry.
+
+**Context.** Two `pikuri-web-chat` processes on different ports share
+`~/.local/state/pikuri/pikuri-web-chat/conversations/`, and pikuri's
+`History#save` rewrites `history.json` whole. The failure is *not* a torn
+file — the save is temp-file-and-rename, so what is on disk is always a
+complete valid history. It is a **silently clobbered conversation**: the
+loser's turns vanish at the next save with nothing on screen to say so.
+Since `D_delete_no_undo` there is a worse shape of it — process A deletes
+a folder that process B still holds live, B writes it straight back at its
+next turn end, and a conversation the user explicitly confirmed away
+reappears in the sidebar.
+
+**Decision.** Accept all of it. Last-writer-wins, no `flock`, no
+enforcement anywhere; `README.md` states the limitation under
+**Conversations** and that is the whole of the answer.
+
+What settles it is that the second process **buys nothing**. One process
+already serves any number of tabs, and a conversation owns its own agent
+so turns in different conversations run undisturbed side by side
+(`D_conversation_owns_agent`, `D_serial_turn_executor`) — there is no
+capability behind a second port, only a second copy of the same
+single-user tool pointed at the same home. A failure mode reachable only
+by a configuration with no reason to exist does not earn a mechanism.
+
+**Rejected: `flock` the conversation directory on open,** rendering the
+locked row read-only in the sidebar. It is the *right* shape if the
+collision were worth defending against — a dimmed row with a reason is the
+affordance the busy-refusal already uses — but it puts per-conversation
+lock state in `ConversationStore`, and file locks are the kind of state
+that turns a hard kill into "why can't I open my own conversation".
+Permanent cost, hypothetical benefit.
+
+**Rejected: one `flock` on the state root at boot,** refusing a second
+instance with `--port` named in the error. The cheap version — one lock in
+`bin/pikuri-web-chat` instead of per-conversation state — and it kills the
+failure outright rather than degrading it. Still rejected: it converts a
+mistake nobody makes into a startup failure everybody can hit (a stale
+lock after `kill -9`, a supervisor restarting faster than the old process
+exits), and it forbids the one second instance that is harmless, the one
+that never opens the same conversation. Refusing to start is a worse
+default than a warning in the README.
+
+**Consequences.**
+
+- The resurrection under `D_delete_no_undo` is now decided rather than
+  deferred: it stays, and that entry's pointer resolves here.
+- `ConversationStore` never grows cross-process consistency. Its atomic
+  rename remains all a concurrent reader outside this process gets, and
+  the in-process locking question (`ideas/conversation-store-locking.md`)
+  is independent of this entry — an in-process lock never bought anything
+  across processes anyway.
+- **The one trigger that reopens this: a shared state root.**
+  `D_per_shell_state_root` deliberately keeps each shell's conversations
+  under its own folder, so today's only colliders are two copies of *this*
+  shell. If a location shared with pikuri-tui or another shell ever lands,
+  the colliders become processes a user has every reason to run at once,
+  and the argument above stops holding. Locking is then part of that
+  change, not a separate idea.
+
 ## D_no_event_queue — No owner thread: state is partitioned per conversation, browser state stays in the browser, and anything genuinely shared gets *one global* mechanism (2026-08-28)
 
 **Status:** Accepted. Nothing to ship: this is a decision *not* to build
@@ -497,9 +561,9 @@ deleting.
   `display`/`visibility`, or the button would leave the tab order and
   `:focus-within` could never fire.
 - **A second process can resurrect what you deleted**, by saving its own
-  live copy at the next turn end. Accepted as a limitation; delete is the
-  first destructive operation that makes the case in
-  `ideas/multi-process-locking.md`.
+  live copy at the next turn end. Accepted as a limitation, and the
+  strongest case anything made for a cross-process lock — which was
+  weighed on exactly that basis and rejected in `D_no_multi_process_lock`.
 - Nothing new serializes the folder. What keeps a delete from racing the
   turn-end save is the runner refusing while busy, which is the same
   discipline `ideas/conversation-store-locking.md` argues should stop
