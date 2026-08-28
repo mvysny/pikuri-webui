@@ -3,16 +3,17 @@
 require 'pikuri-core'
 
 module PikuriWeb
-  # Owns the agent's worker thread and the submit/inject decision — the
-  # web host's answer to the TUI's "the agent loop blocks on the LLM and
+  # Owns the submit/inject decision and runs turns off the request thread —
+  # the web host's answer to the TUI's "the agent loop blocks on the LLM and
   # must not run on the UI thread" rule, where the protected resource is
   # the Sinatra request thread instead.
   #
   # {#submit} is the single entry point for user text:
   #
-  # - Agent idle → spawn a worker thread running
-  #   +Pikuri::Agent#run_loop(user_message:)+. The listener stack renders
-  #   everything the loop emits; nothing here touches the transcript.
+  # - Agent idle → post a job running
+  #   +Pikuri::Agent#run_loop(user_message:)+ on the injected executor. The
+  #   listener stack renders everything the loop emits; nothing here touches
+  #   the transcript.
   # - Agent busy → +Pikuri::Agent::Control::Interloper#inject_user_message+.
   #   The agent drains the queue at turn start and once each tool batch
   #   completes, emitting +UserTurn(mid_loop: true)+, so the injection
@@ -21,12 +22,22 @@ module PikuriWeb
   #   that boundary, which is why the input stays enabled while busy and
   #   the status bar carries the queued count.
   #
-  # The race between "worker finishes" and "submit checks alive?" is
+  # The race between "the job finishes" and "submit checks {#busy?}" is
   # benign by pikuri's own design: the queue survives across runs, so a
   # message injected into a just-finished loop is picked up by the next
   # {#submit}'s fresh +run_loop+ drain. The @mutex serializes submits
   # against each other and against {#new_conversation}, and covers the
   # save at turn end — so it is held across a few ms of disk I/O.
+  #
+  # == Why the executor must be serial
+  #
+  # +executor:+ is typed +SerialExecutorService+ rather than any executor,
+  # and that is a correctness constraint, not a performance one: one turn at
+  # a time is what keeps a single agent's history, its listener's per-turn
+  # streaming state and the conversation folder single-writer. A pool of two
+  # would run two +run_loop+s over the same agent. Raising concurrency is a
+  # matter of more *agents* on more serial executors, never of widening this
+  # one.
   #
   # Status changes (busy/idle/pending counts) are broadcast as SSE
   # +status+ events; {#status_data} serves the same hash to +GET /+ for
@@ -41,7 +52,7 @@ module PikuriWeb
   #   runner.load_conversation(store.list.first)     # => :loaded — saved, then replaced
   #   runner.delete_conversation(store.list.first)   # => :deleted — removed, never saved
   #
-  # Saves happen at *turn end*, from the worker thread's ensure, so a history
+  # Saves happen at *turn end*, from the turn job's ensure, so a history
   # is never exported mid-+complete+ and {#busy?} staying true until the save
   # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
   # loses that turn — and saving per *message* instead would not fix it: there
@@ -64,12 +75,17 @@ module PikuriWeb
     # @param listener [SseListener] the transcript's renderer, fed directly
     #   by {#load_conversation}'s replay — the agent's own listener stack
     #   wraps it in a delta rate-limiter that a replay has nothing to say to
+    # @param executor [Concurrent::SerialExecutorService] where turns run —
+    #   +SingleThreadExecutor+ in the app, +ImmediateExecutor+ in specs (turns
+    #   run inline, so no spec has to wait for a thread). The serial type is
+    #   load-bearing; see *Why the executor must be serial* above
     # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when
     #   present, its +status_line+ rides along in every status event
     #   (the web status bar's token/context readout)
     def initialize(agent:, interloper:, cancellable:, broadcaster:, conversations:, listener:,
-                   token_log: nil)
+                   executor:, token_log: nil)
       @agent = agent
+      @executor = executor
       @interloper = interloper
       @cancellable = cancellable
       @broadcaster = broadcaster
@@ -77,7 +93,7 @@ module PikuriWeb
       @listener = listener
       @token_log = token_log
       @mutex = Mutex.new
-      @thread = nil
+      @running = false
       @conversation = conversations.create
 
       # Claims the interloper's single on_change slot. Without it the
@@ -100,10 +116,14 @@ module PikuriWeb
           @interloper.inject_user_message(message)
           :injected
         else
-          @thread = Thread.new { run_turn(message) }
+          @running = true
           :started
         end
       end
+      # Outside the mutex: an ImmediateExecutor runs the job on this thread,
+      # and run_turn's ensure re-takes this same non-reentrant mutex. @running
+      # is claimed already, so a submit landing in the gap injects.
+      @executor.post { run_turn(message) } if result == :started
       broadcast_status
       result
     end
@@ -119,9 +139,11 @@ module PikuriWeb
       nil
     end
 
-    # @return [Boolean] whether a turn is currently running
+    # @return [Boolean] whether a turn is posted and not yet finished —
+    #   queued and running are one state here, because a serial executor will
+    #   run what it has accepted and the save has not landed until it does
     def busy?
-      !@thread.nil? && @thread.alive?
+      @running
     end
 
     # @return [ConversationStore::Conversation] the live conversation — the
@@ -225,15 +247,12 @@ module PikuriWeb
 
     private
 
-    # Worker-thread body. A StandardError out of +run_loop+ (transport
-    # hiccup, tool bug) is logged rather than re-raised: an uncaught
-    # raise would die silently with the thread and the UI would just
-    # look stuck. The ensure broadcasts idle so the browser's input
-    # re-enables even on the error path — clearing @thread, since this
-    # code runs *on* the worker thread, which is still alive while
-    # executing its own ensure and would otherwise report +busy: true+.
-    # The +if+ guard keeps a slow ensure from clobbering a successor
-    # turn's handle.
+    # The executor job's body: one turn, then the save.
+    #
+    # A StandardError out of +run_loop+ (transport hiccup, tool bug) is logged
+    # rather than re-raised — an executor swallows a job's exception into a
+    # future nobody here holds, so the UI would just look stuck. The ensure
+    # broadcasts idle so the browser's input re-enables even on the error path.
     #
     # @param message [String]
     # @return [void]
@@ -242,12 +261,12 @@ module PikuriWeb
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      # Save before releasing the handle: a #new_conversation slipping into the
+      # Save before clearing @running: a #new_conversation slipping into the
       # gap would re-point @conversation, and this save would then land the
       # finished turn in the fresh conversation's folder.
       @mutex.synchronize do
         persist
-        @thread = nil if @thread == Thread.current
+        @running = false
       end
       broadcast_status
     end
@@ -322,7 +341,7 @@ module PikuriWeb
     # +meta.json+.
     #
     # Filesystem failures are logged, not raised — a full disk must not take
-    # the conversation down with it, and this runs inside the worker thread's
+    # the conversation down with it, and this runs inside the turn job's
     # ensure, where a raise would escape.
     #
     # @param history [Pikuri::Agent::History] the snapshot to write; a

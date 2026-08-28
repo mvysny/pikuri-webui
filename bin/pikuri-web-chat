@@ -18,6 +18,7 @@
 ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __dir__)
 
 require 'bundler/setup'
+require 'concurrent'
 require 'optparse'
 
 # Only for the :after_stopped hook wired below; Sinatra's run! loads the
@@ -168,6 +169,14 @@ agent = Pikuri::Agent.new(
   c.add_tool Pikuri::Tool::FETCH
 end
 
+# Turns run here rather than on a Sinatra request thread. Single-threaded on
+# purpose, and not a tunable: one agent's history, its listener's per-turn
+# state and the conversation folder are all single-writer, so a second thread
+# would run two run_loops over the same agent. More concurrency means more
+# agents on more serial executors — which is what
+# ideas/per-conversation-agents.md is for.
+turn_executor = Concurrent::SingleThreadExecutor.new
+
 runner = PikuriWeb::AgentRunner.new(
   agent: agent,
   interloper: interloper,
@@ -175,6 +184,7 @@ runner = PikuriWeb::AgentRunner.new(
   broadcaster: broadcaster,
   conversations: conversations,
   listener: sse_listener,
+  executor: turn_executor,
   token_log: token_log
 )
 
@@ -218,7 +228,14 @@ PikuriWeb::App.set :port, port
 # on the far side of the wait, and Puma overwrites Sinatra's trap anyway.
 puma_events = Puma::Events.new
 puma_events.register(:state) do |state|
-  broadcaster.close if %i[stop restart].include?(state)
+  next unless %i[stop restart].include?(state)
+
+  broadcaster.close
+  # #shutdown, never #wait_for_termination: waiting for an in-flight turn here
+  # would park this hook in front of Puma's graceful wait — the same bug the
+  # broadcaster close above exists to prevent. An unfinished turn is lost, which
+  # is the accepted trade (saves land at turn end; see AgentRunner).
+  turn_executor.shutdown
 end
 
 PikuriWeb::App.set :server_settings, {

@@ -2,6 +2,7 @@
 
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
+require 'concurrent'
 require 'rspec/core'
 require 'minitest'
 require 'minitest/assertions'

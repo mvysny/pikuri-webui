@@ -74,6 +74,25 @@ folder stay global no matter how far this goes.
 The two halves are separable, and the intermediate state is coherent and shippable. That matters,
 because the N-agent half is the expensive one.
 
+### Stage 0 — the executor — **done 2026-08-28**
+
+`AgentRunner` posts turns to an injected `Concurrent::SerialExecutorService` instead of calling
+`Thread.new`; the boot script owns the `SingleThreadExecutor` and shuts it down (non-blocking) from
+the same Puma `:state, :stop` hook that closes the `Broadcaster`. Behaviour identical, one
+conversation still.
+
+Two simplifications fell out that are worth knowing about before the next stage:
+
+- `busy?` is a plain `@running` flag rather than `@thread&.alive?`, which retired the
+  `@thread == Thread.current` guard in the turn's ensure entirely.
+- `conversation_flow_spec` injects `ImmediateExecutor` and runs turns inline, deleting its
+  deadline-plus-`sleep` spinner. **Only one of the two spinners died**, not both as predicted:
+  `agent_runner_spec` is *about* the busy state, so it needs the turn still running when `submit`
+  returns, and keeps a real `SingleThreadExecutor` plus `wait_until`.
+
+One gotcha the next reader will hit: `submit` must post **outside** its mutex. `ImmediateExecutor`
+runs the job on the calling thread, and the turn's ensure re-takes that same non-reentrant mutex.
+
 ### Stage 1 — decouple *viewing* from *liveness* (small)
 
 Keep exactly one live agent. Make `/c/<id>` a real URL that any tab can sit on, with the transcript
@@ -154,12 +173,20 @@ simpler than what exists today:
   mean N parked threads.
 - **The job queue *is* the admission gate.** No separate throttle, no semaphore, no "refuse while
   another conversation is busy". Submitting always succeeds; it just may not start yet.
-- **The knob is the pool size**, and it must not exceed the inference server's own slot count
-  (llama.cpp's `--parallel`) — past that, requests queue inside the server instead, which buys no
-  throughput and only makes latency and the status bar harder to read. Cheapest home for it is a CLI
-  flag alongside `--port` / `--bind`, which the boot script already documents as "ours alone, no
-  config-file home", since it is a property of the machine rather than of the model. A `[web]`
-  config section is the alternative if it ever wants to be sticky.
+- **The pool size is pinned at 1, and it is emphatically not a knob.** The first draft of this file
+  proposed exposing it as a CLI flag beside `--port` / `--bind`. That was wrong, and the reason is
+  worth keeping: single-writer safety at pool 1 is an *accident of a setting*, not a property of the
+  abstraction. A flag labelled "how fast" that silently enables data races is a trap — "correct until
+  someone changes a number, with nothing in the code to say so" is the exact failure mode
+  `ideas/event-queue.md` opens by complaining about.
+  - **Shipped as a type, not a comment.** `AgentRunner#initialize` takes
+    `executor: Concurrent::SerialExecutorService`. `SingleThreadExecutor` and `ImmediateExecutor` are
+    that; `FixedThreadPool.new(2)` is not. The constraint is checkable rather than remembered.
+  - **More concurrency = more agents on more serial executors**, never a wider pool under one agent.
+    Two threads over one agent means two `run_loop`s over one history.
+  - The ceiling, when that day comes, is the inference server's own slot count (llama.cpp's
+    `--parallel`); past it requests just queue inside the server, buying latency variance and no
+    throughput.
 
 ### What the executor changes that a thread-per-conversation model doesn't
 
@@ -177,12 +204,37 @@ simpler than what exists today:
 - **FIFO, no priority.** A turn submitted from the tab you happen to be looking at does not jump the
   queue. Surprise-free beats clever, and with pool size 1 the queue is rarely deeper than one.
 
-### It is not the event queue — do not merge them
+### It is not the event queue — same mechanism, opposite contracts
 
-`ideas/event-queue.md` proposes an owner thread for *state mutation*, whose defining rule is that it
-**must never block**. This executor exists precisely *to* block — on the LLM, on tools, for minutes.
-Same word, opposite contracts, and merging them would wreck both. If both land: turns are jobs on the
-executor, and the events those jobs emit are posted to the conversation's owner.
+Both are "a thread pulling jobs off a queue". The *semantics* are what differ, and the semantics are
+what counts:
+
+| | Executor | Event queue / owner |
+|---|---|---|
+| Contract | `submit(block) → result`. A job runner. | "I own this state; post to mutate it." |
+| State | **Holds none, by contract.** Must not touch anything but what is passed in. | Owning state *is* the point. |
+| Blocking | Exists *to* block — LLM, tools, minutes. | Must **never** block. |
+| Thread count | A free performance knob, precisely *because* it holds nothing. | Single-threaded by contract, not configuration. |
+
+So the executor does not and cannot replace the owner — an executor makes no promise about state,
+and asking it to keep one is how the pinned-pool trap above got created in the first place. They
+compose: **turns are jobs on the executor; the events those jobs emit are posted to the owner** —
+which is exactly `event-queue.md`'s stage 2 (*"the worker thread posts `Event`s instead of calling
+the listener stack"*), unchanged.
+
+Corollary: **the owner is the precondition for pool > 1**, not something the executor makes
+unnecessary.
+
+### Implementation: concurrent-ruby, not hand-rolled
+
+Settled 2026-08-28, and it earns its Gemfile paragraph (see the Gemfile for the full one). Ruby ships
+no executor at all, so the alternative is hand-rolling a thread pool, a shutdown protocol and a
+backpressure policy. Concretely taken: `SingleThreadExecutor` in the app, `ImmediateExecutor` in
+specs, `#shutdown`, and `fallback_policy` / bounded queues if backpressure ever needs a vocabulary.
+It is the first `Concurrent::` reference in the pikuri family — pikuri itself is stdlib `Mutex`
+throughout, and Tuile already depends on the gem one layer down. **If the executor concept ever moves
+*into* pikuri**, that repo faces this dependency question on its own terms; log it in
+`../pikuri/DECISIONS.md`, don't assume this decision travels.
 
 ## New hazards this creates, each against an existing decision
 

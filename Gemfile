@@ -56,6 +56,26 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 # JSON Schema gem.
 gem 'tomlrb', '~> 2.0'
 
+# Thread pool for agent turns. A turn blocks on the LLM for minutes, so it
+# runs as a job on an executor rather than on a Sinatra request thread —
+# and the executor's queue is also the admission gate that keeps concurrent
+# turns from outnumbering the inference server's slots.
+#
+# A genuinely new direct dependency (not previously in the bundle, not even
+# transitively), and the first `Concurrent::` reference in the pikuri
+# family: pikuri itself is stdlib `Mutex` throughout. It earns that because
+# Ruby ships no executor at all, so the alternative is hand-rolling a
+# thread pool, a shutdown protocol and a backpressure policy — exactly the
+# primitives a well-tested library should own. Concretely we take
+# SingleThreadExecutor (production), ImmediateExecutor (specs run turns
+# inline, which deletes a spin-wait helper), and the shutdown/kill
+# protocol. Tuile already depends on it in this family, for the same
+# reason one layer down.
+#
+# MIT, zero runtime dependencies of its own, and a de-facto Ruby standard
+# (ActiveSupport depends on it).
+gem 'concurrent-ruby', '~> 1.3'
+
 # ERB engine Tilt picks over stdlib ERB. Needed for Sinatra's
 # +erb, escape_html: true+ auto-escaping and the +<%==+ raw-output tag
 # (stdlib ERB supports neither) — index.erb escapes everything except

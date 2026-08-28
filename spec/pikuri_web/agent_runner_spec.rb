@@ -78,7 +78,10 @@ RSpec.describe PikuriWeb::AgentRunner do
   let(:runner) do
     described_class.new(
       agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations, listener: listener
+      broadcaster: broadcaster, conversations: conversations, listener: listener,
+      # A real thread, not ImmediateExecutor: these examples are *about* the
+      # busy state, which needs the turn still running when #submit returns.
+      executor: Concurrent::SingleThreadExecutor.new
     )
   end
 

@@ -94,6 +94,14 @@ With one loop thread, that entire argument collapses to "it runs on the loop thr
 
 - **One loop thread**, started by `bin/pikuri-web-chat`, owning: the transcript, the listener's
   per-turn state, which conversation is live, and the decision to emit SSE frames.
+  - **Open fork: one global loop, or one owner per conversation?** Per-conversation follows from
+    `ideas/per-conversation-agents.md` — state stops being global, so its owner should too. But the
+    owner does only cheap non-blocking work (rendering is pure, per `D_rerender_and_replace`), so N
+    owners would be N mostly-idle parked threads, which is the cost the turn executor exists to
+    avoid. A *single* global loop serving every conversation's state satisfies the never-block rule
+    for exactly that reason. Currently leaning global-loop — note this is the one place where
+    "global" survives the per-conversation turn, and it survives on the merits rather than by
+    inertia.
 - **Mutating routes become producers** — but only two of them can be fire-and-forget; see the route
   audit below.
 - **Reads take a published snapshot, not a reply.** Also below — this is the correction that deletes
@@ -223,12 +231,12 @@ Each stage leaves the app working, which is the only reason a change this wide i
   `submit(&block)`, `await_empty`, `tick` / `tick_fps`, `run`, `stop`. The one gap for us is
   request/reply — nothing there returns a *value* to the caller, which the three refusing routes
   need.
-  - **`await_empty` is a genuine testability win, but a partial one — don't oversell it.** Two spec
-    files hand-roll the same deadline-plus-`sleep 0.005` spinner (`agent_runner_spec.rb:86`
-    `wait_until`, `conversation_flow_spec.rb:62` `run_turn`). `await_empty` deterministically
-    retires the *render* half of that race — "has everything posted been applied". It cannot retire
-    the *turn* half: the worker thread still blocks on the LLM outside the queue, so a
-    `wait_until { !runner.busy? }` equivalent survives. One of the two waits goes away, not both.
+  - **`await_empty`'s testability win is now mostly already banked, so don't re-argue it here.**
+    Injecting `ImmediateExecutor` (stage 0) already deleted `conversation_flow_spec`'s spinner. What
+    is left is `agent_runner_spec`'s `wait_until`, which is *about* the busy state and needs a real
+    thread — `await_empty` would not retire that either, since the turn blocks on the LLM outside
+    the queue. Net remaining value: deterministic "has everything posted been rendered", which
+    matters for the SSE-frame assertions, not for turn lifecycle.
 - **Depend on Tuile.** No: dragging a terminal-UI gem into a web app to get a queue.
 - **Extract Tuile's queue into a shared gem.** The tempting one, and not ours to decide — that is a
   pikuri-family conversation and would be logged in `../pikuri/DECISIONS.md`, not here.
@@ -252,8 +260,19 @@ rdoc paragraph. The triggers that make the queue pay for itself:
 - the day the `SseListener` argument above needs a fourth clause.
 
 So this is no longer "the direction, not the next commit" — it is the second half of a change already
-decided. But it still must not go first. Two pieces are worth taking early because they are
-orthogonal to the partition and pay off either way:
+decided.
+
+**A trap to not fall into twice.** With the turn executor shipped (`ideas/per-conversation-agents.md`
+stage 0) it is tempting to conclude that a serial executor *is* the single-writer discipline and this
+idea is obsolete. It isn't. An `Executor`'s contract is `submit(block) → result` — a job runner that
+holds no state by design — so single-writer-ness at pool 1 is an accident of a *setting*, not a
+property of the abstraction, and it silently evaporates when someone changes a number. That is this
+file's own opening complaint, applied to a mechanism that looks like the cure. The two compose
+instead: turns are jobs on the executor, and the events those jobs emit get *posted* to an owner.
+**This idea is therefore the precondition for running more than one turn at a time.**
+
+It still must not go first. Two pieces are worth taking early because they are orthogonal to the
+partition and pay off either way:
 
 - **the snapshot reads**, which stand alone and fix a real tear in `conversation_rows` today;
 - **option (b)'s deletions** — dropping `Transcript`'s mutex in favour of one owner — but only for

@@ -51,22 +51,16 @@ RSpec.describe 'saving a conversation and starting a new one' do
   let(:runner) do
     PikuriWeb::AgentRunner.new(
       agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations, listener: listener
+      broadcaster: broadcaster, conversations: conversations, listener: listener,
+      # Runs the turn inline on this thread, so #submit returns with the turn
+      # finished and the save landed — no waiting, no timeout, no flake.
+      executor: Concurrent::ImmediateExecutor.new
     )
   end
 
   after { agent.close }
 
-  # The runner's turn is on a worker thread; #busy? stays true until the save
-  # has landed, so this is also "saved".
-  def run_turn(message)
-    runner.submit(message)
-    deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
-    while runner.busy?
-      flunk 'turn did not finish' if Process.clock_gettime(Process::CLOCK_MONOTONIC) > deadline
-      sleep 0.005
-    end
-  end
+  def run_turn(message) = runner.submit(message)
 
   it 'renders the turn, then saves exactly what the agent holds' do
     dir = runner.conversation.dir
