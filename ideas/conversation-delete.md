@@ -21,8 +21,10 @@ What a delete button needs settled:
 ## `Q_conversation_count` — when the list gets long
 
 200 conversations in the sidebar: scroll only, or search / "load more"? v1 answered "scroll" by
-doing nothing, which is fine and stays fine for a while. The thing not to do is paint ourselves out
-of a search box — and note the listing cost is already recorded in `ConversationStore#list`'s rdoc
-(one `meta.json` per conversation, no index, measure before caching).
+doing nothing, which is fine and stays fine for a while.
 
-Delete is the cheaper half of the same pressure: a list you can prune may never need a search box.
+**Answered: search.** See `ideas/conversation-search.md` — a debounced box above the list that
+filters on a full-text match over the conversation bodies, everything when blank, 200 rows tops
+either way. That is also the half that makes *this* idea usable: **filter, then delete.** Hunting
+for the one about Postgres by scrolling 200 rows is not a prune UI, so the two want building in that
+order, or at least designing together.
