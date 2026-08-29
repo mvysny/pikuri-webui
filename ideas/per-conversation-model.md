@@ -8,13 +8,24 @@ on. A new conversation inherits the model of the conversation currently shown.
 answer. What is decided: the *selection is per conversation and persists*; a new conversation
 copies the shown one's.
 
-**Update (2026-08-29): `ideas/slash-commands.md` proposes the answer, and closing it is now that
-idea's job.** A `/model` command in its command palette, opening the same `<dialog>` its `/trifecta`
-builds — so once the palette ships, this becomes backend-only work plus one catalog entry, one
-dialog body and one `switch` arm. Don't settle the UI here; the two ideas graduate separately and
-the palette goes first. The one loose end below that the palette *does* reach back into: whether the
-current-model marker rides the `status` SSE frame (see "Loose ends") decides whether that dialog is
-pre-rendered into `GET /c/:id` or fetched.
+**Update (2026-08-29): the UI question is closed, and this is now backend-only work.** The slash
+palette shipped (`D_slash_command_palette`), so `/model` is one `PikuriWeb::SlashCommand::CATALOG`
+entry, one `<template>` in `index.erb`, and one arm in `app.js`'s `runCommand`. The picker markup
+already exists — `/theme`'s dialog is a `.picker` list with `aria-current` marking the active row,
+which is exactly the shape this wants, and `dom.js`'s `openDialog` opens it. Add the catalog entry
+gated on `config.llms.size > 1`, as pikuri-tui gates its own.
+
+Two things the palette settled that this file's "Loose ends" left open:
+
+- **The current-model marker is computed when the dialog opens, not server-rendered.** `/theme`
+  had the same problem for the same reason (the value changes in-page after the render) and that is
+  how it was solved. So the model dialog can be a static `<template>` and does *not* need the
+  `status` SSE frame to carry the model — though it still may, if the model is to be visible in the
+  status bar without opening anything.
+- **A switch must not draw a transcript block.** `D_slash_command_palette` settles it: a command's
+  effect is its own feedback, and a block that is not in `history.json` would vanish on the next
+  reopen. `SseListener`'s `ModelSwitched` branch stops being unreachable, but what it does is
+  bounded by that.
 
 ## Where it stands today
 

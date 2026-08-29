@@ -84,6 +84,96 @@ design or the invariant.
 
 ---
 
+## D_slash_command_palette — The catalog is the server's, the palette is the browser's, and a command never writes to the transcript (2026-08-29)
+
+**Status:** Accepted, shipped 2026-08-29 with `/new`, `/theme` and
+`/trifecta`. `/model` joins them when `D_conversation_owns_agent`'s runner
+can carry a model of its own.
+
+**Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
+is the obvious thing to port: a list above the input, filtered as you type,
+Up/Down + Enter. On the phone it is worth more than on the desktop, because
+the drawer footer's two buttons — new conversation, theme — cost a drawer
+open to reach, and `/theme` costs three keystrokes from where the caret
+already is.
+
+**Decision, in three parts.**
+
+*The catalog is server-rendered; the dispatch is not.* `PikuriWeb::SlashCommand::CATALOG`
+renders whole into `#slash-menu`, and `app.js` filters it by toggling
+`hidden` per row. A command *runs* in `runCommand`, because three of the
+four commands are browser-side anyway (a navigation, a cookie, a dialog).
+That makes adding a command a three-place contract — catalog, `runCommand`,
+and a `<template>` for a command with a dialog — which is the same shape the
+block kinds already have, and is written down in `AGENTS.md` beside them.
+
+*A command never writes to the transcript.* This is where the TUI's design
+stops porting: its `SlashCommand#callback` returns a String that gets echoed
+into the conversation pane. Here the client-side form of that is conversation
+state the server does not hold (`D_server_authoritative_transcript`), and the
+server-side form is a block absent from `history.json`, which
+`D_replay_from_history`'s replay would silently drop on the next reopen —
+the line would show now and be gone after a reload. So `SlashCommand` carries
+no callback and no outcome String, and each command's own visible effect is
+the feedback.
+
+*Every dialog is a real `<dialog>`, opened through one helper.* `showModal()`
+gives modality, ESC, focus containment and `::backdrop` outright under
+`D_target_browsers`, where the drawer had to hand-roll `inert` for the same
+job. `dom.js`'s `openDialog(title, body)` builds the chrome, appends,
+`showModal()`s, and removes the element on close, so no dialog sits in the
+page at rest.
+
+**Rejected: `/dark` and `/light` as two commands.** Each is one keystroke
+shorter than `/theme` + a pick, but the catalog would then grow a row per
+*value* of every future setting, and the picker is the shape `/model` wants
+anyway. The cost is that `/t` no longer resolves uniquely — it matches
+`/theme` and `/trifecta` both — which is precisely the case a palette exists
+for, and is what the phone story ("type `/t`, tap the one you want")
+actually wanted.
+
+**Rejected: `GET /commands?q=` per keystroke.** Server-rendered in the
+strictest sense, and absurd for a three-item list: see
+`D_no_js_build_step`'s latency qualifier, which this is the worked example of.
+
+**Rejected: an HTML-string signature for `openDialog`.** The
+unknown-command dialog interpolates *what the user typed*, so a string API
+would make that caller a concatenation of user input — an escaping hazard
+designed into the helper. Taking a `Node` cloned from a server-rendered
+`<template>`, with values set through `textContent`, makes the safe path the
+only path.
+
+**Rejected: sending an unknown `/word` to the model.** A typo would become a
+prompt, silently. Instead Enter on a leading `/word` that matches nothing
+opens a dialog naming the known commands, and the text stays in the composer
+to be fixed. The escape hatch is the space: anything containing whitespace is
+never read as a command, so `/usr/share/foo is broken` sends normally, and
+the dialog says so.
+
+**Consequences.**
+
+- **A bare `/` arms nothing.** It opens the palette as a menu with no row
+  highlighted, so Enter sends rather than running whichever command sorts
+  first — `/new` navigating away on a stray keystroke is not a thing that
+  should be possible.
+- **A message that is *only* a path** (`/etc/hosts`, alone, no other word)
+  now raises the unknown-command dialog instead of sending. Accepted: this is
+  a chat-only shell with no file tools (`D_chat_only_entry_point`), and the
+  dialog names the fix.
+- **`/trifecta` costs no route.** The report is static for the life of the
+  process — one conversation factory, one tool set — so it ships pre-rendered
+  in a `<template>`. `App` must not touch a `Pikuri::Trifecta::Report`
+  (`D_pikuri_free_core`), hence `TrifectaView` and `AgentRunner#trifecta_html`.
+- **The theme picker's current marker is computed on open**, never
+  server-rendered: the theme changes in the page after it was served.
+- **`D_no_js_build_step` was amended to let this land** — see its entry.
+- **`Q_error_dialog_weight` stays open.** A modal for a typo is intrusive;
+  the alternative that keeps the intent is a status-bar note, for which
+  `app.js` has precedent (`'not sent'`). Shipped as the dialog because it can
+  list the known commands and a status line cannot. Revisit if it grates.
+
+---
+
 ## D_one_shell_two_layouts — One `index.erb` for the phone and the desktop; the difference is placement, so it is CSS's (2026-08-28)
 
 **Status:** Accepted, shipped 2026-08-28. The phone layout is the
@@ -1438,23 +1528,56 @@ broadcast. Out of scope until there's a concrete need.
 without per-session conversations protects an inbox everyone shares; it
 would look like multi-user support while delivering none of it.
 
-## D_no_js_build_step — One hand-written `app.js`, zero JS dependencies, render on the server (2026-06-04)
+## D_no_js_build_step — No bundler and no dependencies; JS is mechanics, never a renderer (2026-06-04)
 
-**Status:** Accepted, shipped 2026-06-04.
+**Status:** Accepted, shipped 2026-06-04; amended 2026-08-29 — the size
+targets are gone, and the test that replaces them is sharper.
 
 **Context.** The page needs an `EventSource`, form wiring, and a way to
 place incoming fragments. That is the entire client-side job, because
 Markdown rendering happens server-side in kramdown.
 
-**Decision.** One hand-written `public/app.js` (~100 lines), no Node, no
-bundler, no build step. The browser receives ready-made HTML fragments
-over SSE and places them by block id.
+**Decision.** No npm, no bundler, no build step, no dependency. What
+JavaScript is *for* here:
+
+- **transport** — the `EventSource`, the `fetch` calls;
+- **platform mechanics only exposed to script** — `showModal()`, `inert`,
+  `scrollTop`, textarea measurement, `matchMedia`;
+- **per-browser state that must never reach the server** — theme, draft,
+  scroll position, which palette row is highlighted (`D_no_event_queue`).
+
+And what it is never: a **renderer**. Markup or conversation content the
+server could have produced is the server's, always. That clause is not new
+— it is what `D_server_authoritative_transcript` and `D_replay_from_history`
+have been resting on all along.
+
+**Dropped: the line count and the file count.** This entry used to say "one
+hand-written `public/app.js` (~100 lines)". Both halves had to go, and the
+line count is its own argument for why: it was already wrong — ~180 against
+a stated ~100 — and it had rotted silently, with no change ever rejected for
+busting it. A budget nobody enforces is a fossil, not an invariant, and
+`wc -l public/*.js` never goes stale where a number in prose always does.
+The file count went with it: once "no bundler" is said outright, how many
+files the source is split across says nothing about the thing being
+protected, and `public/dom.js` splitting generic DOM mechanics away from the
+app is a clarity win the old clause would have forbidden on a technicality.
+Neither count is coming back — any successor would rot the same way as the
+app grows.
+
+**The qualifier: rendering and state, not latency.** Read absolutely, "if the
+server can do it, the server must" argues for fetching the slash palette's
+filtered rows on every keystroke — the server certainly *can*. The filter,
+the theme flip and the composer's auto-grow stay local because a round trip
+would make them feel wrong, not because the server could not do them. The
+rule governs where *rendering and state* live; it does not govern the
+interaction loop.
 
 **Rejected: a framework and a bundler** (or even a single npm
 dependency). It would add a toolchain, a lockfile, a `node_modules` and a
-build step to a project whose client-side job is a hundred lines — and
-the toolchain, not the hundred lines, is what would then need
-maintaining.
+build step to a project whose client-side job is a few hundred lines of
+mechanics — and the toolchain, not those lines, is what would then need
+maintaining. ES modules are the standing proof this costs nothing: `app.js`
+imports `dom.js` with the browser resolving it, no bundler in sight.
 
 **Consequences.** This is a live constraint on future work, not a
 starting condition: if a change appears to need an npm package, the

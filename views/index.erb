@@ -78,12 +78,31 @@
          the phone layout swaps them with `order` rather than a DOM reshuffle. -->
     <form id="composer">
       <input type="hidden" name="conversation" value="<%= conversation %>">
+
+      <!-- The slash-command palette, server-rendered whole and filtered in
+           place: app.js only toggles `hidden` per row. It anchors itself —
+           absolutely positioned against the composer, so it floats above the
+           textarea and tracks its auto-grow with no geometry in JS.
+
+           Every name here needs an arm in app.js's `runCommand`; see
+           PikuriWeb::SlashCommand. -->
+      <ul id="slash-menu" role="listbox" aria-label="Commands" hidden>
+        <% commands.each do |command| %>
+        <li id="slash-<%= command.name.delete_prefix('/') %>" role="option"
+            aria-selected="false" data-command="<%= command.name %>">
+          <span class="slash-name"><%= command.name %></span>
+          <span class="slash-description"><%= command.description %></span>
+        </li>
+        <% end %>
+      </ul>
+
       <!-- The hint is a title, not the placeholder: a paragraph of placeholder
            wraps to three lines in a phone-width composer, and Chrome sizes an
            empty textarea to its wrapped placeholder, so app.js's auto-grow
            opens the box at three lines before a character is typed. -->
       <textarea name="prompt" id="prompt" rows="1" autofocus placeholder="Message…"
-                title="Enter to send, Shift+Enter for newline; sending mid-turn injects"></textarea>
+                role="combobox" aria-expanded="false" aria-controls="slash-menu"
+                title="Enter to send, Shift+Enter for newline; sending mid-turn injects; / for commands"></textarea>
       <button type="submit" id="send" aria-label="Send" title="Send">&#8593;</button>
       <button type="button" id="cancel" aria-label="Stop this turn" title="Stop this turn"
               <%= 'hidden' unless status[:busy] %>>&#9632;</button>
@@ -96,6 +115,32 @@
     </footer>
   </div>
 
-  <script src="/app.js"></script>
+  <!-- Dialog bodies, rendered here and cloned by app.js when a command opens
+       one. Server-rendered for the same reason everything else is: markup the
+       server can produce is never assembled in the browser. The chrome (title,
+       ✕) belongs to dom.js's openDialog, so these carry only the body. -->
+  <template id="tpl-trifecta"><%== trifecta %></template>
+
+  <template id="tpl-theme">
+    <ul class="picker">
+      <!-- Which one is current is *not* rendered here: the theme changes in
+           the page after this was served (this picker, or the drawer's
+           toggle), so app.js marks it on open. -->
+      <li><button type="button" class="picker-option" data-theme="dark">Dark</button></li>
+      <li><button type="button" class="picker-option" data-theme="light">Light</button></li>
+    </ul>
+  </template>
+
+  <template id="tpl-unknown-command">
+    <p><code class="unknown-name"></code> is not one of this shell's commands.</p>
+    <p class="dialog-detail">Known commands: <%= commands.map(&:name).join(', ') %>.</p>
+    <p class="dialog-detail">To send it as a message instead, give it company —
+      anything with a space in it is never read as a command.</p>
+  </template>
+
+  <!-- A module, so app.js and dom.js each get their own scope and dom.js
+       cannot quietly become a bag of globals. No build step is involved: the
+       browser resolves the import itself. -->
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

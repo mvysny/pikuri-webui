@@ -68,7 +68,12 @@ module PikuriWeb
         conversations: conversation_rows(viewing: runner.conversation.id),
         conversation: runner.conversation.id,
         title: runner.conversation.title,
-        theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME
+        theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
+        commands: SlashCommand::CATALOG,
+        # Static for the life of the process — one conversation factory, one
+        # tool set — so the /trifecta dialog ships in the page rather than
+        # costing a route of its own.
+        trifecta: runner.trifecta_html
       }
     end
 

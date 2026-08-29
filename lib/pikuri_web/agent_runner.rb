@@ -243,6 +243,10 @@ module PikuriWeb
     #   boot script's one-time report
     def trifecta = @agent.trifecta
 
+    # @return [String] the same map as the +/trifecta+ dialog's HTML body, which
+    #   +GET /c/:id+ renders into the page — {App} never touches the report
+    def trifecta_html = TrifectaView.render(@agent.trifecta)
+
     # @return [Boolean] whether this conversation holds no messages, so nothing
     #   would be saved and its folder need not survive
     def empty? = @agent.export_history.messages.empty?

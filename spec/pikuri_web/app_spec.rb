@@ -39,6 +39,7 @@ RSpec.describe PikuriWeb::App do
     def cancel = @cancels += 1
     def busy? = @busy
     def status_data = { state: @busy ? :running : :idle, busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out' }
+    def trifecta_html = '<p class="trifecta-advisory">Trifecta: 2 of 3 legs</p>'
   end
 
   # Stands in for ConversationRegistry: a canned set of conversations, each
@@ -182,6 +183,25 @@ RSpec.describe PikuriWeb::App do
       get_live
       assert_includes last_response.body, 'data-theme="light"'
       assert_includes last_response.body, '☾ dark'
+    end
+
+    it 'renders the whole slash-command catalog for app.js to filter in place' do
+      get_live
+      PikuriWeb::SlashCommand::CATALOG.each do |command|
+        assert_includes last_response.body, %(data-command="#{command.name}")
+        assert_includes last_response.body, command.description
+      end
+    end
+
+    it 'ships the trifecta report in the page, so /trifecta costs no route' do
+      get_live
+      assert_includes last_response.body, '<template id="tpl-trifecta">'
+      assert_includes last_response.body, 'Trifecta: 2 of 3 legs'
+    end
+
+    it 'names the known commands in the unknown-command dialog' do
+      get_live
+      assert_includes last_response.body, 'Known commands: /new, /theme, /trifecta.'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do

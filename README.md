@@ -10,9 +10,8 @@ tools, rendered as a server-driven chat page instead of a terminal.
 Pikuri owns the agent loop, tool execution, and LLM transport. This
 project owns nothing but the web shell: a transcript, an input field,
 and a status bar — Sinatra + server-side Markdown + one SSE stream.
-Diagnostic logs go to stderr. JavaScript is a single
-dependency-free `public/app.js`; there is no Node, no bundler, no build
-step.
+Diagnostic logs go to stderr. The JavaScript is dependency-free and
+hand-written; there is no Node, no bundler, no build step.
 
 ## It's a chat, not an agent with hands on your machine
 
@@ -91,6 +90,28 @@ bin/pikuri-web-chat --turns 4
 Note that web searches still serialize across conversations however high
 you set this — the rate limiter that keeps you off provider blocklists is
 scoped to your IP, not to a conversation.
+
+## Slash commands
+
+Type `/` in the message box and a list of commands appears above it. Keep
+typing to narrow it, `↑`/`↓` to move, `Enter` to run the highlighted one —
+or just tap a row, which is the point on a phone: `/t`, tap.
+
+| command | what it does |
+|---|---|
+| `/new` | start a fresh conversation, as the sidebar button does |
+| `/theme` | pick the dark or light theme |
+| `/trifecta` | show this agent's lethal-trifecta report — the same map the boot banner prints |
+
+`Esc` closes the list, and closes a dialog. Nothing a command does is
+written into the conversation: they are chrome, not something the model
+ever sees.
+
+A message that merely *starts* with a slash is still a message — anything
+with a space in it is never read as a command, so `/usr/share/foo is
+missing` sends normally. A slash-word that matches no command is not sent
+at all; you get a dialog naming the commands there are, and your text
+stays where you typed it.
 
 ## Conversations
 
@@ -180,7 +201,7 @@ bin/pikuri-web-chat --dev
 
 `--dev` runs Sinatra in development mode: `views/*.erb` is re-read per
 request, and an exception renders in the browser instead of only on
-stderr. `public/app.js` and `public/style.css` are read off disk on every
+stderr. `public/*.js` and `public/style.css` are read off disk on every
 request in either mode — a browser reload picks them up.
 
 Ruby under `lib/` is the exception: nothing reloads it, in either mode.

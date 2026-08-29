@@ -1,8 +1,13 @@
-// The project's entire JavaScript: one EventSource consuming the server's
-// SSE feed, plus form/keyboard wiring. All rendering happens server-side
-// (kramdown) — this file only places ready-made HTML fragments into the
-// page by block id and keeps the status bar in sync.
-'use strict';
+// The app: one EventSource consuming the server's SSE feed, plus form,
+// keyboard and command wiring. All rendering happens server-side (kramdown) —
+// this file only places ready-made HTML fragments into the page by block id
+// and keeps the status bar in sync.
+//
+// Generic DOM mechanics live next door in dom.js; anything here may name an
+// element, a route or a conversation, and that is the difference between the
+// two files. A module, so neither leaks a global (and modules are already
+// strict, hence no 'use strict').
+import { cloneTemplate, openDialog } from './dom.js';
 
 // The conversation this tab has open, fixed for the life of the page: it came
 // from the URL, and it is what the EventSource subscribes to. Everything this
@@ -116,12 +121,8 @@ composer.addEventListener('submit', (e) => {
   });
 });
 
-promptEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    composer.requestSubmit();
-  }
-});
+// Enter is claimed further down, by the palette: what it does depends on
+// whether a command is highlighted.
 
 cancelBtn.addEventListener('click', () => {
   const body = new FormData();
@@ -131,12 +132,17 @@ cancelBtn.addEventListener('click', () => {
 
 // The fresh conversation has its own URL, so follow it. Other tabs stay
 // exactly where they are — nothing about their conversation changed.
-newBtn.addEventListener('click', () => {
+//
+// Named rather than inlined into the click: /new dispatches to it too, and the
+// button and the command must not become two paths that drift.
+const startConversation = () => {
   fetch('/conversations', { method: 'POST' })
     .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
     .then((id) => { location.href = `/c/${encodeURIComponent(id)}`; })
     .catch(() => {});
-});
+};
+
+newBtn.addEventListener('click', startConversation);
 
 // Deleting a conversation. Delegated to the nav so it survives the sidebar
 // being re-rendered from the server; `redirect: 'manual'` declines the 303 the
@@ -180,16 +186,130 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setDrawer(
 // style.css's own breakpoint.
 matchMedia('(max-width: 40rem)').addEventListener('change', () => setDrawer(false));
 
-// Theme toggle. The cookie is the store — the server reads it back on
-// the next GET / and renders `data-theme` into the shell, so this only
-// has to flip the live page. Label and title name the theme the button
-// switches *to*, matching what index.erb rendered.
-themeToggle.addEventListener('click', () => {
-  const root = document.documentElement;
-  const theme = root.dataset.theme === 'light' ? 'dark' : 'light';
+// The cookie is the store — the server reads it back on the next GET / and
+// renders `data-theme` into the shell, so this only has to flip the live page.
+// The toggle's label and title name the theme it switches *to*, matching what
+// index.erb rendered. Shared with /theme, so the button and the command cannot
+// disagree about what applying a theme means.
+const applyTheme = (theme) => {
   const other = theme === 'dark' ? 'light' : 'dark';
-  root.dataset.theme = theme;
+  document.documentElement.dataset.theme = theme;
   themeToggle.textContent = theme === 'dark' ? '☀ light' : '☾ dark';
   themeToggle.title = themeToggle.ariaLabel = `Switch to the ${other} theme`;
   document.cookie = `theme=${theme}; path=/; max-age=31536000; samesite=lax`;
+};
+
+themeToggle.addEventListener('click', () =>
+  applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
+
+// — the slash-command palette —
+//
+// The catalog is server-rendered into #slash-menu (see PikuriWeb::SlashCommand);
+// this filters it, tracks the highlighted row, and runs what was picked. A
+// command never writes to the transcript — its own effect is the feedback.
+
+const menu = document.getElementById('slash-menu');
+const rows = [...menu.querySelectorAll('li')];
+let matches = [];
+let selected = -1;
+
+const highlight = () => {
+  rows.forEach((row) => {
+    const on = row === matches[selected];
+    row.classList.toggle('selected', on);
+    row.setAttribute('aria-selected', String(on));
+  });
+  promptEl.setAttribute('aria-activedescendant', matches[selected]?.id ?? '');
+  promptEl.setAttribute('aria-expanded', String(!menu.hidden));
+};
+
+// Open while the buffer is still a command being *picked*: a leading slash with
+// no space yet. A space means the user has moved on to writing a message, so
+// the palette gets out of the way and stays out.
+const syncMenu = () => {
+  const text = promptEl.value;
+  const picking = text.startsWith('/') && !/\s/.test(text);
+  matches = picking ? rows.filter((row) => row.dataset.command.startsWith(text)) : [];
+  rows.forEach((row) => { row.hidden = !matches.includes(row); });
+  menu.hidden = matches.length === 0;
+  // A bare `/` is a menu to read, not an armed trigger: nothing is highlighted
+  // until it is narrowed or arrowed into, so Enter on `/` alone sends rather
+  // than running whichever command happens to sort first.
+  selected = menu.hidden || text === '/' ? -1 : 0;
+  highlight();
+};
+
+const closeMenu = () => {
+  matches = [];
+  selected = -1;
+  menu.hidden = true;
+  highlight();
+};
+
+const move = (delta) => {
+  if (matches.length === 0) return;
+  selected = selected < 0
+    ? (delta > 0 ? 0 : matches.length - 1)
+    : (selected + delta + matches.length) % matches.length;
+  highlight();
+};
+
+const openThemePicker = () => {
+  const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
+  const current = document.documentElement.dataset.theme;
+  dialog.querySelectorAll('[data-theme]').forEach((option) => {
+    if (option.dataset.theme === current) option.setAttribute('aria-current', 'true');
+    option.addEventListener('click', () => { applyTheme(option.dataset.theme); dialog.close(); });
+  });
+};
+
+// textContent, never markup: `name` is whatever was typed.
+const reportUnknownCommand = (name) => {
+  const body = cloneTemplate('tpl-unknown-command');
+  body.querySelector('.unknown-name').textContent = name;
+  openDialog('No such command', body);
+};
+
+// The other half of the contract PikuriWeb::SlashCommand describes: every name
+// in the server's catalog needs an arm here.
+const runCommand = (name) => {
+  promptEl.value = '';
+  autogrow();
+  closeMenu();
+  switch (name) {
+    case '/new': startConversation(); break;
+    case '/theme': openThemePicker(); break;
+    case '/trifecta': openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')); break;
+  }
+};
+
+promptEl.addEventListener('input', syncMenu);
+// Clicking away leaves an open palette floating over the transcript.
+promptEl.addEventListener('blur', closeMenu);
+
+promptEl.addEventListener('keydown', (e) => {
+  if (!menu.hidden) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); return; }
+    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
+  }
+  if (e.key !== 'Enter' || e.shiftKey) return;
+  e.preventDefault();
+
+  // Enter runs the highlighted command. With none highlighted it sends, except
+  // for a `/word` that matches nothing: that is a typo, and quietly sending it
+  // to the model is the one outcome that helps nobody. A message containing a
+  // space is never a command, so `/usr/bin/foo is missing` still sends.
+  const text = promptEl.value;
+  if (selected >= 0) runCommand(matches[selected].dataset.command);
+  else if (text.length > 1 && text.startsWith('/') && !/\s/.test(text)) reportUnknownCommand(text);
+  else composer.requestSubmit();
+});
+
+rows.forEach((row) => {
+  // Keep the caret in the textarea: the blur would close the palette out from
+  // under the tap before it could land. This is what makes the phone work —
+  // type `/t`, tap the row.
+  row.addEventListener('pointerdown', (e) => e.preventDefault());
+  row.addEventListener('click', () => runCommand(row.dataset.command));
 });

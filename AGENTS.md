@@ -120,11 +120,27 @@ the alternatives that were rejected, live one entry per slug in
   is never pointed at the {Broadcaster}. Never cross the streams.
   See `D_diagnostics_to_stderr`.
 
-- **JavaScript is as minimal as possible.** One hand-written
-  `public/app.js` (~100 lines), zero JS dependencies, no Node, no build
-  step; all rendering is server-side. If a change needs an npm package
-  or a bundler, the answer is to render it on the server instead.
-  See `D_no_js_build_step`.
+- **JavaScript is mechanics, never a renderer.** Zero JS dependencies, no
+  npm, no bundler, no build step. What script is for: transport
+  (`EventSource`, `fetch`), platform mechanics only it can reach
+  (`showModal`, `inert`, `scrollTop`, textarea measurement, `matchMedia`),
+  and per-browser state that must never reach the server. Markup or
+  conversation content the server could have produced is the server's,
+  always. `public/app.js` may name elements and routes; `public/dom.js`
+  may not — a function that knows an element id belongs next door. No
+  line or file budget: both rot, and the last one did.
+  The rule is about rendering and state, *not* latency — the palette
+  filter stays local. See `D_no_js_build_step`.
+
+- **Slash commands: the catalog is the server's, the palette is the
+  browser's, and a command never writes to the transcript.**
+  {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and `app.js`
+  filters it in place. An echoed command line would be client-only
+  conversation state one way and a block missing from `history.json` the
+  other, so a command's own effect — a dialog, a navigation, a color
+  change — is its only feedback. Dialogs are real `<dialog>`s opened
+  through `dom.js`'s `openDialog`, which takes a *Node*, never an HTML
+  string. See `D_slash_command_palette`.
 
 - **Streaming is re-render-and-replace.** {StreamingMessage} re-renders
   the whole accumulated source per (rate-limited) delta; the TUI's
@@ -251,6 +267,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   the conversations folder: mints ids, owns the whole commit (`#save`
   takes the history and writes both halves), lists what is saved, deletes
   a folder.
+- `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
+  description for one palette row, and the `CATALOG` the page renders.
+- `lib/pikuri_web/trifecta_view.rb` — `PikuriWeb::TrifectaView`, a walked
+  trifecta report as the `/trifecta` dialog's escaped HTML body.
 - `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
   "6 hours ago" for sidebar rows; server-rendered, hence stale-tolerant.
 - `lib/pikuri_web/transcript.rb` — one conversation's rendered blocks,
@@ -268,11 +288,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `Shared::Config`, schema-complete, Pikuri-free.
 - `views/index.erb` — the page shell; server-rendered snapshot. Carries
   the phone's `#topbar` and the `#drawer` wrapper around the sidebar in
-  every response — CSS decides which layout shows.
+  every response — CSS decides which layout shows. Also the slash
+  palette's `#slash-menu` and the `<template>`s holding each dialog's
+  body.
 - `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
   and served alone by `GET /conversations` for in-place refresh. The
   drawer's chrome sits *outside* it, so this stays only the list.
-- `public/app.js` — the project's entire JavaScript; see above.
+- `public/app.js` — the app's JavaScript: SSE, composer, sidebar, drawer,
+  slash-command dispatch; may name elements and routes.
+- `public/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
+  `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
   thinking, cyan tool lines).
@@ -296,6 +321,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `:tool_result`, `:notice`, `:error`) are the contract between
   SseListener, index.erb and style.css — adding one means touching
   all three.
+- Slash commands are the same shape of contract, in three places:
+  {SlashCommand}`::CATALOG` (the palette cannot list what it does not
+  hold), `runCommand` in `public/app.js` (the catalog cannot run it), and
+  a `<template>` in `views/index.erb` for one that opens a dialog.
 
 ## Ideas & their graduation
 

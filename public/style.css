@@ -332,6 +332,7 @@ body {
 /* flex-end so the round buttons stay level with the bottom of the textarea as
    app.js grows it. */
 #composer {
+  position: relative; /* the anchor #slash-menu floats against */
   display: flex;
   align-items: flex-end;
   gap: 0.5rem;
@@ -341,6 +342,49 @@ body {
   width: 100%;
   margin: 0 auto;
 }
+
+/* — the slash-command palette —
+
+   Anchored by the box model rather than by script: absolute against the
+   composer, so it sits above the textarea and follows app.js's auto-grow with
+   no geometry in JS. Out of flex flow, so it costs the composer's layout
+   nothing. On the phone it opens over the one-line status bar, which is not
+   what you are reading while typing a command. */
+#slash-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 1rem;
+  right: 1rem;
+  z-index: 5;
+  margin: 0 0 0.4rem;
+  padding: 0.25rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  list-style: none;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.3);
+}
+
+#slash-menu li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* An author `display` outranks the UA stylesheet's `[hidden] { display: none }`,
+   which is how the row above would otherwise stay visible through the filter. */
+#slash-menu li[hidden] { display: none; }
+
+#slash-menu li.selected { background: var(--bg); }
+
+.slash-name { color: var(--tool); font-family: ui-monospace, monospace; }
+.slash-description { color: var(--fg-muted); font-size: 0.9em; }
 
 /* 16px, not the inherited 15: under 16px iOS zooms the whole page in when the
    field is tapped. Height is app.js's (auto-grow); max-height caps it. */
@@ -415,6 +459,106 @@ button:hover { border-color: var(--accent); }
 
 #status-tokens { flex: 1; text-align: right; }
 
+/* — dialogs —
+
+   Built by dom.js's openDialog and removed again on close, so none of these
+   are in the page at rest. `showModal()` owns the behaviour — background
+   inert, ESC, focus containment — and this owns only the paint. */
+.dialog {
+  /* A <dialog> shrink-wraps its content, which leaves a two-row picker as a
+     sliver with the title fighting the ✕ for the header. */
+  min-width: min(20rem, 92vw);
+  max-width: min(46rem, 92vw);
+  max-height: 82vh;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgb(0 0 0 / 0.4);
+}
+
+.dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.dialog-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dialog-close {
+  flex: 0 0 auto;
+  min-width: 2rem;
+  background: none;
+  border: 0;
+  color: var(--fg-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.dialog-close:hover { color: var(--fg); }
+
+.dialog-body {
+  padding: 1rem;
+  overflow: auto;
+}
+
+.dialog-body > :first-child { margin-top: 0; }
+.dialog-body > :last-child { margin-bottom: 0; }
+.dialog-detail { color: var(--fg-muted); font-size: 0.9em; }
+
+/* The verdict reads as prose and wraps; the map below it is a fixed-width
+   tree, so it scrolls sideways rather than reflowing into nonsense. */
+.trifecta-advisory { margin-bottom: 0.8rem; }
+
+.trifecta-tree {
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  overflow-x: auto;
+  background: var(--bg);
+  border-radius: 6px;
+  color: var(--tool);
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+/* A dialog's option list — the theme picker now, the model picker later. */
+.picker {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.picker-option {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  padding: 0.5rem 0.7rem;
+}
+
+.picker-option:hover { border-color: var(--accent); }
+
+/* The dot marks the active entry, as the TUI's picker does. app.js sets the
+   attribute on open — the server cannot know a theme flipped since it served
+   the page. */
+.picker-option[aria-current]::before { content: '● '; color: var(--accent); }
+
 /* A chromeless control — the drawer footer's pair. */
 .flat-button {
   background: none;
@@ -465,9 +609,27 @@ button:hover { border-color: var(--accent); }
 
   #status-bar { gap: 0.6rem; padding: 0.2rem 0.75rem; }
 
+  #slash-menu { left: 0.5rem; right: 0.5rem; }
+
+  /* A phone dialog is the whole screen — there is no room for a window with a
+     backdrop around it, and the trifecta tree wants every column it can get. */
+  .dialog {
+    width: 100%;
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
   /* 44px minimums: iOS's tap-target guidance, which nothing here met. */
   .conversation { padding: 0.6rem 0.75rem; min-height: 44px; }
   .conversation-delete { min-width: 44px; }
   #send, #cancel { width: 44px; height: 44px; font-size: 1.15rem; }
   .flat-button { min-height: 44px; padding: 0.3rem 0.6rem; }
+  .dialog-close { min-width: 44px; min-height: 44px; }
+  #slash-menu li { min-height: 44px; align-items: center; }
 }

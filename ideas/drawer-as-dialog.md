@@ -1,8 +1,8 @@
 # The drawer as a `<dialog>`
 
-Split out of `ideas/slash-commands.md`, which introduces `<dialog>` + `showModal()` to the project
-for its command dialogs. Once that helper exists, the phone drawer's hand-rolled modality is the
-obvious next thing to look at — it does by hand what the platform now does for us.
+`<dialog>` + `showModal()` is now in the project — `dom.js`'s `openDialog`, shipped with the slash
+palette (`D_slash_command_palette`). Which makes the phone drawer's hand-rolled modality the obvious
+next thing to look at: it does by hand what the platform now does for us three lines away.
 
 **This is a refactor of shipped code, not part of the slash-command feature. Do not bundle it.**
 It touches `D_one_shell_two_layouts`, which is a load-bearing decision; the slash-command work
@@ -71,10 +71,13 @@ currently have at all. The last of those is the strongest argument — the curre
 trap focus, so tabbing out of an open drawer walks into an `inert` region and stops dead, which is
 correct but not the same as containment.
 
-## Prerequisite
+## The helper this would reuse
 
-Ships after `ideas/slash-commands.md`, whose dialog helper and `::backdrop` styling this would reuse.
-Doing it first would mean writing that helper twice.
+`dom.js`'s `openDialog(title, body)` builds the chrome, `showModal()`s, and removes the element on
+close; `.dialog` / `.dialog::backdrop` in `style.css` paint it, and the phone's full-screen variant
+already exists in the `max-width: 40rem` block. The drawer is not shaped like that helper's callers,
+though — it is not built-then-discarded, it is a permanent element that changes role — so this would
+use the *element* and the CSS, not `openDialog` itself.
 
 ## If it graduates
 
