@@ -187,9 +187,13 @@ the alternatives that were rejected, live one entry per slug in
   correctness argument on that number.
   See `D_serial_turn_executor`.
 
-- **`kuri.svg` is the mascot; every rasterized icon is that drawing on an
-  opaque plate.** Kuri the pika in the Talus coat — a mid grey, so no
-  ground can be assumed. The master SVG is transparent; the favicon, the
+- **The mascot is the library's; the plate is ours.** Kuri the pika in
+  the Talus coat is decided in `../pikuri` (`D_kuri_mascot`), and
+  `public/kuri.svg` is a vendored copy of `../pikuri/assets/kuri.svg` —
+  upstream is the source of truth, re-copy rather than redraw. What this
+  repo owns is that **every rasterized icon is that drawing on an opaque
+  plate**, because Talus is a mid grey and no ground can be assumed. The
+  master SVG stays transparent; the favicon, the
   two manifest icons, the maskable variant and `apple-touch-icon` all sit
   on `#1e1f22`, because iOS composites transparency onto black and takes
   its home-screen icon from `apple-touch-icon` rather than the manifest.

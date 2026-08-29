@@ -90,14 +90,16 @@ design or the invariant.
 `favicon.svg`, the four PNGs, `manifest.webmanifest`), `views/index.erb`
 and `App`'s `mime_type :webmanifest`.
 
-**Context.** Making the shell installable needs an icon, and pikuri had
-no mascot at all. The one drawn for it — Kuri, a pika, in the *Talus*
-coat — is a **mid grey** (`#a89c8e`) with a cream muzzle. The coat was
-chosen over a warmer amber precisely because it reads as the animal
-rather than a cartoon, and that choice is what forces this decision: a
-mid grey has no ground it reliably contrasts against.
+**Context.** Making the shell installable needs an icon. *Who* the icon
+is was decided in the library, not here — Kuri the pika, in the Talus
+coat, `../pikuri/DECISIONS.md` `D_kuri_mascot`, which also holds the
+coats and the mascots rejected on the way. What lands on this side of
+that line is the one consequence the drawing hands its hosts: Talus is a
+**mid grey** (`#a89c8e`), so there is no ground it reliably contrasts
+against, and each host has to say where the icon's background comes
+from. This entry is pikuri-web's answer.
 
-Two platform facts narrow it further, both downstream of
+Two platform facts narrow it, both downstream of
 `D_target_browsers` (Firefox on the desktop, Safari on iPad and iPhone —
 so the install path that actually matters here is iOS *Add to Home
 Screen*, not Android):
@@ -123,10 +125,12 @@ every browser refuses to parse it.
 **Rejected: transparent PNGs, letting each platform supply the ground.**
 The tidier asset set, and what a saturated mascot could afford. Talus
 cannot: on iOS the ground is black whatever the wallpaper, and on a white
-tab strip a grey blob with a cream face is a smudge. The plate is the
-price of the coat, and it was paid deliberately — the alternative was
-re-opening the coat choice to suit the file format, which is the tail
-wagging the dog.
+tab strip a grey blob with a cream face is a smudge. The alternative on
+the table was re-opening the *coat* to suit the file format — which is
+not this repo's decision to re-open, and would be the tail wagging the
+dog if it were. The plate is the price of the coat and it is paid here,
+where the constraint actually bites. Note the price is only owed at
+*icon* sizes: `../pikuri`'s own README renders the master unplated.
 
 **Rejected: SVG-only icons, no PNGs at all.** Tempting for a project with
 no build step: one file, every size. But `apple-touch-icon` does not
@@ -135,13 +139,18 @@ install prompt is the wrong place to discover it. The PNGs are generated
 artifacts committed to the repo, the same bargain as any other
 checked-in asset.
 
-**Consequences.** The geometry lives in `kuri.svg` and is duplicated
-**once**, in `favicon.svg` — a favicon cannot reference an external file,
-so that copy is sanctioned and marked as such in both headers. Changing
-the drawing means changing both *and* re-rendering the four PNGs. There
-is deliberately no generator script: nothing here has a build step, and
-the mascot changes about as often as a logo does. Any SVG rasterizer
-reproduces them from a plated wrapper at the percentages below.
+**Consequences.** `public/kuri.svg` is a **copy of the library's master**
+(`../pikuri/assets/kuri.svg`), vendored rather than referenced because
+this project ships its own `public/` and has no build step to sync one.
+The upstream drawing is the source of truth: if it changes there, it is
+re-copied here. The geometry is duplicated **once more**, in
+`favicon.svg` — a favicon cannot reference an external file, so that copy
+is sanctioned and marked as such in both headers. A mascot change is
+therefore: re-copy `kuri.svg`, update `favicon.svg`, re-render the four
+PNGs. There is deliberately no generator script — nothing here has a
+build step, and the mascot changes about as often as a logo does. Any SVG
+rasterizer reproduces the PNGs from a plated wrapper at the percentages
+below.
 
 | file | px | plate | art |
 |---|---|---|---|

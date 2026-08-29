@@ -1,19 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="4 7 56 56" role="img" aria-label="Kuri, the pikuri pika">
-  <!-- Kuri - pikuri's mascot, in the Talus coat. Master artwork: transparent,
-       no plate, for the README, the book and anywhere a bare mascot is wanted.
-       The app icons beside it are this drawing on an opaque plate; see
-       DECISIONS.md D_icon_plate for why they carry one and this does not.
+  <!-- Kuri - pikuri's mascot, in the Talus coat. THIS FILE IS THE MASTER: it
+       lives in pikuri/assets/ and every other copy, in this repo or a host's,
+       is downstream of it. Why a pika, why this coat, and what was drawn and
+       rejected first: D_kuri_mascot in *pikuri's* DECISIONS.md - named in full
+       because this file is vendored, and a bare "DECISIONS.md" would point at
+       the wrong repo everywhere but here.
+
+       Deliberately transparent and unplated. Talus is a mid grey, which holds
+       fine at README and book sizes on either a light or a dark page - but a
+       host rendering him small (a favicon, an app icon) has to supply its own
+       background, and that is the host's decision to make and record. pikuri
+       does not decide it here.
 
        What makes him a pika rather than a teddy bear is the ear placement:
        large, and set on the SIDES of the head at about 8 and 4 o'clock. Ears
        that are small, high and clear of the skull read as a bear every time -
-       that was the first draft. The whiskers and the small muzzle are the
-       other two tells; the muzzle wants to stay well under half the face.
+       that was the first draft, and it was not obvious until it was rendered
+       at 512px. The whiskers and the small muzzle are the other two tells;
+       the muzzle wants to stay well under half the face.
 
        The viewBox is the art's own bounding square (56x56 centred on 32,35),
-       so scaling this file into a plate needs no transform - a percentage
-       width is enough. Change the geometry and every PNG beside it must be
-       re-rendered; see the icon note in AGENTS.md. -->
+       so scaling this file into a frame needs no transform - a percentage
+       width is enough. Changing the geometry invalidates every raster
+       rendered from it, here and downstream. -->
   <title>Kuri</title>
 
   <!-- ears -->
