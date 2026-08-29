@@ -51,13 +51,10 @@ the alternatives that were rejected, live one entry per slug in
 - **Deleting a conversation is irreversible, and it stays deleted.**
   `confirm()` then `rm_r`, `meta.json` unlinked first; no undo, no
   tombstone, no retention cap. Refused while *that* conversation is
-  mid-turn — and dropping the runner from the registry is not enough on
-  its own, because a request thread can still hold one it resolved a
-  moment earlier. So the delete *retires* the runner
-  ({AgentRunner#discard!}, one atomic busy-check-and-claim on the
-  runner's mutex) and only then removes the folder; a retired runner
-  starts no turn and writes no folder, so nothing can save the
-  conversation back. See `D_delete_no_undo`.
+  mid-turn: the delete *retires* the runner ({AgentRunner#discard!}, one
+  atomic busy-check-and-claim on the runner's mutex) and only then removes
+  the folder. A retired runner starts no turn and writes no folder, so
+  nothing can save the conversation back. See `D_delete_no_undo`.
 
 - **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
   only.** No polyfills, no prefixes for a fourth browser; `:has()`,
@@ -127,27 +124,24 @@ the alternatives that were rejected, live one entry per slug in
   and per-browser state that must never reach the server. Markup or
   conversation content the server could have produced is the server's,
   always. `public/app.js` may name elements and routes; `public/dom.js`
-  may not — a function that knows an element id belongs next door. No
-  line or file budget: both rot, and the last one did.
-  The rule is about rendering and state, *not* latency — the palette
-  filter stays local. See `D_no_js_build_step`.
+  may not — a function that knows an element id belongs next door. The
+  rule is about rendering and state, *not* latency — the palette filter
+  stays local. See `D_no_js_build_step`.
 
 - **Slash commands: the catalog is the server's, the palette is the
   browser's, and a command never writes to the transcript.**
   {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and `app.js`
-  filters it in place. An echoed command line would be client-only
-  conversation state one way and a block missing from `history.json` the
-  other, so a command's own effect — a dialog, a navigation, a color
-  change — is its only feedback. Dialogs are real `<dialog>`s opened
+  filters it in place. A command's own effect — a dialog, a navigation, a
+  color change — is its only feedback. Dialogs are real `<dialog>`s opened
   through `dom.js`'s `openDialog`, which takes a *Node*, never an HTML
   string. See `D_slash_command_palette`.
 
 - **Streaming is re-render-and-replace.** {StreamingMessage} re-renders
-  the whole accumulated source per (rate-limited) delta; the TUI's
-  `StreamingMarkdownBuffer` is deliberately not ported, and delta
-  coalescing stays in pikuri (`Listener::RateLimited`, 15 fps). Its
-  lifecycle contract is the TUI buffer's: deltas preview-only, the
-  bookend finalizes with authoritative content, dead after finalize.
+  the whole accumulated source per (rate-limited) delta; delta coalescing
+  stays in pikuri (`Listener::RateLimited`, 15 fps). Its lifecycle
+  contract mirrors the TUI's `StreamingMarkdownBuffer`: deltas
+  preview-only, the bookend finalizes with authoritative content, dead
+  after finalize.
   See `D_rerender_and_replace`.
 
 - **Mid-loop input goes through `Control::Interloper`, and the input
@@ -228,11 +222,12 @@ the alternatives that were rejected, live one entry per slug in
 
 - **One config file for every pikuri shell, and a connection has exactly
   one source.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
-  schema, including sections this host never reads. No `--api-key` flag,
-  ever; no `ENV`; no project-local file — and no `--server` / `--model`
-  either, so there is never a precedence rule between a flag, the file and
-  a conversation's own saved model. Pointing the shell somewhere new means
-  editing the file.
+  schema, including sections this host never reads. Anything the file has
+  a home for — the connection, the model, the secrets — comes from the
+  file and from nowhere else: no flag, no `ENV`, no project-local file
+  overlays it, so there is never a precedence rule between an override,
+  the file and a conversation's own saved model. Pointing the shell
+  somewhere new means editing the file.
   See `D_schema_complete_config`.
 
 - **`--dev` is Sinatra's development mode, not code reloading** — the
@@ -308,8 +303,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   factory (agent + tools + Interloper, one wiring for every
   conversation), the shared turn executor, the trifecta report, Puma start (server settings and
   the shutdown hook). Flags are only what the config file has no home for
-  — `--port` / `--bind` / `--turns` / `--dev`; never an `--api-key`, and
-  never a `--server` / `--model`.
+  — `--port` / `--bind` / `--turns` / `--dev`.
 
 ## Conventions
 
