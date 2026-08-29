@@ -3,11 +3,10 @@
 Switch the model without restarting the server, and have each conversation remember the one it is
 on. A new conversation inherits the model of the conversation currently shown.
 
-Status: **backend-only work, with a designed shape and four open questions.** The UI question is
-closed (the slash palette shipped), the library half is done, nothing is blocked on upstream, and
-the two questions that gated the implementation shape — where the selection lives and when it is
-written — are settled below. What is left open is how loud the edge cases are. The leans under
-*Open questions* are leans, not conclusions.
+Status: **designed, backend-only, nothing open.** The UI question is closed (the slash palette
+shipped), the library half is done, nothing is blocked on upstream, and every question this note
+ever opened was answered by 2026-08-29 — the two that gated the shape (where the selection lives,
+when it is written) and the five edge-case ones. This is now a spec waiting to be typed.
 
 ## What is settled
 
@@ -23,7 +22,8 @@ written — are settled below. What is left open is how loud the edge cases are.
   a switch on a *live* runner. See *Where the state lives*.
 - **Three readers, each true of one moment.** `Conversation#model_at_mint` (what disk said when the
   runner was minted; the factory is its only reader), `AgentRunner#model` (intent — what the next
-  turn will use), and `@agent.transport` (reality — what the agent is on, read only by `#save`).
+  turn will use), and `@agent.transport` (reality — what the agent is on, read by `#save` and by
+  `status_data`, both inside `AgentRunner` and neither through a public reader).
 - **No agent, runner or transcript is ever rebuilt** — only the transport moves.
 - **No synthetic bare turn to force a switch early.** A selection made while idle sits until the
   next real turn. Firing `run_loop(user_message: nil, transport: …)` to apply it sooner buys a
@@ -36,8 +36,29 @@ written — are settled below. What is left open is how loud the edge cases are.
   it. Gate the catalog entry on `config.llms.size > 1`, as pikuri-tui gates its own.
 - **The current-model marker is computed when the dialog opens, not server-rendered.** `/theme` had
   the same problem for the same reason (the value changes in-page after the render). So the dialog
-  is a static `<template>` and needs nothing from the `status` SSE frame — see
-  `Q_status_carries_model` for whether the *status bar* wants the model anyway.
+  is a static `<template>`, and what it marks it reads out of the status bar — see below.
+- **The status bar carries the model, always** (`Q_status_carries_model`, answered 2026-08-29) —
+  including for the single-`[[llm]]` user, where it is a constant. Mechanics in *The status bar
+  carries the model*.
+- **A switch draws no transcript block** (`Q_switch_marker`, answered 2026-08-29). The status bar
+  is the model's surface, so the transcript needs none — which deletes the whole "two producers of
+  one block" problem: `HistoryReplay` never derives a switch boundary from `model_id`, and there is
+  nothing for a reload to silently rewrite. `Event::ModelSwitched` stays *silent* in `SseListener`
+  rather than staying *unreachable*; only the `else` branch's rdoc changes.
+- **A switch onto a smaller context window is accepted, not refused** (`Q_cap_after_switch`,
+  answered 2026-08-29). The re-emitted `ContextCap` moves the token readout on its own, the next
+  turn fails legibly, and the user did it deliberately. Nothing warns, nothing re-baselines,
+  nothing greys out a row — the dialog just shows each connection's window
+  (`Q_dialog_shows_context_window`) so the pick is informed rather than discovered.
+- **Nothing subscribes to `ModelSwitched`, and the arrow is allowed to clear late**
+  (`Q_switch_push`, answered 2026-08-29). No `on_model_switched` hook on `SseListener`: a pick made
+  while idle leaves the bar reading `llama-local → qwen-remote` until `finish_turn` broadcasts. The
+  bar never claims a model the switch did not reach, which is the property that matters; a stale
+  arrow is early, not wrong. Revisit only if the lag reads badly against a slow first token.
+- **A saved connection gone from the config falls back to `primary_llm`, and the `/model` dialog is
+  the only place that is said** (`Q_missing_connection`, answered 2026-08-29). Not the transcript
+  (a block absent from `history.json`), not `supported: false` (that means "unreadable envelope").
+  Mechanics in *Saying it when the saved connection is gone*.
 
 ## Where it stands today
 
@@ -96,8 +117,9 @@ Consequences here:
   `name` alone would break the moment someone renames a connection in the config file.
 - No `SCHEMA` bump needed to add a key: `load_meta` only checks `meta['schema'] == SCHEMA`
   (`conversation_store.rb:292`) and ignores what it doesn't read.
-- Reopening a conversation whose saved connection is gone from `config.toml` needs an answer —
-  `Q_missing_connection`.
+- The pair is also what the status bar's name resolves *through*, and what the orphan note has to
+  print when there is no name left to print — see *The status bar carries the model* and *Saying it
+  when the saved connection is gone*.
 
 ## Where the state lives
 
@@ -138,15 +160,17 @@ the pending slot handles only live switches.** Two mechanisms, each meaning one 
   tui's authority split (`StatusFooterUpdater` moves the displayed name only once `ModelSwitched`
   lands, so a failed switch never advertises a model it never reached):
   - `AgentRunner#model` — **intent**: what this conversation will talk to next, `pending ||
-    current`. Consumers: `registry.create(from:)` and the `/model` dialog's `aria-current`. A pick
-    made on a busy conversation, followed immediately by "new conversation", should inherit the
-    *pick* — that is what the user expressed.
-  - **reality** gets no *public* reader: `finish_turn` reads `@agent.transport` directly (a public
-    `attr_reader`, `agent.rb:219`, well above `private` at `:578`), and so would `status_data` if
-    `Q_status_carries_model` lands — both are inside `AgentRunner`. Deliberate: `#save` writing
-    from the transport rather than from the selection is what makes `meta.json` and
-    `history.json`'s last `model_id` agree by construction, and not exposing a second runner-level
-    reader beside `#model` removes the chance of an outside caller reaching for the wrong one.
+    current`. Its one consumer is `registry.create(from:)` — a pick made on a busy conversation,
+    followed immediately by "new conversation", should inherit the *pick*, because that is what the
+    user expressed. The `/model` dialog's `aria-current` wants intent too, but reaches it through
+    the browser rather than through here: it reads the status bar's pending segment and falls back
+    to the landed one, which is `pending || current` expressed in the DOM.
+  - **reality** gets no *public* reader: `finish_turn` and `status_data` both read
+    `@agent.transport` directly (a public `attr_reader`, `agent.rb:219`, well above `private` at
+    `:578`) from inside `AgentRunner`. Deliberate: `#save` writing from the transport rather than
+    from the selection is what makes `meta.json` and `history.json`'s last `model_id` agree by
+    construction, and not exposing a second runner-level reader beside `#model` removes the chance
+    of an outside caller reaching for the wrong one.
   - The sidebar renders **neither**. A row is built from a `Conversation`, whose pair is mint-time;
     if a row ever wants to show a model it must ask the registry for the resident runner.
 - **Why mint rather than seed the pending slot.** Not for history integrity — see the warning
@@ -185,6 +209,89 @@ never builds a transport itself — it hands out `Llm` value objects, as it does
 That also keeps the trifecta report honest: one factory, one tool set, and the catalog is a
 constructor argument rather than a second wiring.
 
+## The status bar carries the model
+
+Two fields on `status_data` (`agent_runner.rb:233`), beside `state/busy/pending/tokens`:
+
+- **`model:`** — reality, and it costs nothing to be correct. `apply_transport!` assigns
+  `@transport = filled` *after* `with_model` returns (`agent.rb:745`), so `@agent.transport` never
+  names a model the switch didn't reach: a `with_model` that raises leaves the old transport
+  standing and the error path's `finish_turn` broadcasts it. **That is the TUI's footer rule
+  satisfied by construction, without subscribing to anything** — we get for free what
+  `StatusFooterUpdater` needs a listener for, because we can read the agent where the TUI's footer
+  cannot. Reading it off another thread is the `#state` argument again: one ivar reference read
+  under the GVL.
+- **`model_pending:`** — intent that has not landed, non-nil only between a pick and the top of the
+  next turn. It is the Interloper of models, and it tells the same "your pick waits for a boundary"
+  story the queued count tells; it is also what makes the *no synthetic bare turn* decision legible
+  instead of silent, since a pick made while idle otherwise looks dropped. **Drained where the
+  transport is drained** — cleared as it is handed to `run_loop`, not on a landed `ModelSwitched` —
+  which is precisely why no `ModelSwitched` subscription is needed to clear it either. Because
+  minting resolves the saved transport, a reopen never sets this.
+
+**Both are display names, not model ids, and the resolution is the TUI's.**
+`Shared::Model::Choice.key` (`../pikuri-tui/lib/shared/model/choice.rb`) keys the catalog on
+`[model, api_base]` and `StatusFooterUpdater#current_model=` resolves a transport through that map,
+**falling back to the raw model id when absent** — copy both, including the fallback, which costs
+one `||` and removes any need to argue that the reverse map is total. `Choice` itself lives in
+pikuri-tui, not pikuri-core, so we write our own two-field equivalent; it is the same value object
+the *catalog* in `bin/pikuri-web-chat` is a list of. The runner resolves, so what crosses the seam
+is a `String`.
+
+**Placement: left of `tokens`**, so the row reads `state | pending | model | tokens` —
+`#status-tokens` keeps its `flex: 1` right-aligned claim on the far edge (`style.css:460`) and the
+model lands in the flow beside it. **The phone shows all four**, narrower gap and all
+(`style.css:610`); a 30-character raw model id on a 320px screen is the case that would bite, and
+it is the fallback case rather than the normal one. Revisit then, not now — dropping a segment
+under the breakpoint is a CSS change by `D_one_shell_two_layouts` and stays available.
+
+    idle                  llama-local                 12k / 32k
+    thinking   2 queued   llama-local → qwen-remote   31k / 32k
+
+**Two spans, not one** — `#status-model` and `#status-model-pending`, the second holding
+`→ qwen-remote` or `''`, exactly as `#status-pending` holds `2 queued` or `''` (`app.js:56`). That
+is what lets the `/model` dialog read intent off the DOM without parsing an arrow out of a string,
+and it gives the arrow its own CSS hook.
+
+## The `/model` dialog
+
+A `<ul class="picker">` in a `<template>`, like `/theme`'s (`index.erb:125`, `style.css:537` —
+whose comment already says "the model picker later"). Server-rendered whole, because the catalog
+cannot change without a restart; `app.js` only sets `aria-current` on open, reading the name out of
+the status bar the way `/theme` reads `document.documentElement.dataset.theme` — the pending span
+first, the landed one as the fallback, so a dialog opened over an unlanded pick marks what was
+picked.
+
+**A row carries all three fields** — name, model id, context window
+(`Q_dialog_shows_context_window`, answered 2026-08-29), the name leading and the rest muted under
+it:
+
+    ● llama-local
+      qwen3-30b-a3b · 32k
+      qwen3-30b-a3b · 128k        ← a second row, same model, other server
+
+The second line is why the identity is a pair and not a name: with the model id printed, two
+connections running one model on two servers stop looking like a duplicate entry. `.picker-option`
+is already a full-width left-aligned button, so a two-line row needs no new element and the
+`::before` dot still prefixes the first line (`style.css:547`). A `nil` `context_window` — deferred
+to pikuri's `/props` probe — has no number to print and prints none; expect that to be most rows
+against llama.cpp.
+
+## Saying it when the saved connection is gone
+
+The fallback happens in the factory, at mint, resolving `model_at_mint`/`server_at_mint` against
+the catalog. Two consequences the dialog's wording forces:
+
+- **The orphan has no name to print.** `meta.json` holds the `[model, server]` pair, and `name` is
+  not recoverable from a pair that is no longer in the config *at all* — so the line reads
+  `qwen3-30b @ http://remote:8080 — not in config, using llama-local`, from the pair itself.
+- **It cannot be derived from `Conversation#model_at_mint` at dialog-open time**, tempting as that
+  is. That field is stale against disk by design (*write-once-read-once*), so after the first turn
+  saves the fallback into `meta.json` a comparison would report a deviation that no longer exists.
+  So the factory *tells* the runner: one `missing_connection:` string, set at mint, rides
+  `status_data` beside `model:`, and is **cleared on the first successful save and on any pick** —
+  at which point the orphan is gone from disk too and the note would be a lie about the present.
+
 ## Inheriting on "new conversation"
 
 `POST /conversations` (`app.rb:145`) calls `registry.create` (`conversation_registry.rb:68`,
@@ -207,8 +314,10 @@ things need to happen:
 
 Plain work, no fork in it:
 
-- **`SseListener`'s `else` branch** (`sse_listener.rb:137`) stops being unreachable, and its rdoc
-  stops being true. What it *draws* is `Q_switch_marker`.
+- **`SseListener`'s `else` branch** (`sse_listener.rb:137`) stops being unreachable but keeps
+  drawing nothing; only its rdoc changes — "unreachable, this shell has no model picker" becomes
+  "silent, like Tokens/ContextCap: the status bar carries the model, read off the agent's own
+  transport." The class stays a renderer with no hook on it.
 - **The boot banner** (`bin/pikuri-web-chat:296`, "agent: model @ server") becomes the *default*
   model, not the model.
 - **`--model` / `--server` are gone** (2026-08-29, ahead of this work rather than as part of it).
@@ -218,70 +327,6 @@ Plain work, no fork in it:
   outranking it. See the 2026-08-29 amendment to `D_schema_complete_config`.
 - **`restore!`** (`agent_runner.rb:124`) needs no change: the agent is already on the right
   transport when it runs, because the factory resolved it at mint.
-
-## Open questions
-
-None of these are settled, and none of them gate starting the work — they are edge-case loudness,
-not shape. Each names what was checked, so the next session argues rather than re-greps. Leans are
-marked as leans.
-
-### `Q_switch_marker` — does a switch earn a transcript block?
-
-`D_slash_command_palette`'s rule is that a command's effect is its own feedback, because a block
-absent from `history.json` vanishes on reopen. That reason does **not** obviously reach a model
-switch: `Pikuri::Agent::History::Message` carries `model_id` (`history.rb:140`, persisted), so
-`HistoryReplay` could derive a switch boundary from a change between consecutive assistant
-messages — and it would replay.
-
-So this is a live fork. For: it is the only durable record of why the conversation's voice changed
-halfway down, and `:notice` already exists (`FallbackNotice` sets the "! something happened"
-precedent), so no new block kind. Against: two producers of one block — the live `ModelSwitched`
-arm and the replay-derived one — and if they disagree, a reload silently rewrites the transcript.
-
-**No lean.** The interesting question is not whether to show it but whether one derivation can serve
-both paths.
-
-### `Q_status_carries_model` — does the model belong on the `status` frame?
-
-The dialog needs nothing from SSE (its marker is computed on open, `/theme`-style). Still open is
-whether the **status bar** should show the current model at all. If it should, it rides
-`status_data` (`agent_runner.rb:233`), which today carries `state/busy/pending/tokens` and no
-model — and `tokens` already moves for the same reason a switch does (`ContextCap` re-emits).
-
-Shape if so: `model:` (landed, repointed off `ModelSwitched` and never off the selection, per the
-TUI's footer rule) plus `model_pending:` (non-nil only until a live pick lands). Note what the
-second field *is* — the pending model is the Interloper of models, the same "your pick waits for a
-boundary" story the queued count already tells. Because minting resolves the saved transport, a
-reopen never sets it, so the common case shows one unambiguous name — that is the property the
-minting decision was made to protect, so don't trade it away here.
-
-**No lean on whether the status bar wants this at all.** It may be clutter for a single-`[[llm]]`
-user, who is most users.
-
-### `Q_cap_after_switch` — what happens to a conversation switched onto a smaller window?
-
-`apply_transport!` ends in `detect_and_emit_context_cap!` (`agent.rb:694`), which re-emits
-`Event::ContextCap`; `TokenLog` consumes it and `status_data[:tokens]` is its preformatted line. So
-the token readout self-corrects on a switch for free — nice, and worth not breaking.
-
-The flip side: nothing re-baselines the history. 90k of conversation switched onto a 32k connection
-is over cap immediately, and the next turn fails.
-
-**Lean: accept it** — the readout says so and the user did it deliberately — but that is an argument
-for the dialog listing each connection's `context_window` beside its name, so the pick is informed
-rather than discovered. Open: is a legible failure good enough, or should the dialog refuse / warn
-on a pick that cannot hold the current conversation?
-
-### `Q_missing_connection` — how loud is a saved connection that is gone from the config?
-
-Falling back to `primary_llm` is the cheap answer and probably right. Where it gets *said* is the
-question: not the transcript (a block absent from `history.json` — the same trap as
-`Q_switch_marker`, minus that question's escape hatch, since nothing on disk records the fallback),
-and not `supported: false` (that flag means "unreadable envelope"; overloading it would be wrong).
-
-**Lean: say it in the dialog** — "qwen-remote — not in config, using llama-local" — and nowhere
-else. Open: is a silent fallback actually fine, given the identity is the `[model, server]` pair, so
-a config edit that only renames a connection is invisible by design?
 
 ## The upstream question, answered: not blocked
 
@@ -327,10 +372,30 @@ Nothing to re-argue here; if the behaviour changes, it changes under us and the 
   *and* is visible in the code: `_at_mint` in the field names, and no runner reader for reality.
 - `meta.json` gaining a `server` key, `#save` owning the model, and why `Conversation`'s pair is
   named `_at_mint` → `ConversationStore`'s rdoc.
-- The pending slot's lifecycle, the two drain points, and `#model` meaning intent rather than
-  reality → `AgentRunner`'s rdoc.
-- The catalog-as-constructor-argument seam → the **Layout** line for `bin/pikuri-web-chat`, and a
-  sentence in the `D_pikuri_free_core` invariant if the wording no longer covers it.
-- The picker itself, and "the first `[[llm]]` is what a conversation with no saved connection
-  starts on" → `README.md`.
+- The pending slot's lifecycle, the two drain points, `#model` meaning intent rather than reality,
+  and **why `status_data[:model]` needs no subscription** (the transport is assigned only after
+  `with_model` returns, so reality is free) → `AgentRunner`'s rdoc, next to the `status_data` tag
+  that gains the two keys.
+- **`ModelSwitched` is silent, and that is a decision** → `SseListener`'s `else`-branch comment
+  and its class rdoc's variant list, which today ends at Tokens/ContextCap. Say *why* — the status
+  bar carries the model — or the next reader re-opens `Q_switch_marker` on the grounds that
+  `model_id` is right there in the history.
+- The catalog-as-constructor-argument seam, and the display-name resolution lifted from
+  pikuri-tui's `Choice.key` / `StatusFooterUpdater` (keyed on `[model, api_base]`, raw model id as
+  the fallback) → the **Layout** line for `bin/pikuri-web-chat`, and a sentence in the
+  `D_pikuri_free_core` invariant if the wording no longer covers it.
+- The orphan note's two rules — printed from the pair because no name survives, cleared on the
+  first save because `meta.json` has by then absorbed the fallback → wherever the factory's
+  resolution lands, and one line in the decision entry's *Consequences*.
+- **The status bar's fourth segment, and the phone showing all four** → nothing durable of its own:
+  it is one more span in `index.erb`'s `#status-bar` and one more rule in `style.css`, and
+  `D_one_shell_two_layouts` already says a placement difference is CSS's. The only line worth
+  keeping is *why the pending arrow is a separate span* (the dialog reads intent off it), which
+  belongs in `app.js` beside the `#status-pending` it copies.
+- **`/model`'s row shape** — name, then model id and context window muted under it — is a
+  `<template>` in `index.erb` and needs no doc beyond the markup, but the *reason* for the second
+  line (two connections can run one model, so the id is what tells the rows apart) is the same
+  `[model, api_base]` identity the decision entry already carries. Don't write it twice.
+- The picker itself, "the first `[[llm]]` is what a conversation with no saved connection starts
+  on", and that the status bar names the connection a conversation is on → `README.md`.
 - Anything about the library's repair → `../pikuri`, never here.
