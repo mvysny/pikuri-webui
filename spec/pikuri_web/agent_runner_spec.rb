@@ -308,6 +308,23 @@ RSpec.describe PikuriWeb::AgentRunner do
       assert_equal 'ctx 8.2k', runner.status_data[:tokens]
       assert_equal 'msg #1  Δ+8.2k  ↑7.8k  ↓0.4k', runner.status_data[:tokens_detail]
     end
+
+    # The line a reopened conversation shows before it says anything: the
+    # agent's own +load_history!+ seeds the log, so the split has to hold for
+    # a tail that is one word rather than the +msg #N+ shape.
+    it 'splits the line a restored conversation is seeded with' do
+      token_log.on_event(Pikuri::Agent::Event::ContextCap.new(cap: 65_536))
+      token_log.on_event(
+        Pikuri::Agent::Event::HistoryLoaded.new(
+          messages: 4,
+          tokens: Pikuri::Agent::Event::Tokens.new(input: 1500, output: 100, cached: 0,
+                                                   cache_creation: 0, thinking: 0, model_id: 'qwen3.6')
+        )
+      )
+
+      assert_equal 'ctx 1.6k/64k (2%)', runner.status_data[:tokens]
+      assert_equal 'restored', runner.status_data[:tokens_detail]
+    end
   end
 
   context '#select_model' do
