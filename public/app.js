@@ -113,6 +113,12 @@ const autogrow = () => {
 promptEl.addEventListener('input', autogrow);
 autogrow();
 
+// Every way of sending funnels through the form's own submit event — Enter and
+// the send button both end up here — so the one decision about what the buffer
+// *means* is made in one place. A slash
+// command runs and is never posted: a `/trifecta` that runs on Enter but
+// arrives as a message when tapped would be two different composers.
+//
 // Submit stays enabled while the agent is busy: the server routes
 // mid-turn sends through pikuri's Interloper (delivered at the next
 // tool boundary), so "type while it works" is a feature, not an error.
@@ -120,6 +126,7 @@ composer.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = promptEl.value;
   if (!text.trim()) return;
+  if (runIfCommand(text)) return;
   const body = new FormData(composer); // before clearing: it reads the textarea
   promptEl.value = '';
   autogrow();
@@ -135,8 +142,8 @@ composer.addEventListener('submit', (e) => {
   });
 });
 
-// Enter is claimed further down, by the palette: what it does depends on
-// whether a command is highlighted.
+// Enter is claimed further down, beside the palette it has to consult; it
+// comes back here as a submit.
 
 cancelBtn.addEventListener('click', () => {
   const body = new FormData();
@@ -241,13 +248,15 @@ const highlight = () => {
   promptEl.setAttribute('aria-expanded', String(!menu.hidden));
 };
 
-// Open while the buffer is still a command being *picked*: a leading slash with
-// no space yet. A space means the user has moved on to writing a message, so
-// the palette gets out of the way and stays out.
+// The buffer is a command being *picked*: a leading slash with no space yet. A
+// space means the user has moved on to writing a message, so the palette gets
+// out of the way and stays out — and `/usr/bin/foo is missing` still sends.
+const picking = (text) => text.startsWith('/') && !/\s/.test(text);
+
+// Open while the buffer is still being picked at.
 const syncMenu = () => {
   const text = promptEl.value;
-  const picking = text.startsWith('/') && !/\s/.test(text);
-  matches = picking ? rows.filter((row) => row.dataset.command.startsWith(text)) : [];
+  matches = picking(text) ? rows.filter((row) => row.dataset.command.startsWith(text)) : [];
   rows.forEach((row) => { row.hidden = !matches.includes(row); });
   menu.hidden = matches.length === 0;
   // A bare `/` is a menu to read, not an armed trigger: nothing is highlighted
@@ -331,10 +340,34 @@ const runCommand = (name) => {
   }
 };
 
+// What a sent buffer means, for the composer's submit handler: the highlighted
+// row if the palette has one, else the first command the text is a prefix of —
+// because the send button blurs the textarea, which closes the palette out from
+// under the very tap being resolved, and the text is what survives that. A bare
+// `/` is excluded for the same reason nothing is highlighted under it: it is a
+// menu to read, not an armed trigger.
+//
+// A `/word` that resolves to nothing is a typo, and quietly sending it to the
+// model is the one outcome that helps nobody — so this consumes it too, and
+// answers true for it: true means "dealt with; do not post this".
+const runIfCommand = (text) => {
+  if (!picking(text) || text === '/') return false;
+  const command = matches[selected]?.dataset.command
+    ?? rows.find((row) => row.dataset.command.startsWith(text))?.dataset.command;
+  if (command) runCommand(command);
+  else reportUnknownCommand(text);
+  return true;
+};
+
 promptEl.addEventListener('input', syncMenu);
 // Clicking away leaves an open palette floating over the transcript.
 promptEl.addEventListener('blur', closeMenu);
 
+// Enter sends only from a real keyboard. The phone's on-screen Return is left
+// alone deliberately — it inserts its newline, as it does in the Claude iPhone
+// app, because a Return that sends makes a multi-line message unwritable on the
+// one keyboard that has no Shift+Enter. The send button is the phone's send,
+// and the palette's rows are its Enter.
 promptEl.addEventListener('keydown', (e) => {
   if (!menu.hidden) {
     if (e.key === 'ArrowDown') { e.preventDefault(); move(1); return; }
@@ -343,21 +376,26 @@ promptEl.addEventListener('keydown', (e) => {
   }
   if (e.key !== 'Enter' || e.shiftKey) return;
   e.preventDefault();
-
-  // Enter runs the highlighted command. With none highlighted it sends, except
-  // for a `/word` that matches nothing: that is a typo, and quietly sending it
-  // to the model is the one outcome that helps nobody. A message containing a
-  // space is never a command, so `/usr/bin/foo is missing` still sends.
-  const text = promptEl.value;
-  if (selected >= 0) runCommand(matches[selected].dataset.command);
-  else if (text.length > 1 && text.startsWith('/') && !/\s/.test(text)) reportUnknownCommand(text);
-  else composer.requestSubmit();
+  composer.requestSubmit();
 });
 
+// Picking a row by pointer. Preventing the pointerdown's default keeps the
+// caret in the textarea — the blur would close the palette out from under the
+// tap before it could land — and the cost of that on iOS is that no `click`
+// follows at all: a prevented pointerdown suppresses the compatibility mouse
+// events a non-interactive `<li>` depends on. So the run hangs off `pointerup`,
+// which a tap and a mouse release both deliver. This is what makes the phone
+// work — type `/t`, tap the row.
+//
+// Both halves must be the same row, so a press that slides off one and lifts on
+// another runs neither; a scroll of the palette cancels the pointer outright.
+let pressed = null;
 rows.forEach((row) => {
-  // Keep the caret in the textarea: the blur would close the palette out from
-  // under the tap before it could land. This is what makes the phone work —
-  // type `/t`, tap the row.
-  row.addEventListener('pointerdown', (e) => e.preventDefault());
-  row.addEventListener('click', () => runCommand(row.dataset.command));
+  row.addEventListener('pointerdown', (e) => { e.preventDefault(); pressed = row; });
+  row.addEventListener('pointercancel', () => { pressed = null; });
+  row.addEventListener('pointerup', () => {
+    const hit = pressed === row;
+    pressed = null;
+    if (hit) runCommand(row.dataset.command);
+  });
 });

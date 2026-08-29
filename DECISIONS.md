@@ -409,6 +409,25 @@ the dialog says so.
   (`D_pikuri_free_core`), hence `TrifectaView` and `AgentRunner#trifecta_html`.
 - **The theme picker's current marker is computed on open**, never
   server-rendered: the theme changes in the page after it was served.
+- **Picking a row is a `pointerup`, not a `click`.** The row's `pointerdown`
+  is prevented so the caret stays in the textarea — the blur would close the
+  palette out from under the tap before it could land — and iOS answers a
+  prevented pointerdown by synthesizing no compatibility mouse events at all,
+  `click` among them, which is the only thing a non-interactive `<li>` had to
+  fire on. So the phone's tap did nothing. `pointerup` is delivered by a tap
+  and by a mouse release both, and is the row's *only* listener, so a desktop
+  click cannot run the command twice.
+- **Every send path is the form's `submit` event, and a command is resolved
+  before anything is posted.** `/trifecta` tapped on ↑ opens the dialog
+  exactly as Enter does; a command is never a message, whichever way it was
+  sent. The resolution reads the *text* rather than the highlighted row,
+  because tapping ↑ blurs the textarea and the blur has already emptied the
+  palette's selection — the buffer is what survives that.
+- **The phone's on-screen Return keeps inserting a newline**, matching the
+  Claude iPhone app. Binding it to send was tried and reverted: it is the one
+  keyboard with no Shift+Enter, so a Return that sends makes a two-line
+  message unwritable. On the phone ↑ is Enter's send, and tapping a palette
+  row is Enter's run.
 - **`D_no_js_build_step` was amended to let this land** — see its entry.
 - **`Q_error_dialog_weight` stays open.** A modal for a typo is intrusive;
   the alternative that keeps the intent is a status-bar note, for which

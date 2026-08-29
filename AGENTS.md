@@ -134,7 +134,10 @@ the alternatives that were rejected, live one entry per slug in
   browser's, and a command never writes to the transcript.**
   {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and `app.js`
   filters it in place. A command's own effect — a dialog, a navigation, a
-  color change — is its only feedback. Dialogs are real `<dialog>`s opened
+  color change — is its only feedback. It runs however it was sent — Enter,
+  or the ↑ button, which is the phone's Enter — and is never posted as a
+  message; the palette's rows activate on `pointerup`, because a tap on iOS
+  never becomes a `click`. Dialogs are real `<dialog>`s opened
   through `dom.js`'s `openDialog`, which takes a *Node*, never an HTML
   string. See `D_slash_command_palette`.
 
