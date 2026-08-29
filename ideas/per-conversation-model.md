@@ -3,15 +3,24 @@
 Switch the model without restarting the server, and have each conversation remember the one it is
 on. A new conversation inherits the model of the conversation currently shown.
 
-Status: **backend-only work, with a designed shape and seven open questions.** The UI question is
-closed (the slash palette shipped), the library half is done, and nothing is blocked on upstream.
-What is unsettled is where the selection lives on disk, when it is written, and how loud the edge
-cases are. Read *Open questions* before trusting anything that reads as decided elsewhere in this
-file — the leans there are leans, not conclusions.
+Status: **backend-only work, with a designed shape and six open questions.** The UI question is
+closed (the slash palette shipped), the library half is done, nothing is blocked on upstream, and
+the two questions that gated the implementation shape — where the selection lives and when it is
+written — are settled below. What is left open is how loud the edge cases are. The leans under
+*Open questions* are leans, not conclusions.
 
 ## What is settled
 
 - The selection is **per conversation and persists**; a new conversation copies the shown one's.
+- **The pair lives in `meta.json`, and is not derived from `history.json`.** pikuri already records
+  `model_id` per message (`history.rb:140`), but that is a model *string*: it cannot express the
+  `[model, api_base]` identity below, `#row` would have to parse every stored history to render one
+  sidebar (`conversation_store.rb:258` reads the envelope and nothing else), and a conversation
+  that inherited a model but has not spoken yet has no `model_id` anywhere.
+- **Written at turn end, from the agent's own transport** — not at pick time, and not from the
+  selection.
+- **A reopened conversation is *minted* on its saved transport**, and the pending slot is only ever
+  a switch on a *live* runner. See *Where the state lives*.
 - **No agent, runner or transcript is ever rebuilt** — only the transport moves.
 - **No synthetic bare turn to force a switch early.** A selection made while idle sits until the
   next real turn. Firing `run_loop(user_message: nil, transport: …)` to apply it sooner buys a
@@ -89,18 +98,41 @@ Consequences here:
 
 ## Where the state lives
 
-Four candidate homes, and they are not interchangeable:
+Settled: **the pair is envelope state on the `Conversation`, the factory resolves it at mint, and
+the pending slot handles only live switches.** Two mechanisms, each meaning one thing.
 
-- **`ConversationStore#initialize(model:)` has to go.** It is a store-wide field feeding
-  `write_meta`. Either `#save` takes the model (it already owns the whole commit —
-  `D_no_store_lock` — so widening its signature is in keeping), or the model rides on the
-  `Conversation` Data. `Q_mint_vs_pending` is the fork that decides which.
-- **`Conversation` is a `Data.define(:id, :dir, :title, :created_at, :supported)`** and
-  `AgentRunner#conversation` is documented as fixed for the runner's lifetime. Putting a *mutable*
-  selection on an immutable value object means every switch replaces the runner's `@conversation`
-  via `#with` — workable, but it turns a "this runner is for that conversation, permanently" rdoc
-  into something weaker. A *mint-time* field is a different and milder proposition — that is what
-  `Q_mint_vs_pending` proposes and `Q_conversation_model_staleness` prices.
+- **`ConversationStore#initialize(model:)` goes away** (`conversation_store.rb:109`). It is a
+  store-wide field feeding `write_meta`; `#save` takes the model instead, which is in keeping with
+  its already owning the whole commit (`D_no_store_lock`). This follows from the turn-end rule
+  alone — it was never contingent on how the agent gets minted.
+- **Why turn-end, from the transport.** `#save` runs from `finish_turn`, under the runner's mutex,
+  on the executor thread; a pick arrives on a request thread. A pick-time save therefore either
+  exports history mid-`complete` (what the turn-end rule exists to prevent) or writes `meta.json`
+  beside `#save` — which `D_no_store_lock` forbids in as many words ("nothing writes beside it").
+  And for a conversation with no turn yet it writes the *commit point* with no `history.json`
+  under it: a listed conversation that cannot be opened, the exact failure both `#save`'s and
+  `#delete`'s orderings were chosen to prevent. Reading the field off the agent's own transport
+  rather than off the selection makes `meta.json` and `history.json`'s last `model_id` agree by
+  construction. **Accepted cost:** a pick with no message after it is lost across a restart.
+- **`Conversation` gains the pair** —
+  `Data.define(:id, :dir, :title, :created_at, :supported, :model, :server)`. `#create` stamps it
+  (in memory: `#create` mints a value object and touches no disk — the directory appears at
+  `#save`), `#row` reads it back out of `meta.json`. This is *mint-time* state, like `title`, not
+  the mutable-selection-on-an-immutable-object that would force every switch to replace the
+  runner's `@conversation` via `#with` and weaken the "fixed for the runner's lifetime" rdoc. The
+  edge it does leave is `Q_conversation_model_staleness`.
+- **Why mint rather than seed the pending slot.** Not for history integrity — see the warning
+  below. Because `Agent#detect_and_emit_context_cap!` runs in the agent's **constructor**
+  (`agent.rb:647`), so minting on the factory default probes the *wrong* server's context window
+  and re-probes on the first turn: a reopened conversation would show the wrong token cap until it
+  was used, and pay an extra probe. And because a pending slot that is set on every reopen stops
+  meaning "you picked something and it has not landed yet" — which is the meaning
+  `Q_status_carries_model` and the `/model` dialog's `aria-current` marker both need it to have.
+- **Do not re-derive the history-integrity argument.** This fork was once argued from
+  `load_history!` (`agent.rb:503`) dropping thinking signatures whose `model_id` doesn't match the
+  agent's current model, so that minting on the wrong model would degrade a reopened conversation.
+  That premise is retracted — see *The upstream question* at the bottom. There is no measured
+  degradation on any backend we point at, and the decision above does not rest on it.
 - **`AgentRunner` holds the pending selection**, drained and passed to `run_loop(transport:)`. It
   already has the mutex and the `:idle/:queued/:running` state machine to hang this on. Note there
   are **two** paths into `run_loop` and both must drain: `run_turn` (`agent_runner.rb:266`) and the
@@ -134,9 +166,11 @@ things need to happen:
 - The route needs the viewing id. `app.js:139` posts with no body, but the pattern already exists
   next door — `refreshSidebar` sends `?viewing=…` (`app.js:69`), and `POST /messages` /
   `POST /cancel` both carry `conversation`.
-- `registry.create` needs to pass an initial model down into the factory, which currently takes
-  `conversation` alone — or, under `Q_mint_vs_pending`, stamp the pair at `store.create` and let
-  the factory read it off the `Conversation`.
+- `registry.create` becomes `create(from:)` and stamps the pair at `store.create`; the factory's
+  signature (`bin/pikuri-web-chat:148`, `lambda do |conversation|`) never changes, because it reads
+  `conversation.model` / `conversation.server` off the value object it already receives. The
+  current pair comes from the *runner*, not from `from.conversation` —
+  `Q_conversation_model_staleness`.
 - The fallback when nothing is shown, or the shown conversation's connection is gone from the
   config, is `primary_llm`. `registry.default` (`:128`) — the conversation a fresh visitor lands
   on, also what the boot trifecta report opens — goes down that path.
@@ -153,60 +187,14 @@ Plain work, no fork in it:
   "the default for a conversation that has no saved one". `README.md`'s config section needs the
   distinction; `D_schema_complete_config` is untouched — no new keys, the `[[llm]]` array is
   already the schema. Whether saved outranks the override is `Q_saved_vs_cli_override`.
-- **`restore!`** (`agent_runner.rb:124`) replays history but sets no transport, so under the
-  pending-slot branch a reopened conversation boots on the factory's model. That is the substance
-  of `Q_mint_vs_pending`.
+- **`restore!`** (`agent_runner.rb:124`) needs no change: the agent is already on the right
+  transport when it runs, because the factory resolved it at mint.
 
 ## Open questions
 
-None of these are settled. Each names what was checked, so the next session argues rather than
-re-greps. Leans are marked as leans.
-
-### `Q_mint_vs_pending` — should a reopened conversation be *minted* on its saved transport?
-
-The pending-slot design mints every agent on the factory's model and seeds the saved one into the
-pending slot, where it lands on the first turn. The alternative: put the saved pair on the
-`Conversation` Data as *envelope* state (like `title` — a mint-time fact, not the
-mutable-selection-on-an-immutable-object problem *Where the state lives* rightly rejects), let the
-factory resolve it, and narrow the pending slot to a switch on a *live* runner. Then the factory
-signature never changes, `registry.create(from:)` covers inheritance by stamping the pair at
-`store.create`, and `ConversationStore#initialize(model:)` goes away rather than moving.
-
-**This question used to have a second, stronger argument, and it has been retracted.** The claim
-was that minting on the wrong model *degrades history*: `Agent#load_history!` (`agent.rb:503`)
-reads `current_model = @chat.model&.id` and drops thinking signatures whose message `model_id`
-doesn't match, so a reopen-then-switch would strip signatures on the way in. Investigation in
-`../pikuri/ideas/thinking-block-replay.md` (measured, 2026-08-29) found the premise underneath that
-repair is false — a stale signature replayed after a switch is *silently ignored*, per Anthropic's
-own docs, not a 400; stripping one is closer to the shape that actually is a 400 — and that the
-repair is unreachable on the Anthropic wire anyway, because pikuri never enables thinking. Against
-llama.cpp there is no signature to strip in the first place. So there is no measured degradation
-here, and none is evidenced on any backend we point at. **Do not re-derive the 400 argument** — it
-is a plausible-and-wrong that has now cost two sessions.
-
-**Lean: still yes**, on the reasons that survive — the factory signature stays put,
-`registry.create(from:)` falls out naturally, `ConversationStore#initialize(model:)` is deleted
-rather than relocated, and nothing displays a model the agent is not actually on. Open: whether
-those are worth one extra `Conversation` field, given the edge `Q_conversation_model_staleness`
-prices.
-
-### `Q_persist_when` — pick time or turn end?
-
-`#save` runs from `finish_turn`, under the runner's mutex, on the executor thread; a pick arrives
-on a request thread. A pick-time save therefore either exports history mid-`complete` (what the
-turn-end rule exists to prevent), or writes `meta.json` beside `#save` — which `D_no_store_lock`
-forbids in as many words ("nothing writes beside it"). And for a conversation with no turn yet it
-writes the *commit point* with no `history.json` under it: a listed conversation that cannot be
-opened, the exact failure both `#save`'s and `#delete`'s orderings were chosen to prevent.
-
-If instead the field is written at turn end **from the agent's own transport** rather than from the
-selection, `meta.json` always names the model that produced the last message — which is what
-`load_history!` keys its signature scrub on, so `meta.json` and `history.json`'s `model_id` agree by
-construction.
-
-**Lean: turn end.** Open: the accepted cost is that a pick with no message after it is lost across
-a restart. Is that actually fine, or does a quiet pick deserve to survive? (If it does, this needs a
-mechanism nobody has designed yet — not just the other branch.)
+None of these are settled, and none of them gate starting the work — they are edge-case loudness,
+not shape. Each names what was checked, so the next session argues rather than re-greps. Leans are
+marked as leans.
 
 ### `Q_switch_marker` — does a switch earn a transcript block?
 
@@ -234,8 +222,9 @@ model — and `tokens` already moves for the same reason a switch does (`Context
 Shape if so: `model:` (landed, repointed off `ModelSwitched` and never off the selection, per the
 TUI's footer rule) plus `model_pending:` (non-nil only until a live pick lands). Note what the
 second field *is* — the pending model is the Interloper of models, the same "your pick waits for a
-boundary" story the queued count already tells. Under `Q_mint_vs_pending`'s lean a reopen never
-sets it, so the common case shows one unambiguous name.
+boundary" story the queued count already tells. Because minting resolves the saved transport, a
+reopen never sets it, so the common case shows one unambiguous name — that is the property the
+minting decision was made to protect, so don't trade it away here.
 
 **No lean on whether the status bar wants this at all.** It may be clutter for a single-`[[llm]]`
 user, who is most users.
@@ -276,14 +265,21 @@ today and what a user who has never seen the picker will assume.
 
 ### `Q_conversation_model_staleness` — what does `Conversation.model` mean after a live switch?
 
-Only bites if `Q_mint_vs_pending` lands. `AgentRunner#conversation` is fixed for the runner's
-lifetime, so after a live switch `runner.conversation.model` is stale. Workable rule:
-`Conversation.model` means "what disk said at mint" and the runner is the authority for "current",
-so anything asking for current — `registry.create(from:)` especially — asks the runner.
+**This is now live** — it is the price of the minting decision, and the only open question that
+decision created. `AgentRunner#conversation` is fixed for the runner's lifetime, so after a live
+switch `runner.conversation.model` is stale. Workable rule: `Conversation.model` means "what disk
+said at mint" and the runner is the authority for "current", so anything asking for current —
+`registry.create(from:)` especially — asks the runner.
 
-**Lean: that rule, unwritten cost noted** — the sidebar must never render the model off a
-`Conversation`, or a resident switched conversation lists the wrong one. Open: is a Data field that
-is *only* correct at mint time too sharp an edge to leave lying around?
+The edge is sharper than it first reads, because the stale field is reachable through the ordinary
+path rather than tucked away: `ConversationRegistry#find` is
+`@runners[id]&.conversation || @store.find(id)`, so a resident runner's `Conversation` — stale
+pair and all — is what every caller resolving an id gets back.
+
+**Lean: that rule, with the cost written down** — the sidebar must never render the model off a
+`Conversation`, or a resident switched conversation lists the wrong one. Open: is that enough, or
+does the field want a name that cannot be misread (`model_at_mint`), or a `#row`-only reader that
+never rides the Data at all?
 
 ## The upstream question, answered: not blocked
 
@@ -313,10 +309,17 @@ Nothing to re-argue here; if the behaviour changes, it changes under us and the 
 
 ## Where the nuggets go at graduation
 
-- The shape chosen for the pending slot and the state's home, plus the branches rejected in
-  `Q_mint_vs_pending` / `Q_persist_when` → a `DECISIONS.md` entry with a flat invariant + `See
-  D_<slug>` in **Scope decisions**. The retracted 400 argument belongs in its *Alternatives
-  rejected*: it is exactly the kind of plausible-and-wrong a future reader would re-derive.
+- **The two settled decisions** → one `DECISIONS.md` entry, flat invariant + `See D_<slug>` in
+  **Scope decisions**. Roughly: *a conversation's model is `[model, server]` in `meta.json`, minted
+  onto the agent by the factory and written back at turn end from the agent's own transport.* Its
+  *Alternatives rejected* owes three things, because all three are plausible-and-wrong a future
+  reader would otherwise re-derive:
+  - **deriving the model from `history.json`'s `model_id`** — cannot express the server half,
+    and would make the sidebar parse every history;
+  - **persisting at pick time** — writes beside `#save`, or writes a commit point over no
+    history;
+  - **the retracted 400 argument** for minting on the saved transport. The real reasons are the
+    constructor-time cap probe and keeping "pending" meaning one thing.
 - `meta.json` gaining a `server` key, and `#save` owning the model → `ConversationStore`'s rdoc.
 - The pending slot's lifecycle and the two drain points → `AgentRunner`'s rdoc.
 - The catalog-as-constructor-argument seam → the **Layout** line for `bin/pikuri-web-chat`, and a
