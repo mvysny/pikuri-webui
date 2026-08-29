@@ -1,0 +1,106 @@
+# frozen_string_literal: true
+
+# The seam public/app.js sits on, checked from the Ruby side.
+#
+# Nothing here runs JavaScript. There is no JS runtime in this suite and
+# +D_no_js_build_step+ keeps it that way, so this reads app.js as text and
+# asserts that every name it hard-codes still exists on the server's side of
+# the line: element ids, <template> ids, routes, CSS hooks, command names.
+#
+# That is the failure this covers, and the reason it is worth a spec of its
+# own. Renaming an id in index.erb, a route in app.rb or a command in
+# SlashCommand leaves both files individually correct and every other spec
+# green, while the page silently loses a control — +getElementById+ just
+# returns null, and no exception reaches anything that is watching. The Ruby
+# specs pin what the server renders; a browser would pin what the script does;
+# the *agreement* between them had nothing.
+#
+# Only literals are visible to a reader like this, and that is by construction:
+# app.js's +getElementById(id)+ over a block id, and +fetch(e.target.action)+
+# over the delete form's own action, name nothing to check.
+RSpec.describe 'the app.js/server contract' do
+  root = Pathname(__dir__).join('../..').expand_path
+  app_js = (root / 'public/app.js').read
+  index_erb = (root / 'views/index.erb').read
+  sidebar_erb = (root / 'views/_sidebar.erb').read
+
+  it 'reaches only for element ids index.erb renders' do
+    ids = app_js.scan(/getElementById\(['"]([\w-]+)['"]\)/).flatten.uniq
+    refute_empty ids, 'the id scan found nothing — app.js changed shape, fix the pattern'
+
+    missing = ids.reject { |id| index_erb.include?(%(id="#{id}")) }
+    assert_equal [], missing, "app.js reaches for #{missing.join(', ')}; index.erb renders no such id"
+  end
+
+  it 'clones only templates index.erb defines' do
+    names = app_js.scan(/cloneTemplate\(['"]([\w-]+)['"]\)/).flatten.uniq
+    refute_empty names, 'the template scan found nothing — app.js changed shape, fix the pattern'
+
+    missing = names.reject { |name| index_erb.include?(%(<template id="#{name}">)) }
+    assert_equal [], missing, "app.js clones #{missing.join(', ')}; index.erb defines no such <template>"
+  end
+
+  # Both the fetches and the EventSource: a route this shell no longer answers
+  # is the same bug whichever verb reaches for it.
+  it 'calls only routes the app answers' do
+    paths = app_js.scan(/(?:fetch|new EventSource)\(\s*['"`](\/[^'"`?${]*)/).flatten.uniq
+    refute_empty paths, 'the route scan found nothing — app.js changed shape, fix the pattern'
+
+    patterns = PikuriWeb::App.routes.values.flatten(1).map(&:first)
+    missing = paths.reject { |path| patterns.any? { |pattern| pattern.match(path) } }
+    assert_equal [], missing, "app.js calls #{missing.join(', ')}; App has no route matching"
+  end
+
+  it 'queries only classes the templates render' do
+    classes = app_js.scan(/querySelector(?:All)?\(['"]\.([\w-]+)['"]\)/).flatten.uniq
+    refute_empty classes, 'the class scan found nothing — app.js changed shape, fix the pattern'
+
+    markup = index_erb + sidebar_erb
+    missing = classes.reject { |name| markup.include?(name) }
+    assert_equal [], missing, "app.js queries .#{missing.join(', .')}; no template renders it"
+  end
+
+  # The mark that decides whether deleting navigates: app.js reads it off the
+  # row rather than off the URL, so the two spellings have to agree.
+  it 'tests for the row mark _sidebar.erb writes' do
+    assert_includes app_js, "classList.contains('current')"
+    assert_includes sidebar_erb, "' current' if c[:current]"
+  end
+
+  # A mistyped path here is not a subtle bug: the module never loads and the
+  # page is inert, with nothing but a console error nobody is watching.
+  it 'imports only sibling modules that exist' do
+    specifiers = app_js.scan(%r{^import .*? from '\./([\w.-]+)';}).flatten.uniq
+    refute_empty specifiers, 'the import scan found nothing — app.js changed shape, fix the pattern'
+
+    missing = specifiers.reject { |name| (root / 'public' / name).exist? }
+    assert_equal [], missing, "app.js imports ./#{missing.join(', ./')}; public/ has no such file"
+  end
+
+  # Strings the server renders into the page *and* app.js rewrites over the top
+  # of when SSE updates it. Reword one side only and the label silently changes
+  # the first time a frame lands — the page contradicts itself mid-turn.
+  it 'agrees with index.erb on the labels both of them write' do
+    [
+      'waiting for a free slot',  # the queued state, status-state
+      ' queued',                  # the pending count, status-pending
+      '☀ light',                  # the theme toggle, both directions
+      '☾ dark'
+    ].each do |label|
+      assert_includes app_js, label, "app.js no longer writes #{label.inspect}"
+      assert_includes index_erb, label, "index.erb no longer renders #{label.inspect}"
+    end
+  end
+
+  # The three-place contract SlashCommand's rdoc describes. The catalog and the
+  # <template>s each have a spec of their own; this is the third place, the one
+  # that lives in a file no Ruby spec loads.
+  #
+  # Against CATALOG rather than .catalog: the arm has to exist even in a
+  # single-connection config, which drops /model from the palette but leaves
+  # runCommand's switch exactly as it is.
+  it 'arms every catalogued command in runCommand, and none besides' do
+    arms = app_js.scan(/case '(\/[\w-]+)':/).flatten
+    assert_equal PikuriWeb::SlashCommand::CATALOG.map(&:name).sort, arms.sort
+  end
+end
