@@ -457,7 +457,11 @@ button:hover { border-color: var(--accent); }
   font-size: 0.85em;
 }
 
+/* The context readout takes the right edge as one group. Inside it the ctx
+   headline steps up to --fg while the Δ/↑/↓ tail stays at the bar's own
+   --fg-muted, so the number worth reading carries without a second weight. */
 #status-tokens { flex: 1; text-align: right; }
+#status-tokens-ctx { color: var(--fg); }
 
 /* A parked model switch, waiting for the top of the next turn. The arrow is
    drawn here so the span holds a bare connection name — which is what the

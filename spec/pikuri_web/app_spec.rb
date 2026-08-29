@@ -47,7 +47,8 @@ RSpec.describe PikuriWeb::App do
     def busy? = @busy
 
     def status_data
-      { state: @busy ? :running : :idle, busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out',
+      { state: @busy ? :running : :idle, busy: @busy, pending: 0,
+        tokens: 'ctx 12.3k/32k (38%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
         model: 'local', model_pending: nil, model_missing: nil }
     end
     def trifecta_html = '<p class="trifecta-advisory">Trifecta: 2 of 3 legs</p>'
@@ -171,7 +172,9 @@ RSpec.describe PikuriWeb::App do
     it 'renders the status bar from this conversation runner' do
       get_live
       assert_includes last_response.body, 'idle'
-      assert_includes last_response.body, '12.3k in / 4.5k out'
+      # Both halves of the context readout, each in the span that paints it.
+      assert_includes last_response.body, '<span id="status-tokens-ctx">ctx 12.3k/32k (38%)</span>'
+      assert_includes last_response.body, '<span id="status-tokens-detail">msg #2  Δ+1.6k  ↑1.0k  ↓0.6k</span>'
     end
 
     it 'names the conversation for app.js to subscribe to' do

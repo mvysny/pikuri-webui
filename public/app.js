@@ -28,7 +28,8 @@ const statusState = document.getElementById('status-state');
 const statusPending = document.getElementById('status-pending');
 const statusModel = document.getElementById('status-model');
 const statusModelPending = document.getElementById('status-model-pending');
-const statusTokens = document.getElementById('status-tokens');
+const statusTokensCtx = document.getElementById('status-tokens-ctx');
+const statusTokensDetail = document.getElementById('status-tokens-detail');
 const themeToggle = document.getElementById('theme-toggle');
 
 // Stick to the bottom only when the user is already there — scrolling up
@@ -58,7 +59,7 @@ const upsertBlock = ({ id, kind, html }) => {
 // the top of a turn yet. The arrow between them is CSS's, so this span holds a
 // bare name that /model can read back as the intended connection.
 const updateStatus = ({
-  state, busy, pending, tokens, model,
+  state, busy, pending, tokens, tokens_detail: tokensDetail, model,
   model_pending: modelPending, model_missing: modelMissing,
 }) => {
   statusState.textContent = state === 'queued' ? 'waiting for a free slot' : state;
@@ -66,7 +67,8 @@ const updateStatus = ({
   statusModel.textContent = model;
   statusModel.dataset.missing = modelMissing ?? '';
   statusModelPending.textContent = modelPending ?? '';
-  statusTokens.textContent = tokens;
+  statusTokensCtx.textContent = tokens;
+  statusTokensDetail.textContent = tokensDetail;
   cancelBtn.hidden = !busy;
   // Nothing else is gated on busy any more: sending queues rather than
   // refusing, a new conversation touches no existing one, and delete is

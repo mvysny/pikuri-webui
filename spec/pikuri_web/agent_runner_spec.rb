@@ -104,6 +104,9 @@ RSpec.describe PikuriWeb::AgentRunner do
     PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat')
   end
   let(:listener) { FakeListener.new }
+  # Absent for most examples, as it is for a runner nobody metered; the
+  # context-readout context overrides it with a real one.
+  let(:token_log) { nil }
   let(:transcript) { PikuriWeb::Transcript.new }
   let(:conversation) { conversations.create }
   let(:runner) do
@@ -111,7 +114,7 @@ RSpec.describe PikuriWeb::AgentRunner do
       conversation: conversation,
       agent: agent, interloper: interloper, cancellable: cancellable,
       broadcaster: broadcaster, conversations: conversations, listener: listener,
-      transcript: transcript, catalog: catalog,
+      transcript: transcript, catalog: catalog, token_log: token_log,
       # A real thread, not ImmediateExecutor: these examples are *about* the
       # busy state, which needs the turn still running when #submit returns.
       executor: Concurrent::SingleThreadExecutor.new
@@ -265,15 +268,45 @@ RSpec.describe PikuriWeb::AgentRunner do
 
   context '#status_data' do
     it 'reports busy state and pending injections' do
-      assert_equal({ state: :idle, busy: false, pending: 0, tokens: '',
+      assert_equal({ state: :idle, busy: false, pending: 0, tokens: '', tokens_detail: '',
                      model: 'local', model_pending: nil, model_missing: nil },
                    runner.status_data)
       runner.submit('first')
       wait_until { runner.state == :running }
       runner.submit('second')
-      assert_equal({ state: :running, busy: true, pending: 1, tokens: '',
+      assert_equal({ state: :running, busy: true, pending: 1, tokens: '', tokens_detail: '',
                      model: 'local', model_pending: nil, model_missing: nil },
                    runner.status_data)
+    end
+  end
+
+  # Against a real TokenLog, because the tail is pikuri's own line with the
+  # +ctx=+ segment lifted out — a stub would only test the lift.
+  context '#status_data context readout' do
+    let(:token_log) { Pikuri::Agent::Listener::TokenLog.new }
+
+    def meter(cap: nil, input: 8000, output: 400)
+      token_log.on_event(Pikuri::Agent::Event::ContextCap.new(cap: cap)) if cap
+      token_log.on_event(
+        Pikuri::Agent::Event::Tokens.new(input: input, output: output, cached: 0,
+                                         cache_creation: 0, thinking: 0, model_id: 'qwen3.6')
+      )
+    end
+
+    it 'says nothing until a turn is measured' do
+      assert_equal ['', ''], runner.status_data.values_at(:tokens, :tokens_detail)
+    end
+
+    it 'splits the headline off the per-turn tail' do
+      meter(cap: 32_768)
+      assert_equal 'ctx 8.2k/32k (26%)', runner.status_data[:tokens]
+      assert_equal 'msg #1  Δ+8.2k  ↑7.8k  ↓0.4k', runner.status_data[:tokens_detail]
+    end
+
+    it 'drops the percentage when no cap reached the log' do
+      meter
+      assert_equal 'ctx 8.2k', runner.status_data[:tokens]
+      assert_equal 'msg #1  Δ+8.2k  ↑7.8k  ↓0.4k', runner.status_data[:tokens_detail]
     end
   end
 

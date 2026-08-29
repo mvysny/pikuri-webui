@@ -121,7 +121,14 @@
            ever said, and this is what that dialog reads. -->
       <span id="status-model" data-missing="<%= status[:model_missing] %>"><%= status[:model] %></span>
       <span id="status-model-pending"><%= status[:model_pending] %></span>
-      <span id="status-tokens"><%= status[:tokens] %></span>
+      <!-- Two spans because they carry different weight: the ctx headline is
+           the number worth reading, the per-turn Δ/↑/↓ tail beside it stays at
+           the bar's own muted color. The wrapper is what the flex row
+           right-aligns, so the pair travels as one. -->
+      <span id="status-tokens">
+        <span id="status-tokens-ctx"><%= status[:tokens] %></span>
+        <span id="status-tokens-detail"><%= status[:tokens_detail] %></span>
+      </span>
     </footer>
   </div>
 

@@ -304,20 +304,23 @@ module PikuriWeb
 
     # Status payload shared by SSE +status+ events and the initial page render.
     #
-    #   { state: :running, busy: true, pending: 2, tokens: '31k / 32k',
+    #   { state: :running, busy: true, pending: 2,
+    #     tokens: 'ctx 7.4k/64k (12%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
     #     model: 'Local Qwen 3.6', model_pending: 'Remote Qwen', model_missing: nil }
     #
     # @return [Hash] +pending+ is the count of queued mid-loop injections;
-    #   +tokens+ is TokenLog's preformatted status line ('' when absent);
-    #   +model+ is what the agent is on *now*; +model_pending+ and
-    #   +model_missing+ are nil in the ordinary case (see {#select_model} and
-    #   the +missing_connection:+ constructor argument)
+    #   +tokens+ and +tokens_detail+ are the two halves of the context-window
+    #   readout, the status bar's headline and its muted tail (both '' when
+    #   nothing is measured yet); +model+ is what the agent is on *now*;
+    #   +model_pending+ and +model_missing+ are nil in the ordinary case (see
+    #   {#select_model} and the +missing_connection:+ constructor argument)
     def status_data
       {
         state: state,
         busy: busy?,
         pending: @interloper.size,
-        tokens: @token_log&.status_line.to_s,
+        tokens: token_headline,
+        tokens_detail: token_detail,
         model: @catalog.name_for(@agent.transport),
         model_pending: @pending && @catalog.name_for(@pending),
         model_missing: @missing_connection
@@ -477,6 +480,49 @@ module PikuriWeb
       end
       @broadcaster.broadcast(event: :conversations, data: {}) if changed
       nil
+    end
+
+    # The status bar's context-window headline, off TokenLog's own numbers
+    # rather than its formatted line — the percentage is ours, no pikuri shell
+    # shows one.
+    #
+    #   'ctx 7.4k/64k (12%)'   # cap known
+    #   'ctx 7.4k'             # no cap reached us
+    #   ''                     # nothing measured yet
+    #
+    # @return [String]
+    def token_headline
+      return '' if @token_log.nil? || @token_log.status_line.empty?
+
+      used = @token_log.context_window_size
+      cap = @token_log.context_window_cap.to_i
+      return "ctx #{format_k(used)}" if cap.zero?
+
+      "ctx #{format_k(used)}/#{format_k(cap)} (#{(used * 100.0 / cap).round}%)"
+    end
+
+    # TokenLog's line with its own +ctx=+ segment lifted out, leaving the
+    # per-turn tail that sits muted beside {#token_headline}:
+    #
+    #   'msg #2: ctx=8.4k/32.0k  Δ+1.6k  ↑1.0k  ↓0.6k' -> 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k'
+    #   'restored: ctx=8.2k/32.0k'                     -> 'restored'
+    #
+    # Should that segment ever leave pikuri's format, the whole line survives
+    # as the tail — doubled against the headline, never lost.
+    #
+    # @return [String]
+    def token_detail
+      @token_log&.status_line.to_s.sub(/:?\s*ctx=\S+/, '')
+    end
+
+    # 1024-scaled with a +k+ suffix, as pikuri sizes tokens, minus the trailing
+    # +.0+ a round number would carry (+64.0k+ reads as a precision the cap
+    # does not have).
+    #
+    # @param count [Integer]
+    # @return [String]
+    def format_k(count)
+      format('%.1fk', count / 1024.0).sub('.0k', 'k')
     end
   end
 end
