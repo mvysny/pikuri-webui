@@ -8,6 +8,14 @@ on. A new conversation inherits the model of the conversation currently shown.
 answer. What is decided: the *selection is per conversation and persists*; a new conversation
 copies the shown one's.
 
+**Update (2026-08-29): `ideas/slash-commands.md` proposes the answer, and closing it is now that
+idea's job.** A `/model` command in its command palette, opening the same `<dialog>` its `/trifecta`
+builds — so once the palette ships, this becomes backend-only work plus one catalog entry, one
+dialog body and one `switch` arm. Don't settle the UI here; the two ideas graduate separately and
+the palette goes first. The one loose end below that the palette *does* reach back into: whether the
+current-model marker rides the `status` SSE frame (see "Loose ends") decides whether that dialog is
+pre-rendered into `GET /c/:id` or fetched.
+
 ## Where it stands today
 
 - `bin/pikuri-web-chat:96` takes `config.primary_llm` (`llms.first`) into a local `llm`, and the
@@ -26,14 +34,32 @@ copies the shown one's.
 
 So this is unwired, not unsupported.
 
-## The library half is done
+## The library half is done — and the agent is never rebuilt
 
 `Pikuri::Agent#run_loop(user_message:, transport:)` — `pikuri-core/lib/pikuri/agent.rb:353` — takes
 a transport and calls `apply_transport!` at the top of the turn (`:726`): it no-ops when the
-transport is structurally equal, otherwise rebuilds the chat context, emits
-`Event::ModelSwitched(from:, to:)` and re-runs the context-cap probe. So a switch always lands on a
-turn boundary, which is exactly the granularity we want — no cancelling a turn to change model, no
-half-switched history.
+transport is structurally equal (Data equality over the whole transport, `api_key` and
+`context_window` included, after a nil-model fill), otherwise installs a fresh `RubyLLM::Context`
+when either side has `connection_overrides?` (the cross-server case), calls `Chat#with_model`,
+emits `Event::ModelSwitched(from:, to:)` and re-resolves the cap against the *new* `api_base`.
+`with_context` / `with_model` both preserve history **and** callbacks, so the same agent keeps its
+listener stack, tools, `Cancellable` and `Interloper` across a switch. The conversation is not
+re-baselined either: message count and running context size carry over.
+
+**So nothing is reconstructed — not the agent, not the runner, not the transcript.** Only the
+transport moves.
+
+**There is no "apply it now" call, and that is deliberate.** `apply_transport!` is private
+(below `agent.rb:578`); `Agent#transport` is a read-only reader. The only public way in is
+`run_loop`'s `transport:` kwarg, because — its own rdoc, `agent.rb:310` — the chat is
+single-thread-confined and "a background thread mutating the connection mid-completion would tear
+an in-flight stream". The library can't know nothing is in flight; our `AgentRunner` state machine
+can. That makes the pending-slot design **forced rather than chosen**.
+
+**Settled: no synthetic bare turn to force the switch early.** A selection made while idle simply
+sits until the next real turn. Firing `run_loop(user_message: nil, transport: …)` to apply it
+sooner buys a display update at the cost of a round-trip, and raises `EmptyTurnError` against a
+prompt-only conversation on a separate-system-field provider.
 
 pikuri-tui is the worked example, and it is small: `Shared::Model::Picker` is a catalog plus a
 *pending transport* slot; `Shared::AgentSession#start_turn` calls `take_pending` and hands the
@@ -73,9 +99,12 @@ Four candidate homes, and they are not interchangeable:
   via `#with` — workable, but it turns a "this runner is for that conversation, permanently" rdoc
   into something weaker. Prefer: the model is `AgentRunner` state, and `#save` is told what it is.
   `#row` still reads it back out of `meta.json` for the listing.
-- **`AgentRunner` holds the pending selection**, drained in `run_turn` and passed to
-  `run_loop(transport:)`. It already has the mutex and the `:idle/:queued/:running` state machine
-  to hang this on. Selecting while busy is naturally "next turn", which matches the Interloper's
+- **`AgentRunner` holds the pending selection**, drained and passed to `run_loop(transport:)`. It
+  already has the mutex and the `:idle/:queued/:running` state machine to hang this on. Note there
+  are **two** paths into `run_loop` and both must drain: `run_turn` (`agent_runner.rb:265`) and the
+  restart `finish_turn` claims when a completed turn leaves the Interloper queue non-empty — miss
+  the second and a restart turn silently runs the old model. Selecting while busy is naturally
+  "next turn", which matches the Interloper's
   existing "your input waits for a boundary" story — the status bar already exists to make that
   wait legible. `#discard!` must refuse a selection the same way it refuses a submit.
 - **`ConversationRegistry` must not learn about models beyond an opaque id.** It is Pikuri-free by
@@ -117,8 +146,13 @@ conversation the tab is looking at. Three things need to happen:
   block in the transcript is a real question (it *is* conversation history, unlike a log line —
   `D_diagnostics_to_stderr` doesn't settle it) and touches the block-kind contract if it wants its
   own kind.
-- **`restore!`** replays history but sets no transport; a reopened conversation would boot on the
-  factory's model and need the saved one applied before its first turn.
+- **`restore!`** replays history but sets no transport. A reopened conversation boots on the
+  factory's model, so the saved one is seeded into the pending slot at mint time and lands on the
+  first turn — which is fine for the turn, and a lie for anything displaying the model before it.
+- **Selection outruns reality while quiet.** Between a pick and the next turn the agent is still on
+  the old model. If the selection is persisted at pick time, `meta.json` records *intent* ahead of
+  what the conversation last actually talked to; persisting at turn end instead loses a pick the
+  user never sent a message after. Neither is obviously right — pick one deliberately.
 - **The boot banner** (`bin/pikuri-web-chat:296`, "agent: model @ server") becomes the *default*
   model, not the model.
 - **`--model` / `--server`** keep meaning "override the primary connection", which is now also
