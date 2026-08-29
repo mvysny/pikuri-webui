@@ -15,4 +15,16 @@ RSpec.describe PikuriWeb::SlashCommand do
       described_class::CATALOG.each { |command| refute_empty command.description }
     end
   end
+
+  describe '.catalog' do
+    it 'offers /model only when there is more than one connection to pick between' do
+      refute_includes described_class.catalog(connections: 1).map(&:name), '/model'
+      assert_includes described_class.catalog(connections: 2).map(&:name), '/model'
+    end
+
+    it 'drops nothing else on the way' do
+      assert_equal described_class::CATALOG.size - 1, described_class.catalog(connections: 1).size
+      assert_equal described_class::CATALOG, described_class.catalog(connections: 2)
+    end
+  end
 end

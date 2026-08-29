@@ -6,7 +6,7 @@ module PikuriWeb
   # this run.
   #
   #   runner = registry.open(conversation)   # mint or return the resident one
-  #   registry.create                        # a brand-new conversation, minted and open
+  #   registry.create(from: viewed_id)       # a brand-new conversation, minted and open
   #   registry.delete(conversation)          # => :deleted | :busy
   #   registry.rows                          # what the sidebar lists
   #
@@ -64,8 +64,20 @@ module PikuriWeb
 
     # Mint a brand-new conversation and open it.
     #
+    #   registry.create(from: params['viewing'])
+    #
+    # A conversation starts on the connection the tab was reading, which is
+    # what makes "switch model, then start a fresh chat" do the obvious thing.
+    # The pair travels as two opaque strings — this class knows connections
+    # only by them.
+    #
+    # @param from [String, nil] id of the conversation the tab has open; nil,
+    #   or one not resident, starts on the catalog's first connection
     # @return [AgentRunner]
-    def create = open(@store.create)
+    def create(from: nil)
+      model, server = from && resident(from)&.model
+      open(@store.create(model: model, server: server))
+    end
 
     # Forget a conversation and remove its folder. Irreversible: no undo, no
     # tombstone (`D_delete_no_undo`).

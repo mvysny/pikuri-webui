@@ -13,7 +13,16 @@ RSpec.describe 'conversations end to end' do
 
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
   let(:store) do
-    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'fake-model')
+    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat')
+  end
+
+  # One connection, named after the scripted transport every conversation gets:
+  # the catalog keys on [model, api_base], so each factory-built transport
+  # resolves to this entry despite carrying its own scripted adapter.
+  let(:catalog) do
+    PikuriWeb::ModelCatalog.new(
+      choices: [PikuriWeb::ModelCatalog::Choice.new(name: 'fake', transport: Pikuri::Testing.fake_transport)]
+    )
   end
 
   # Extensions own the public route to Agent#append_reference_block: a String
@@ -62,7 +71,7 @@ RSpec.describe 'conversations end to end' do
       PikuriWeb::AgentRunner.new(
         conversation: conversation, agent: agent, interloper: interloper,
         cancellable: cancellable, broadcaster: broadcaster, conversations: store,
-        transcript: transcript, listener: listener, executor: executor
+        transcript: transcript, listener: listener, executor: executor, catalog: catalog
       )
     end
   end
@@ -86,7 +95,11 @@ RSpec.describe 'conversations end to end' do
     assert_equal %w[user assistant tool assistant], history.messages.map(&:role)
     # The truncation the transcript applies is the shell's, not the file's.
     assert_equal 'What is 2 + 2?', history.messages.first.content
-    assert_equal 1, JSON.parse((dir / 'meta.json').read).fetch('schema')
+    meta = JSON.parse((dir / 'meta.json').read)
+    assert_equal 1, meta.fetch('schema')
+    # The connection comes off the agent's own transport at turn end, which is
+    # what keeps it agreeing with history.json's model_id.
+    assert_equal ['fake-model', 'http://fake.invalid/v1'], meta.values_at('model', 'server')
   end
 
   # The property this whole design exists for. Two conversations, two agents,

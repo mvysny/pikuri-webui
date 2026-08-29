@@ -44,9 +44,11 @@ the alternatives that were rejected, live one entry per slug in
   ids, kinds, HTML strings, paths and queues, so a shifted pikuri surface
   never costs a sweep of the rendering path. Server-side of that line,
   pikuri types are used freely: `bin/pikuri-web-chat`, {SseListener},
-  {AgentRunner}, {HistoryReplay} and {ConversationStore#save}. A pikuri
-  type appearing in a class the browser's own state flows through has to
-  argue for itself. See `D_pikuri_free_core`.
+  {AgentRunner}, {HistoryReplay}, {ModelCatalog} and
+  {ConversationStore#save}. A pikuri type appearing in a class the
+  browser's own state flows through has to argue for itself — which is
+  why the catalog crosses the line as names and `[model, server]` pairs,
+  never as a `ChatTransport`. See `D_pikuri_free_core`.
 
 - **Deleting a conversation is irreversible, and it stays deleted.**
   `confirm()` then `rm_r`, `meta.json` unlinked first; no undo, no
@@ -220,6 +222,19 @@ the alternatives that were rejected, live one entry per slug in
   path is the last step of cross-shell interop, not the first — the
   *format* is what travels. See `D_per_shell_state_root`.
 
+- **A conversation's model is `[model, server]` in `meta.json`, minted
+  onto the agent by the factory and written back at turn end from the
+  agent's own transport.** Never a `name` (renameable) and never a model
+  id alone (two servers can run one model). Three readers, and they must
+  not collapse: `Conversation#model_at_mint` (what disk said at mint; the
+  factory is its only reader), {AgentRunner#model} (intent — what
+  `registry.create(from:)` inherits), and `@agent.transport` (reality,
+  read only inside {AgentRunner}). A pick parks in {AgentRunner}'s
+  pending slot and lands at the top of the next turn, because pikuri
+  confines the switch there; nothing subscribes to `ModelSwitched`, and
+  a switch draws no transcript block — the status bar carries the model.
+  See `D_per_conversation_model`.
+
 - **One config file for every pikuri shell, and a connection has exactly
   one source.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
   schema, including sections this host never reads. Anything the file has
@@ -246,15 +261,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/app.rb` — `PikuriWeb::App`, the Sinatra app:
   `GET /` (redirects to the newest), `GET /c/:id` (one conversation),
   `GET /events?conversation=` (SSE, per conversation), `POST /messages`,
-  `POST /cancel`, `GET`/`POST /conversations`,
+  `POST /cancel`, `POST /model`, `GET`/`POST /conversations`,
   `POST /conversations/:id/delete`. Every route names the conversation it
-  acts on. Registry + broadcaster injected via class-level settings.
+  acts on. Registry, broadcaster and the connection rows injected via
+  class-level settings.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, one
   conversation's agent, transcript and turn lifecycle: restore, the
-  start-vs-inject (Interloper) decision, idle/queued/running, the save at
+  start-vs-inject (Interloper) decision, the pending model, the save at
   turn end; broadcasts status.
 - `lib/pikuri_web/conversation_registry.rb` — `PikuriWeb::ConversationRegistry`,
   the resident runners: mints one per conversation opened, deletes, and
@@ -265,8 +281,11 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   the conversations folder: mints ids, owns the whole commit (`#save`
   takes the history and writes both halves), lists what is saved, deletes
   a folder.
+- `lib/pikuri_web/model_catalog.rb` — `PikuriWeb::ModelCatalog`, the
+  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport.
 - `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
-  description for one palette row, and the `CATALOG` the page renders.
+  description for one palette row, and the `CATALOG` a page is served a
+  config-gated subset of.
 - `lib/pikuri_web/trifecta_view.rb` — `PikuriWeb::TrifectaView`, a walked
   trifecta report as the `/trifecta` dialog's escaped HTML body.
 - `lib/pikuri_web/relative_time.rb` — `PikuriWeb::RelativeTime`, coarse
@@ -299,9 +318,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
   thinking, cyan tool lines).
-- `bin/pikuri-web-chat` — boot script: config load, the conversation
-  factory (agent + tools + Interloper, one wiring for every
-  conversation), the shared turn executor, the trifecta report, Puma start (server settings and
+- `bin/pikuri-web-chat` — boot script: config load, the model catalog, the
+  conversation factory (agent + tools + Interloper + the connection this
+  conversation is minted on, one wiring for every conversation), the
+  shared turn executor, the trifecta report, Puma start (server settings and
   the shutdown hook). Flags are only what the config file has no home for
   — `--port` / `--bind` / `--turns` / `--dev`.
 
@@ -322,7 +342,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - Slash commands are the same shape of contract, in three places:
   {SlashCommand}`::CATALOG` (the palette cannot list what it does not
   hold), `runCommand` in `public/app.js` (the catalog cannot run it), and
-  a `<template>` in `views/index.erb` for one that opens a dialog.
+  a `<template>` in `views/index.erb` for one that opens a dialog. A
+  command the config can make pointless is dropped in
+  {SlashCommand}`.catalog`, never by a fourth place.
 
 ## Ideas & their graduation
 

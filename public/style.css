@@ -459,6 +459,12 @@ button:hover { border-color: var(--accent); }
 
 #status-tokens { flex: 1; text-align: right; }
 
+/* A parked model switch, waiting for the top of the next turn. The arrow is
+   drawn here so the span holds a bare connection name — which is what the
+   /model dialog reads back to mark the intended row. */
+#status-model-pending:not(:empty) { color: var(--accent); }
+#status-model-pending:not(:empty)::before { content: '→ '; }
+
 /* — dialogs —
 
    Built by dom.js's openDialog and removed again on close, so none of these
@@ -558,6 +564,15 @@ button:hover { border-color: var(--accent); }
    attribute on open — the server cannot know a theme flipped since it served
    the page. */
 .picker-option[aria-current]::before { content: '● '; color: var(--accent); }
+
+/* A two-line row — a name over what it actually is (the model picker). The
+   marker above prefixes the first line, which is why the name is not a block
+   of its own. */
+.picker-detail {
+  display: block;
+  color: var(--fg-muted);
+  font-size: 0.85em;
+}
 
 /* A chromeless control — the drawer footer's pair. */
 .flat-button {

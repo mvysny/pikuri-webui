@@ -84,11 +84,159 @@ design or the invariant.
 
 ---
 
+## D_per_conversation_model — A conversation's model is `[model, server]` in `meta.json`, minted onto the agent by the factory and written back at turn end from the agent's own transport (2026-08-29)
+
+**Status:** Accepted, shipped 2026-08-29. `/model` switches a live
+conversation, a new conversation inherits the one the tab was reading, and
+the status bar names the connection.
+
+**Context.** `Config` has always parsed every `[[llm]]`; only the first was
+ever used. pikuri's half was done too — `Agent#run_loop(user_message:,
+transport:)` applies a switch at the top of a turn, keeping history,
+callbacks, tools and controls, and `apply_transport!` is *private*, so the
+kwarg is the only way in. That is deliberate on pikuri's side: the chat is
+single-thread-confined and "a background thread mutating the connection
+mid-completion would tear an in-flight stream". The library cannot know
+nothing is in flight; `AgentRunner`'s state machine can. So the pending-slot
+shape was **forced, not chosen** — the only question was where the *selection*
+lives and when it is written.
+
+**Decision, in four parts.**
+
+*Identity is the `[model, api_base]` pair, never a name and never a model
+id.* Two `[[llm]]` entries may run one model on two servers (the TUI's own
+example: local vs. remote Qwen), so the model alone conflates them; and a
+`name` is not recoverable from a transport — a landed `ModelSwitched` carries
+transports — besides being one config edit away from changing. This is
+pikuri-tui's `Shared::Model::Choice.key`, ported into `ModelCatalog`
+including its fall back to the raw model id for a transport from outside the
+catalog.
+
+*It lives in `meta.json`, written at turn end from the agent's own
+transport.* `#save` runs from `finish_turn`, under the runner's mutex, on the
+executor thread. Reading the field off `@agent.transport` rather than off the
+selection makes the envelope and `history.json`'s last `model_id` agree by
+construction.
+
+*A reopened conversation is **minted** on its saved transport; the pending
+slot is only ever a live switch.* The factory resolves
+`Conversation#model_at_mint` / `#server_at_mint` against the catalog and hands
+the result to `Agent.new`.
+
+*The status bar is the model's only surface, and reality there is free.*
+`apply_transport!` assigns the agent's transport only *after* `with_model`
+returns, so `status_data[:model]` — read straight off it — can never advertise
+a model the switch did not reach. That is pikuri-tui's footer rule
+(`StatusFooterUpdater` moves the name only once `ModelSwitched` lands)
+satisfied by construction rather than by a subscription: a footer cannot read
+the agent, and we can.
+
+**Rejected: deriving the model from `history.json`'s `model_id`.** pikuri does
+record it per message. But it is a model *string* — it cannot express the
+server half of the identity above; `ConversationStore#row` would have to parse
+every stored history to render one sidebar, where today it reads the envelope
+and nothing else; and a conversation that inherited a model but has not spoken
+yet has no `model_id` anywhere.
+
+**Rejected: persisting at pick time.** A pick arrives on a request thread, so
+this either exports history mid-`complete` — what the turn-end rule exists to
+prevent — or writes `meta.json` beside `#save`, which `D_no_store_lock`
+forbids in as many words ("nothing writes beside it"). And for a conversation
+with no turn yet it writes the *commit point* over no `history.json`: a listed
+conversation that cannot be opened, the exact failure `#save`'s and
+`#delete`'s orderings were chosen to prevent. **Accepted cost:** a pick with
+no message after it is lost across a restart.
+
+**Rejected: seeding the pending slot instead of minting.** The tempting
+argument for minting was history integrity — `load_history!` scrubbing
+thinking signatures whose `model_id` does not match — and that argument is
+**retracted**: it is a measured no-op on every backend we point at (see
+`../pikuri/ideas/thinking-block-replay.md`). The real reasons are two. First,
+`Agent#detect_and_emit_context_cap!` runs in the agent's **constructor**, so
+minting on the factory default probes the *wrong* server's window: a reopened
+conversation would show the wrong token cap until it was used, and pay a
+second probe to correct it. Second, a pending slot that is set on every reopen
+stops meaning "you picked something and it has not landed yet", which is the
+meaning the status bar's arrow and the dialog's marker both need it to have.
+
+**Rejected: a transcript block for a switch.** `:notice` exists and
+`History::Message#model_id` would even let `HistoryReplay` derive a switch
+boundary, so the block *would* survive a reopen — unlike the general
+slash-command case `D_slash_command_palette` rules out. But that means two
+producers of one block, the live arm and the replay-derived one, and two
+derivations disagree eventually — a reload would then silently rewrite the
+transcript. The status bar carries the model instead, which leaves
+`SseListener`'s `ModelSwitched` arm silent and `HistoryReplay` untouched.
+
+**Rejected: a synthetic bare turn to apply a pick early.** `run_loop(user_message:
+nil, transport: …)` would move the display sooner at the cost of a round-trip,
+and raises `EmptyTurnError` against a prompt-only conversation on a
+separate-system-field provider. A pick made while idle sits until the next
+real turn, and the status bar's arrow says so.
+
+**Rejected: subscribing to `ModelSwitched` to clear the arrow at the landing.**
+`SseListener` would need an `on_model_switched` hook — the shape the runner
+already uses for `Interloper#on_change` — to push a status frame the moment
+the switch lands. Without it the arrow clears at `finish_turn` instead, so a
+pick made while idle leaves the bar reading `local → remote` for the whole
+turn it is already running. That is early, not wrong: the bar never claims a
+model the switch did not reach. Not worth a non-rendering hook on the
+renderer; revisit if the lag grates against a slow first token.
+
+**Consequences.**
+
+- **`ConversationStore#initialize(model:)` is gone.** A store-wide field could
+  only ever record the boot model — it was a lie waiting to happen. `#save`
+  takes the pair per call, in keeping with its already owning the whole commit.
+- **Half a pair is no pair.** An envelope written before this landed has a
+  `model` and no `server`, and that `model` named the *boot* connection rather
+  than the conversation's — so `#row` reads such a conversation as having
+  nothing saved, and it opens on the default. No migration, no `SCHEMA` bump
+  (`load_meta` checks the version and ignores what it does not read).
+- **Three readers, and they must not collapse into one.**
+  `Conversation#model_at_mint` (what disk said at mint; the factory is its only
+  reader), `AgentRunner#model` (intent — `pending || current`, what
+  `registry.create(from:)` inherits), and `@agent.transport` (reality, read
+  only inside `AgentRunner`). The `_at_mint` suffix and the *absence* of a
+  runner-level reader for reality are what keep a future convenience accessor
+  from merging them.
+- **The mint-time pair is stale against disk by design** — `#save` moves
+  `meta.json` on and the Data never follows. Harmless because the factory is
+  its only reader, at mint. `ConversationRegistry#find` does hand out a
+  resident runner's stale `Conversation`, but its caller's next move is `#open`,
+  which discards the passed object for a resident conversation.
+- **A switch onto a smaller window is accepted, not refused.** The re-emitted
+  `ContextCap` self-corrects the token readout for free; nothing re-baselines
+  the history, so 90k of conversation moved onto a 32k connection fails on the
+  next turn. The dialog lists each connection's `context_window` so the pick is
+  informed rather than discovered — that is the whole mitigation.
+- **A saved connection gone from the config falls back to `primary_llm`, and
+  the `/model` dialog is the only place it is said.** Not the transcript (a
+  block absent from `history.json`) and not `supported: false` (that means
+  "unreadable envelope"). The note is printed from the pair, because the name
+  went with the config entry, and it is cleared on the first save and on any
+  pick — by then `meta.json` holds the fallback and the note would describe a
+  deviation from nothing.
+- **`--server` / `--model` were removed ahead of this**, so there is no
+  precedence rule between a flag, the file and a conversation's saved model.
+  See the 2026-08-29 amendment to `D_schema_complete_config`.
+- **The catalog is a constructor argument, not a second wiring.** One
+  conversation factory still means one tool set, so the boot trifecta report
+  stays true of every agent.
+- **The status bar shows the model even for a single-`[[llm]]` user**, where it
+  is a constant; the `/model` palette entry is gated on there being more than
+  one, as pikuri-tui gates its own. The asymmetry is deliberate: naming the
+  connection is worth a segment even when it cannot change.
+
+---
+
 ## D_slash_command_palette — The catalog is the server's, the palette is the browser's, and a command never writes to the transcript (2026-08-29)
 
 **Status:** Accepted, shipped 2026-08-29 with `/new`, `/theme` and
-`/trifecta`. `/model` joins them when `D_conversation_owns_agent`'s runner
-can carry a model of its own.
+`/trifecta`; `/model` joined them later the same day
+(`D_per_conversation_model`) and is the first command gated on the config —
+`SlashCommand.catalog(connections:)` drops it when there is nothing to pick
+between.
 
 **Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
 is the obvious thing to port: a list above the input, filtered as you type,
@@ -101,8 +249,9 @@ already is.
 
 *The catalog is server-rendered; the dispatch is not.* `PikuriWeb::SlashCommand::CATALOG`
 renders whole into `#slash-menu`, and `app.js` filters it by toggling
-`hidden` per row. A command *runs* in `runCommand`, because three of the
-four commands are browser-side anyway (a navigation, a cookie, a dialog).
+`hidden` per row. A command *runs* in `runCommand`, because most of them
+are browser-side anyway (a navigation, a cookie, a dialog); the one that is
+not, `/model`, still opens its dialog there and posts a name.
 That makes adding a command a three-place contract — catalog, `runCommand`,
 and a `<template>` for a command with a dialog — which is the same shape the
 block kinds already have, and is written down in `AGENTS.md` beside them.

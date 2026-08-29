@@ -20,25 +20,36 @@ RSpec.describe PikuriWeb::App do
   # Stands in for AgentRunner: records calls, serves canned status, and owns a
   # real Transcript so the page has blocks to render.
   class FakeRunner
-    attr_reader :conversation, :transcript, :submitted, :cancels
-    attr_accessor :busy, :submit_outcome
+    attr_reader :conversation, :transcript, :submitted, :cancels, :selected
+    attr_accessor :busy, :submit_outcome, :select_outcome
 
     def initialize(conversation)
       @conversation = conversation
       @transcript = PikuriWeb::Transcript.new
       @submitted = []
+      @selected = []
       @cancels = 0
       @busy = false
       @submit_outcome = :started
+      @select_outcome = :selected
     end
 
     def submit(message)
       @submitted << message
       @submit_outcome
     end
+
+    def select_model(name)
+      @selected << name
+      @select_outcome
+    end
     def cancel = @cancels += 1
     def busy? = @busy
-    def status_data = { state: @busy ? :running : :idle, busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out' }
+
+    def status_data
+      { state: @busy ? :running : :idle, busy: @busy, pending: 0, tokens: '12.3k in / 4.5k out',
+        model: 'local', model_pending: nil, model_missing: nil }
+    end
     def trifecta_html = '<p class="trifecta-advisory">Trifecta: 2 of 3 legs</p>'
   end
 
@@ -46,13 +57,14 @@ RSpec.describe PikuriWeb::App do
   # opening to a FakeRunner that outlives the request.
   class FakeRegistry
     attr_accessor :list, :delete_outcome
-    attr_reader :deleted, :created
+    attr_reader :deleted, :created, :created_from
 
     def initialize(list = [])
       @list = list
       @runners = {}
       @deleted = []
       @created = 0
+      @created_from = []
       @delete_outcome = :deleted
     end
 
@@ -60,8 +72,9 @@ RSpec.describe PikuriWeb::App do
     def resident(id) = @runners[id]
     def find(id) = @list.find { |c| c.id == id }
 
-    def create
+    def create(from: nil)
       @created += 1
+      @created_from << from
       conversation = ConversationRows.row("minted-#{@created}", "minted #{@created}")
       @list.unshift(conversation)
       open(conversation)
@@ -106,6 +119,12 @@ RSpec.describe PikuriWeb::App do
   let(:live) { ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the open one') }
   let(:stored) { ConversationRows.row('2026-08-26T09-14-02Z-b1c7', "yesterday's", created_at: Time.now - 86_400) }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
+  # Two connections, so /model is in the palette — the one-connection page is
+  # its own example below.
+  let(:models) do
+    [{ name: 'local', model: 'qwen3.6', context_window: 32_768 },
+     { name: 'remote', model: 'qwen3.6', context_window: nil }]
+  end
   let(:registry) { FakeRegistry.new([live]) }
 
   # The runner GET /c/:id would open for the default conversation.
@@ -119,6 +138,7 @@ RSpec.describe PikuriWeb::App do
     described_class.set :environment, :test
     described_class.set :broadcaster, broadcaster
     described_class.set :registry, registry
+    described_class.set :models, models
   end
 
   def get_live = get("/c/#{live.id}")
@@ -187,9 +207,39 @@ RSpec.describe PikuriWeb::App do
 
     it 'renders the whole slash-command catalog for app.js to filter in place' do
       get_live
-      PikuriWeb::SlashCommand::CATALOG.each do |command|
+      PikuriWeb::SlashCommand.catalog(connections: models.size).each do |command|
         assert_includes last_response.body, %(data-command="#{command.name}")
         assert_includes last_response.body, command.description
+      end
+    end
+
+    it 'lists every connection in the model dialog, with its model id and window' do
+      get_live
+      assert_includes last_response.body, '<template id="tpl-model">'
+      assert_includes last_response.body, 'data-model="remote"'
+      assert_includes last_response.body, '<span class="picker-detail">qwen3.6 · 32k</span>'
+      # A connection that leaves its window to pikuri's probe has none to print.
+      assert_includes last_response.body, '<span class="picker-detail">qwen3.6</span>'
+    end
+
+    it 'renders the status bar with the model, so the dialog can read it back' do
+      get_live
+      assert_includes last_response.body, '<span id="status-model" data-missing="">local</span>'
+      assert_includes last_response.body, '<span id="status-model-pending"></span>'
+    end
+
+    context 'with one connection' do
+      let(:models) { [{ name: 'local', model: 'qwen3.6', context_window: nil }] }
+
+      it 'leaves /model out of the palette — there is nothing to pick between' do
+        get_live
+        refute_includes last_response.body, 'data-command="/model"'
+        assert_includes last_response.body, 'data-command="/theme"'
+      end
+
+      it 'still names the connection on the status bar' do
+        get_live
+        assert_includes last_response.body, '>local</span>'
       end
     end
 
@@ -201,7 +251,7 @@ RSpec.describe PikuriWeb::App do
 
     it 'names the known commands in the unknown-command dialog' do
       get_live
-      assert_includes last_response.body, 'Known commands: /new, /theme, /trifecta.'
+      assert_includes last_response.body, 'Known commands: /new, /model, /theme, /trifecta.'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do
@@ -400,12 +450,52 @@ RSpec.describe PikuriWeb::App do
     end
   end
 
+  context 'POST /model' do
+    it 'hands the connection name to the named conversation and returns 204' do
+      post '/model', conversation: live.id, name: 'remote'
+      assert_equal 204, last_response.status
+      assert_equal ['remote'], runner.selected
+    end
+
+    # Applied at the top of the next turn, so a running one is no reason to
+    # refuse — the same story mid-turn sending tells.
+    it 'is accepted while a turn is running' do
+      runner.busy = true
+      post '/model', conversation: live.id, name: 'remote'
+      assert_equal 204, last_response.status
+    end
+
+    it 'refuses a connection this config does not have' do
+      runner.select_outcome = :unknown
+      post '/model', conversation: live.id, name: 'gone'
+      assert_equal 422, last_response.status
+    end
+
+    it 'refuses a conversation deleted under the tab' do
+      runner.select_outcome = :discarded
+      post '/model', conversation: live.id, name: 'remote'
+      assert_equal 404, last_response.status
+    end
+
+    it 'refuses an id that is not a listed conversation' do
+      post '/model', conversation: 'nope', name: 'remote'
+      assert_equal 404, last_response.status
+    end
+  end
+
   context 'POST /conversations' do
     it 'mints one and answers with its id to navigate to' do
       post '/conversations'
       assert_equal 200, last_response.status
       assert_equal 1, registry.created
       assert_equal 'minted-1', last_response.body
+    end
+
+    # The server cannot know which conversation the asking tab has open, and
+    # the new one starts on that one's connection.
+    it 'passes the viewed conversation on, so the new one inherits its model' do
+      post '/conversations', viewing: live.id
+      assert_equal [live.id], registry.created_from
     end
 
     it 'is never refused, whatever else is working' do

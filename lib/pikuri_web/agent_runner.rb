@@ -8,11 +8,12 @@ module PikuriWeb
   # there is no switching here, and no "live" conversation to switch away
   # from. {ConversationRegistry} holds one per conversation anyone has opened.
   #
-  #   runner.restore!            # replay what is on disk, once, at mint time
-  #   runner.submit('hello')     # => :started (queued on the executor) or :injected
-  #   runner.state               # => :idle | :queued | :running
-  #   runner.cancel              # dequeue if queued, stop at a tool boundary if running
-  #   runner.discard!            # the conversation was deleted; retire this runner
+  #   runner.restore!               # replay what is on disk, once, at mint time
+  #   runner.submit('hello')        # => :started (queued on the executor) or :injected
+  #   runner.select_model('Remote') # => :selected — applied at the top of the next turn
+  #   runner.state                  # => :idle | :queued | :running
+  #   runner.cancel                 # dequeue if queued, stop at a tool boundary if running
+  #   runner.discard!               # the conversation was deleted; retire this runner
   #
   # {#submit} is the single entry point for user text, and it never refuses
   # while the conversation exists:
@@ -44,6 +45,27 @@ module PikuriWeb
   # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
   # entry whether it was cancelled while waiting and returns without starting.
   # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop.
+  #
+  # == Which model, and when
+  #
+  # {#select_model} parks a transport; +run_loop+ applies it at the top of the
+  # next turn and nothing else can — pikuri confines the switch there because
+  # the chat is single-thread-confined, and only this state machine knows
+  # nothing is in flight. So a pick while busy is naturally "next turn", the
+  # same wait the Interloper's queued count already makes legible.
+  #
+  # Three questions, three answers, and they must not collapse into one:
+  #
+  #   conversation.model_at_mint   # what disk said when this runner was minted
+  #   runner.model                 # intent — the pair the next turn will use
+  #   status_data[:model]          # reality — read off the agent's transport
+  #
+  # Reality is free: +apply_transport!+ assigns the agent's transport only
+  # after the switch succeeds, so the status bar can never advertise a model
+  # the switch did not reach and nothing here subscribes to +ModelSwitched+.
+  # The pending slot is drained where it is handed to +run_loop+ rather than
+  # when the switch lands, which is what keeps that true of a failed switch
+  # too — at the cost of losing the pick when a turn dies before its top.
   #
   # == Persistence
   #
@@ -83,8 +105,16 @@ module PikuriWeb
     #   turn
     # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when present,
     #   its +status_line+ rides along in every status event
+    # @param catalog [ModelCatalog] the connections {#select_model} may pick
+    #   from, and what turns the agent's transport into a display name
+    # @param missing_connection [String, nil] +"model @ server"+ when this
+    #   conversation was minted on {ModelCatalog#primary} because the
+    #   connection it had saved is no longer in the config file — a note for
+    #   the +/model+ dialog, and true only until the next save records the
+    #   fallback
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
-                   conversations:, transcript:, listener:, executor:, token_log: nil)
+                   conversations:, transcript:, listener:, executor:, catalog:,
+                   token_log: nil, missing_connection: nil)
       @conversation = conversation
       @agent = agent
       @interloper = interloper
@@ -94,12 +124,15 @@ module PikuriWeb
       @transcript = transcript
       @listener = listener
       @executor = executor
+      @catalog = catalog
       @token_log = token_log
+      @missing_connection = missing_connection
       @mutex = Mutex.new
       @state = :idle
       @abandon = false
       @discarded = false
       @announced_busy = false
+      @pending = nil
 
       # Claims the interloper's single on_change slot. Without it the
       # queued-count badge only moves when a request happens to hit {#submit}
@@ -169,8 +202,53 @@ module PikuriWeb
       claim == :start ? :started : :injected
     end
 
-    # Retire this runner for good: it will start no turn, inject nothing and
-    # write no folder again. One-way, and refused while a turn is in flight —
+    # Put this conversation on another connection, from the top of its next
+    # turn.
+    #
+    #   runner.select_model('Remote Qwen')   # => :selected
+    #
+    # Never applied on the spot: see the class header. Picking the connection
+    # the agent is already on clears any pending selection rather than parking
+    # a switch that would no-op, so the status bar's arrow means "not yet",
+    # never "no change".
+    #
+    # @param name [String] a {ModelCatalog} connection name
+    # @return [:selected, :unknown, :discarded] +:unknown+ for a name this
+    #   config does not have; +:discarded+ once the conversation is deleted
+    def select_model(name)
+      choice = @catalog.find(name)
+      return :unknown if choice.nil?
+
+      outcome = @mutex.synchronize do
+        next :discarded if @discarded
+
+        @pending = choice.transport == @agent.transport ? nil : choice.transport
+        @missing_connection = nil
+        :selected
+      end
+      broadcast_status if outcome == :selected
+      outcome
+    end
+
+    # The connection this conversation will talk to *next* — the pick if one
+    # is parked, what the agent is on otherwise.
+    #
+    #   registry.create(from: viewing)   # a new conversation inherits this
+    #
+    # Intent rather than reality on purpose: a pick made on a busy conversation
+    # and immediately followed by "new conversation" should hand the new one
+    # what the user asked for.
+    #
+    # @return [Array(String, String)] the +[model, server]+ pair, in the form
+    #   {ConversationStore} stores and {ModelCatalog#resolve} matches
+    def model
+      transport = @pending || @agent.transport
+      [transport.model, transport.api_base]
+    end
+
+    # Retire this runner for good: it will start no turn, inject nothing, take
+    # no model and write no folder again. One-way, and refused while a turn is
+    # in flight —
     # so a deleter asks for the folder and the turn in one move:
     #
     #   return :busy if runner && !runner.discard!   # then remove the folder
@@ -227,15 +305,23 @@ module PikuriWeb
 
     # Status payload shared by SSE +status+ events and the initial page render.
     #
-    # @return [Hash] +{state:, busy:, pending:, tokens:}+ — +pending+ is the
-    #   count of queued mid-loop injections; +tokens+ is TokenLog's
-    #   preformatted status line ('' when absent)
+    #   { state: :running, busy: true, pending: 2, tokens: '31k / 32k',
+    #     model: 'Local Qwen 3.6', model_pending: 'Remote Qwen', model_missing: nil }
+    #
+    # @return [Hash] +pending+ is the count of queued mid-loop injections;
+    #   +tokens+ is TokenLog's preformatted status line ('' when absent);
+    #   +model+ is what the agent is on *now*; +model_pending+ and
+    #   +model_missing+ are nil in the ordinary case (see {#select_model} and
+    #   the +missing_connection:+ constructor argument)
     def status_data
       {
         state: state,
         busy: busy?,
         pending: @interloper.size,
-        tokens: @token_log&.status_line.to_s
+        tokens: @token_log&.status_line.to_s,
+        model: @catalog.name_for(@agent.transport),
+        model_pending: @pending && @catalog.name_for(@pending),
+        model_missing: @missing_connection
       }
     end
 
@@ -266,7 +352,10 @@ module PikuriWeb
     def run_turn(message)
       return if claim_running == :abandoned
 
-      @agent.run_loop(user_message: message)
+      # Both ways into a turn come through here — a submit and the restart
+      # {#finish_turn} claims — so one drain covers both; a second entry point
+      # into +run_loop+ would silently run the old model.
+      @agent.run_loop(user_message: message, transport: take_pending)
       completed = true
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
@@ -324,6 +413,10 @@ module PikuriWeb
       :abandoned
     end
 
+    # @return [Pikuri::Agent::ChatTransport, nil] the parked selection, taken;
+    #   nil — +run_loop+'s "keep the current model" — when there is none
+    def take_pending = @mutex.synchronize { @pending.tap { @pending = nil } }
+
     # @return [Pikuri::Agent::History, nil] nil when this conversation has
     #   nothing stored, or when what is stored cannot be read — a file someone
     #   edited or a half-written save is the library's to report and ours to
@@ -350,7 +443,11 @@ module PikuriWeb
       history = @agent.export_history
       return if history.messages.empty?
 
-      @conversations.save(@conversation, history)
+      transport = @agent.transport
+      @conversations.save(@conversation, history, model: transport.model, server: transport.api_base)
+      # The envelope now holds the fallback, so the note stops describing a
+      # deviation from anything stored.
+      @missing_connection = nil
     rescue StandardError => e
       PikuriWeb.logger.error("saving conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
     end

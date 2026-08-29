@@ -58,8 +58,9 @@ module PikuriWeb
     # Carries a human-readable message naming the offending key or file.
     class Error < StandardError; end
 
-    # One model connection; the first {Config#llms} entry is the boot
-    # connection and the rest await a model picker this shell lacks.
+    # One model connection; the first {Config#llms} entry is where a
+    # conversation with no saved connection starts, and any of them is a
+    # +/model+ pick away.
     #
     # @!attribute [r] name
     #   @return [String] unique display name, e.g. +"Local Qwen 3.6"+.

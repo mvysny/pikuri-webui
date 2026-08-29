@@ -45,6 +45,11 @@ module PikuriWeb
   #   there is no second transcript to swap in.
   # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
   #   status bar reads +TokenLog#status_line+ via AgentRunner).
+  # - +ModelSwitched+ stays silent too, and that is a decision rather than
+  #   an omission: the status bar carries the model, read off the agent's
+  #   own transport. A transcript block for it would need a second producer
+  #   on the replay path — +History::Message+ does record +model_id+ — and
+  #   two derivations of one block disagree eventually.
   class SseListener < Pikuri::Agent::Listener::Base
     # Cap, in characters, applied to tool-result content before it lands
     # in the transcript. Mirrors the TUI / terminal listeners' cap so the
@@ -133,8 +138,8 @@ module PikuriWeb
         # restored conversation itself, and a "restored N messages" line would
         # be the only block in the transcript that never came from the agent.
       else
-        # Tokens / ContextCap: silent here (TokenLog consumes them).
-        # ModelSwitched: unreachable — this shell has no model picker.
+        # Tokens / ContextCap / ModelSwitched: silent here — see the class
+        # header for why the last of those draws nothing.
       end
     end
 

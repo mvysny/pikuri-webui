@@ -5,9 +5,12 @@ module PikuriWeb
   # hint shown beside it while autocompleting.
   #
   #   /new       start a fresh conversation
+  #   /model     put this conversation on another connection
   #   /theme     switch between the dark and light theme
   #   /trifecta  lethal-trifecta report for this agent
   #   <name>     <description>
+  #
+  #   SlashCommand.catalog(connections: config.llms.size)   # what a page offers
   #
   # The palette runs in the browser, so this side carries only what the page
   # displays — there is no callback. Adding a command is a three-place contract,
@@ -34,15 +37,27 @@ module PikuriWeb
     # leaves +/t+ ambiguous with +/trifecta+, which is precisely the case the
     # palette exists for. There is no +/clear+: the TUI's wipes a conversation's
     # context in place, and here conversations are separate objects, so +/new+ is
-    # what that means. +/model+ joins the list once a conversation can carry its
-    # own model, gated — as pikuri-tui gates it — on there being more than one
-    # +[[llm]]+ connection to pick between.
+    # what that means.
     #
-    # @return [Array<SlashCommand>]
+    # @return [Array<SlashCommand>] every command this shell can offer; a page
+    #   is served {.catalog} instead
     CATALOG = [
       new(name: '/new', description: 'start a fresh conversation'),
+      new(name: '/model', description: 'put this conversation on another connection'),
       new(name: '/theme', description: 'switch between the dark and light theme'),
       new(name: '/trifecta', description: 'lethal-trifecta report for this agent')
     ].freeze
+
+    # The catalog as this process will actually offer it.
+    #
+    # +/model+ is dropped when there is nothing to pick between — as pikuri-tui
+    # gates its own picker — so the one-connection user, who is most users, is
+    # not offered a dialog that can only tell them what they already have.
+    #
+    # @param connections [Integer] configured +[[llm]]+ entries
+    # @return [Array<SlashCommand>]
+    def self.catalog(connections:)
+      connections > 1 ? CATALOG : CATALOG.reject { |command| command.name == '/model' }
+    end
   end
 end

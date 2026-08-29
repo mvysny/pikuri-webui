@@ -102,8 +102,12 @@ or just tap a row, which is the point on a phone: `/t`, tap.
 | command | what it does |
 |---|---|
 | `/new` | start a fresh conversation, as the sidebar button does |
+| `/model` | put this conversation on another `[[llm]]` connection |
 | `/theme` | pick the dark or light theme |
 | `/trifecta` | show this agent's lethal-trifecta report — the same map the boot banner prints |
+
+`/model` only appears when you have more than one `[[llm]]` — with a single
+connection there is nothing to pick between.
 
 `Esc` closes the list, and closes a dialog. Nothing a command does is
 written into the conversation: they are chrome, not something the model
@@ -155,7 +159,8 @@ started:
 2026-08-27T12-03-51Z-3f9a/
     history.json   the conversation itself, in pikuri's own format
     attachments/   any file the model was shown
-    meta.json      title, timestamps, which shell and model wrote it
+    meta.json      title, timestamps, which shell wrote it, which
+                   connection it was last on
 ```
 
 The `conversations/` folder is there from boot; a conversation's own
@@ -257,13 +262,37 @@ engine whose key you did not set aborts at boot.
 
 `chmod 600` it — pikuri-web logs an advisory at boot if a file holding a
 literal key is group/other-readable. The first `[[llm]]` is the connection
-a conversation starts on when it has no saved one of its own. Layering runs
+a conversation starts on when it has no saved one of its own; every other
+entry is a `/model` away. Layering runs
 `/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml`.
 
 There is deliberately no `--server` or `--model` flag: a connection lives in
 this file and nowhere else, so there is never a question of which of the two
-wins. To talk to a different server or model, add or reorder an `[[llm]]`
-entry.
+wins. To talk to a *new* server or model, add an `[[llm]]` entry — no
+restart is needed to move between the ones already there.
+
+### Switching model
+
+`/model` moves the conversation you are reading onto another connection.
+Every conversation remembers the one it is on, so switching one leaves the
+others where they were, and a conversation reopens on the connection it last
+spoke on. A new conversation starts on the one the tab was showing when you
+asked for it, which makes "switch, then start fresh" do the obvious thing.
+
+The status bar names the connection at all times. A pick made between turns
+shows as `Local Qwen 3.6 → Grok` until the next message: pikuri applies a
+switch at the *top of a turn*, so nothing changes under a reply that is
+already streaming, and picking while the agent is working is fine — the turn
+after it takes the new model.
+
+The whole conversation moves with you, which is the point and also the one
+sharp edge: 90k of history switched onto a 32k connection is over that
+connection's limit immediately, and the next message fails. The picker shows
+each connection's context window beside its name so the choice is an informed
+one.
+
+Delete an `[[llm]]` that some conversation was on and it opens on the first
+connection instead; `/model` says so when you open it.
 
 > [!WARNING]
 > There is no authentication of any kind, and no notion of who is asking:

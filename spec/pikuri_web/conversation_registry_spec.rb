@@ -21,6 +21,8 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
     def restore! = @restores += 1
     def busy? = @busy
+    # Intent, as the real one reports it: the pair a new conversation inherits.
+    def model = ['qwen3.6', 'http://localhost:8080/v1']
     def discarded? = @discarded
 
     # As the real one: refuses while busy, one-way once taken.
@@ -34,7 +36,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
   let(:store) do
-    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat', model: 'qwen3.6')
+    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat')
   end
   let(:built) { [] }
   let(:factory) { ->(c) { StubRunner.new(c).tap { |r| built << r } } }
@@ -149,9 +151,26 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
     it 'does not list a resident conversation twice once it is saved' do
       conversation = registry.open(store.create).conversation
-      store.save(conversation, Pikuri::Agent::History.new(messages: []))
+      store.save(conversation, Pikuri::Agent::History.new(messages: []),
+                 model: 'qwen3.6', server: 'http://localhost:8080/v1')
 
       assert_equal 1, registry.rows.size
+    end
+  end
+
+  context '#create' do
+    it 'starts a conversation on the connection the tab was reading' do
+      viewed = registry.open(store.create).conversation
+
+      minted = registry.create(from: viewed.id).conversation
+
+      assert_equal 'qwen3.6', minted.model_at_mint
+      assert_equal 'http://localhost:8080/v1', minted.server_at_mint
+    end
+
+    it 'starts on the catalog default when nothing is being read, or the id is stale' do
+      assert_nil registry.create.conversation.model_at_mint
+      assert_nil registry.create(from: 'no-such-conversation').conversation.model_at_mint
     end
   end
 

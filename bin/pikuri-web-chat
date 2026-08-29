@@ -89,9 +89,10 @@ rescue PikuriWeb::Config::Error, ArgumentError => e
   exit 2
 end
 
-llm = config.primary_llm
-api_key = llm.api_key
-api_key = 'not-needed' if api_key.nil? || api_key.strip.empty?
+# Every [[llm]], as transports. A conversation is minted on the one it saved
+# and can be moved to any of the others (/model); the first is where one with
+# nothing saved starts.
+catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
 
 Pikuri::Extractors::PDF.register
 
@@ -109,8 +110,7 @@ state_root = Pikuri::Paths.state / 'pikuri-web-chat'
 # Saved conversations fill the sidebar; opening one mints its agent.
 conversations = PikuriWeb::ConversationStore.new(
   root: state_root / 'conversations',
-  shell: 'pikuri-web-chat',
-  model: llm.model
+  shell: 'pikuri-web-chat'
 )
 
 # Diagnostics go to stderr — pikuri's per-subsystem loggers and
@@ -142,6 +142,18 @@ turn_executor = Concurrent::FixedThreadPool.new(turns)
 # here, which is what keeps the boot-time trifecta report below true of all of
 # them — a second wiring with an extra tool would silently invalidate it.
 conversation_factory = lambda do |conversation|
+  # The connection this conversation saved, or inherited from the one the tab
+  # was reading. Resolving it *here* rather than parking it as a pending switch
+  # matters because Agent's constructor probes the context window: minting on
+  # the wrong server would show the wrong cap until the first turn, and pay a
+  # second probe to correct it.
+  choice = catalog.resolve(model: conversation.model_at_mint, server: conversation.server_at_mint)
+  # A connection edited out of config.toml since this conversation last spoke.
+  # The pair is all there is to name it by — its [[llm]] name went with it.
+  saved = conversation.model_at_mint && "#{conversation.model_at_mint} @ #{conversation.server_at_mint}"
+  missing = saved unless choice
+  choice ||= catalog.primary
+
   cancel_flag = Pikuri::Agent::Control::Cancellable.new
   interloper = Pikuri::Agent::Control::Interloper.new
   # Constructed up front so the Agent's ListenerList and the AgentRunner (for
@@ -166,20 +178,12 @@ conversation_factory = lambda do |conversation|
     flush_pending_on_non_delta: false
   )
 
-  # The connection (api_base / api_key) rides the transport's own per-chat
-  # RubyLLM::Context — pikuri needs no process-global RubyLLM.configure, and
-  # from_openai_server normalizes a server value that already ends in /v1.
-  # The connection's context_window (an explicit cap for a server pikuri's
-  # llama.cpp /props probe can't reach) rides it too; nil defers to that
-  # probe. One transport per agent: they share no mutable state, but pikuri
-  # makes no promise that they could.
+  # One transport per *connection*, shared by every agent on it rather than
+  # rebuilt per conversation: a ChatTransport is a frozen Data, and pikuri
+  # reads its fields to build a RubyLLM::Context per chat (Agent#build_context)
+  # rather than holding the object open.
   agent = Pikuri::Agent.new(
-    transport: Pikuri::Agent::ChatTransport.from_openai_server(
-      server: llm.server,
-      model: llm.model,
-      api_key: api_key,
-      context_window: llm.context_window
-    ),
+    transport: choice.transport,
     system_prompt: system_prompt,
     step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
     cancellable: cancel_flag,
@@ -218,7 +222,9 @@ conversation_factory = lambda do |conversation|
     transcript: transcript,
     listener: sse_listener,
     executor: turn_executor,
-    token_log: token_log
+    catalog: catalog,
+    token_log: token_log,
+    missing_connection: missing
   )
 end
 
@@ -245,6 +251,9 @@ end
 
 PikuriWeb::App.set :broadcaster, broadcaster
 PikuriWeb::App.set :registry, registry
+# Names, model ids and window sizes — no transport crosses this line. Also what
+# gates /model out of the palette when there is only one connection.
+PikuriWeb::App.set :models, catalog.rows
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
 # neither mode: the agent, its listener stack and the runner's worker
@@ -289,5 +298,7 @@ PikuriWeb::App.set :server_settings, {
 PikuriWeb::App.set :server, :puma
 
 PikuriWeb::App.run! do
-  puts "pikuri-web listening on http://#{bind}:#{port} (agent: #{llm.model} @ #{llm.server})"
+  primary = catalog.primary
+  puts "pikuri-web listening on http://#{bind}:#{port} " \
+       "(default connection: #{primary.model} @ #{primary.server}; #{catalog.choices.size} configured)"
 end

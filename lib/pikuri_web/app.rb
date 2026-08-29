@@ -3,12 +3,13 @@
 require 'sinatra/base'
 
 module PikuriWeb
-  # The Sinatra app: eight routes around the {ConversationRegistry} /
+  # The Sinatra app: nine routes around the {ConversationRegistry} /
   # {Broadcaster} pair, which the host injects via class-level settings before
   # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
   #
   #   PikuriWeb::App.set :registry,    registry
   #   PikuriWeb::App.set :broadcaster, broadcaster
+  #   PikuriWeb::App.set :models,      catalog.rows   # what /model lists
   #
   # Every route names the conversation it acts on, and none of them refuse
   # because *another* conversation is working: each has its own agent, and the
@@ -31,6 +32,12 @@ module PikuriWeb
     # This app is exactly its routes — 404s need no styled page, and the
     # dev-mode path rewriting interferes with rack-test assertions.
     disable :show_exceptions, :static_cache_control
+
+    # The connections +/model+ offers, as {ModelCatalog#rows} — plain hashes,
+    # so this side of the seam never sees a transport. Empty until the host
+    # sets it, which is also what keeps +/model+ out of a palette that could
+    # not run it.
+    set :models, []
 
     # The two themes style.css knows about. The `theme` cookie is
     # attacker-free (app.js is its only writer) but user-editable, so an
@@ -69,7 +76,8 @@ module PikuriWeb
         conversation: runner.conversation.id,
         title: runner.conversation.title,
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
-        commands: SlashCommand::CATALOG,
+        commands: SlashCommand.catalog(connections: settings.models.size),
+        models: settings.models,
         # Static for the life of the process — one conversation factory, one
         # tool set — so the /trifecta dialog ships in the page rather than
         # costing a route of its own.
@@ -132,6 +140,17 @@ module PikuriWeb
       status 204
     end
 
+    # Put one conversation on another connection, by +[[llm]]+ name. Applied at
+    # the top of its next turn, never on the spot — so this is accepted while a
+    # turn is running, exactly as a mid-turn send is.
+    post '/model' do
+      case open_conversation(params['conversation']).select_model(params['name'].to_s)
+      when :unknown then halt 422, 'no such connection'
+      when :discarded then halt 404, 'no such conversation'
+      end
+      status 204
+    end
+
     # Gentle cancel of one conversation's turn: dropped before it starts if it
     # is still queued, stopped at the next tool boundary if it is running.
     # Idempotent; no-op when idle.
@@ -142,8 +161,12 @@ module PikuriWeb
 
     # Start a fresh conversation, answering with its id so the tab that asked
     # can navigate to it. Never refused: it touches no existing conversation.
+    #
+    # +viewing+ is what the new conversation inherits its connection from — the
+    # server cannot know which conversation the asking tab has open, the same
+    # reason +GET /conversations+ is told.
     post '/conversations' do
-      conversation = settings.registry.create.conversation
+      conversation = settings.registry.create(from: params['viewing'].to_s).conversation
       settings.broadcaster.broadcast(event: :conversations, data: {})
       content_type 'text/plain'
       conversation.id

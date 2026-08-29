@@ -12,9 +12,9 @@ module PikuriWeb
   # folder per click would litter the root — but a commit is *one* call, and
   # it writes both halves:
   #
-  #   store = ConversationStore.new(root: dir, shell: 'pikuri-web-chat', model: 'qwen3.6')
+  #   store = ConversationStore.new(root: dir, shell: 'pikuri-web-chat')
   #   conversation = store.create                            # mints an id; no folder yet
-  #   store.save(conversation, agent.export_history)         # the whole commit
+  #   store.save(conversation, history, model: m, server: s) # the whole commit
   #   store.list                                             # everything committed, newest first
   #
   # {#save} calls +History#save+ itself rather than leaving each caller to
@@ -34,7 +34,23 @@ module PikuriWeb
   #   2026-08-27T12-03-51Z-3f9a/
   #       history.json   pikuri's — Pikuri::Agent::History#save
   #       attachments/   pikuri's — content-addressed, only if there are any
-  #       meta.json      ours — title, timestamps, shell and model
+  #       meta.json      ours — title, timestamps, shell and connection
+  #
+  # == The connection a conversation is on
+  #
+  # +meta.json+ records the +[model, server]+ *pair*, not a +[[llm]]+ name: a
+  # name is a config file away from being renamed, and a model id alone cannot
+  # tell two servers running one model apart. +server+ is the transport's
+  # normalized +api_base+, so the pair is exactly what {ModelCatalog#resolve}
+  # matches on. Adding these keys needed no {SCHEMA} bump — {#load_meta} checks
+  # the version and ignores what it does not read, so an older envelope simply
+  # reads back as a conversation with no saved connection.
+  #
+  # {#save} takes the pair per call rather than the store holding one, because
+  # what gets written is the *agent's own* transport at turn end: a store-wide
+  # field could only ever record the boot connection. {Conversation}'s
+  # +_at_mint+ pair is the other direction — what disk said when the runner was
+  # minted — and is deliberately not refreshed by a save.
   #
   # == Implementation details
   #
@@ -95,7 +111,19 @@ module PikuriWeb
     #   @return [Boolean] false for a conversation {#list} could not read —
     #     +title+ is then the stamp derived from the id, and nothing else on
     #     disk should be trusted
-    Conversation = Data.define(:id, :dir, :title, :created_at, :supported)
+    # @!attribute [r] model_at_mint
+    #   @return [String, nil] the model +meta.json+ held when this value object
+    #     was built, or what {#create} inherited; nil for a conversation with
+    #     no saved connection. Stale the moment a turn saves — the name says
+    #     so, and the conversation factory is its only reader
+    # @!attribute [r] server_at_mint
+    #   @return [String, nil] the +server+ half of the same pair
+    Conversation = Data.define(:id, :dir, :title, :created_at, :supported,
+                               :model_at_mint, :server_at_mint) do
+      # Defaulted because "no saved connection" is a real and ordinary state —
+      # every conversation is in it until its first turn lands.
+      def initialize(model_at_mint: nil, server_at_mint: nil, **) = super
+    end
 
     # Creates +root+ if it is not there — so the folder exists from boot,
     # rather than appearing on whichever later event happens to save first.
@@ -105,11 +133,9 @@ module PikuriWeb
     #   +~/.local/state/pikuri/pikuri-web-chat/conversations+
     # @param shell [String] which binary is writing these, recorded in
     #   +meta.json+ so a later picker can say "saved by a different harness"
-    # @param model [String] the model this conversation is talking to
-    def initialize(root:, shell:, model:)
+    def initialize(root:, shell:)
       @root = Pathname(root)
       @shell = shell
-      @model = model
       mkdir_private(@root)
     end
 
@@ -128,13 +154,17 @@ module PikuriWeb
     # same second apart. UTC in the id, local time in the title.
     #
     # @param at [Time] the conversation's start time
+    # @param model [String, nil] connection to start on, inherited from the
+    #   conversation the tab was reading; nil starts on the catalog's first
+    # @param server [String, nil] the +server+ half of the same pair
     # @return [Conversation]
-    def create(at: Time.now)
+    def create(at: Time.now, model: nil, server: nil)
       # #getutc / #getlocal, not #utc / #localtime: the destructive pair would
       # convert the caller's own Time object as a side effect.
       id = "#{at.getutc.strftime(ID_TIME)}-#{SecureRandom.hex(2)}"
       Conversation.new(
-        id: id, dir: @root / id, title: stamp_title(at), created_at: at, supported: true
+        id: id, dir: @root / id, title: stamp_title(at), created_at: at, supported: true,
+        model_at_mint: model, server_at_mint: server
       )
     end
 
@@ -220,12 +250,16 @@ module PikuriWeb
     # @param history [Pikuri::Agent::History] anything answering
     #   +#save(Pathname)+ does, which is what makes this testable without an
     #   agent
+    # @param model [String] what the agent is *on* — read off its transport,
+    #   never off a selection, so this and +history.json+'s last +model_id+
+    #   agree by construction
+    # @param server [String] the transport's +api_base+
     # @param updated_at [Time] last-activity stamp; the sidebar's sort key
     # @return [Pathname] the conversation's directory
-    def save(conversation, history, updated_at: Time.now)
+    def save(conversation, history, model:, server:, updated_at: Time.now)
       mkdir_private(conversation.dir)
       history.save(conversation.dir)
-      write_meta(conversation, updated_at: updated_at)
+      write_meta(conversation, model: model, server: server, updated_at: updated_at)
       conversation.dir
     end
 
@@ -234,9 +268,11 @@ module PikuriWeb
     # Write +meta.json+, into a directory {#save} has already created 0700.
     #
     # @param conversation [Conversation]
+    # @param model [String]
+    # @param server [String]
     # @param updated_at [Time]
     # @return [Pathname] the file written
-    def write_meta(conversation, updated_at:)
+    def write_meta(conversation, model:, server:, updated_at:)
       path = conversation.dir / META_FILE
       atomic_write(path, "#{JSON.pretty_generate(
         'schema' => SCHEMA,
@@ -245,7 +281,8 @@ module PikuriWeb
         'created_at' => conversation.created_at.utc.iso8601,
         'updated_at' => updated_at.utc.iso8601,
         'shell' => @shell,
-        'model' => @model
+        'model' => model,
+        'server' => server
       )}\n")
       path
     end
@@ -271,12 +308,15 @@ module PikuriWeb
       return nil if meta == :absent
 
       title = meta && meta['title']
+      model, server = saved_connection(meta)
       Conversation.new(
         id: dir.basename.to_s,
         dir: dir,
         title: title.is_a?(String) ? title : stamp_title(created_at),
         created_at: created_at,
-        supported: !meta.nil?
+        supported: !meta.nil?,
+        model_at_mint: model,
+        server_at_mint: server
       )
     end
 
@@ -311,6 +351,22 @@ module PikuriWeb
     # @return [String] the local-time start stamp a conversation is titled by
     #   until something better replaces it
     def stamp_title(at) = at.getlocal.strftime('%Y-%m-%d %H:%M')
+
+    # The pair is one value: half of it is none of it. An envelope written
+    # before this shell recorded a +server+ has a +model+ that named the *boot*
+    # connection rather than the conversation's, and matching on it alone is
+    # exactly the conflation the pair exists to prevent — so such a
+    # conversation reads as one with nothing saved and opens on the default.
+    #
+    # A non-string (hand-edited, or a schema someone bent) reads the same way:
+    # these values reach the conversation factory.
+    #
+    # @param meta [Hash, nil]
+    # @return [Array(String, String), Array(nil, nil)]
+    def saved_connection(meta)
+      pair = %w[model server].map { |key| meta && meta[key] }
+      pair.all?(String) ? pair : [nil, nil]
+    end
 
     # 0700 explicitly rather than through +mkdir_p+'s +mode:+, which a umask
     # can widen.

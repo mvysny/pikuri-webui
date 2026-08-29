@@ -37,8 +37,16 @@ RSpec.describe PikuriWeb::ConversationStore do
 
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
-  let(:store) { described_class.new(root: @root, shell: 'pikuri-web-chat', model: 'qwen3.6') }
+  let(:store) { described_class.new(root: @root, shell: 'pikuri-web-chat') }
   let(:at) { Time.utc(2026, 8, 27, 12, 3, 51) }
+
+  # The connection an example that is not about connections saves on. #save
+  # takes it per call — the store holds no model of its own.
+  CONNECTION = { model: 'qwen3.6', server: 'http://localhost:8080/v1' }.freeze
+
+  def save(conversation, history, **overrides)
+    store.save(conversation, history, **CONNECTION, **overrides)
+  end
 
   def meta_of(conversation)
     JSON.parse((conversation.dir / 'meta.json').read)
@@ -77,13 +85,25 @@ RSpec.describe PikuriWeb::ConversationStore do
       store.create(at: given)
       assert given.utc?, 'create converted the caller\'s Time in place'
     end
+
+    it 'starts on no connection at all unless one is inherited' do
+      conversation = store.create(at: at)
+      assert_nil conversation.model_at_mint
+      assert_nil conversation.server_at_mint
+    end
+
+    it 'carries an inherited connection through to the factory' do
+      conversation = store.create(at: at, **CONNECTION)
+      assert_equal 'qwen3.6', conversation.model_at_mint
+      assert_equal 'http://localhost:8080/v1', conversation.server_at_mint
+    end
   end
 
   context '#save' do
     it 'hands the history the conversation directory, already created' do
       conversation = store.create(at: at)
       history = SpyHistory.new
-      store.save(conversation, history)
+      save(conversation, history)
 
       assert_equal conversation.dir, history.dir
       assert history.dir.directory?
@@ -92,7 +112,7 @@ RSpec.describe PikuriWeb::ConversationStore do
     it 'creates the directory 0700 before the history goes into it' do
       conversation = store.create(at: at)
       history = SpyHistory.new
-      store.save(conversation, history)
+      save(conversation, history)
 
       assert_equal '700', history.mode, 'the history was written into a wider-mode directory'
       assert_equal '700', (conversation.dir.stat.mode & 0o777).to_s(8)
@@ -101,13 +121,13 @@ RSpec.describe PikuriWeb::ConversationStore do
     it 'tightens a directory an earlier History#save left with the default mode' do
       conversation = store.create(at: at)
       FileUtils.mkdir_p(conversation.dir.to_path, mode: 0o755)
-      store.save(conversation, SpyHistory.new)
+      save(conversation, SpyHistory.new)
       assert_equal '700', (conversation.dir.stat.mode & 0o777).to_s(8)
     end
 
     it 'writes the envelope' do
       conversation = store.create(at: at)
-      store.save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 12, 41, 2))
+      save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 12, 41, 2))
 
       assert_equal(
         {
@@ -117,7 +137,8 @@ RSpec.describe PikuriWeb::ConversationStore do
           'created_at' => '2026-08-27T12:03:51Z',
           'updated_at' => '2026-08-27T12:41:02Z',
           'shell' => 'pikuri-web-chat',
-          'model' => 'qwen3.6'
+          'model' => 'qwen3.6',
+          'server' => 'http://localhost:8080/v1'
         },
         meta_of(conversation)
       )
@@ -126,7 +147,7 @@ RSpec.describe PikuriWeb::ConversationStore do
     it 'commits the envelope only after the history has landed' do
       conversation = store.create(at: at)
       history = SpyHistory.new
-      store.save(conversation, history)
+      save(conversation, history)
 
       refute history.envelope_existed, 'meta.json was written before the history'
       assert (conversation.dir / 'meta.json').file?
@@ -134,7 +155,7 @@ RSpec.describe PikuriWeb::ConversationStore do
 
     it 'leaves a failed history write unlisted rather than half-committed' do
       conversation = store.create(at: at)
-      assert_raises(Errno::ENOSPC) { store.save(conversation, SpyHistory.new { raise Errno::ENOSPC }) }
+      assert_raises(Errno::ENOSPC) { save(conversation, SpyHistory.new { raise Errno::ENOSPC }) }
 
       refute (conversation.dir / 'meta.json').exist?
       assert_empty store.list
@@ -142,8 +163,8 @@ RSpec.describe PikuriWeb::ConversationStore do
 
     it 'rewrites in place on the next save, leaving no temp file behind' do
       conversation = store.create(at: at)
-      store.save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 12, 10, 0))
-      store.save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 13, 20, 0))
+      save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 12, 10, 0))
+      save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 13, 20, 0))
 
       assert_equal '2026-08-27T13:20:00Z', meta_of(conversation).fetch('updated_at')
       assert_equal ['meta.json'], conversation.dir.children.map { |c| c.basename.to_s }
@@ -155,7 +176,7 @@ RSpec.describe PikuriWeb::ConversationStore do
     # envelope, and #save writes that either way.
     def commit(at, **overrides)
       conversation = store.create(at: at)
-      store.save(conversation, SpyHistory.new)
+      save(conversation, SpyHistory.new)
       unless overrides.empty?
         meta = meta_of(conversation).merge(overrides.transform_keys(&:to_s))
         (conversation.dir / 'meta.json').write(JSON.generate(meta))
@@ -176,7 +197,7 @@ RSpec.describe PikuriWeb::ConversationStore do
     it 'keeps a conversation in place however late it is written to' do
       first = commit(Time.utc(2026, 8, 26, 9, 14, 2))
       second = commit(Time.utc(2026, 8, 27, 12, 3, 51))
-      store.save(first, SpyHistory.new, updated_at: Time.utc(2026, 8, 28, 18, 0, 0))
+      save(first, SpyHistory.new, updated_at: Time.utc(2026, 8, 28, 18, 0, 0))
       assert_equal [second.id, first.id], store.list.map(&:id)
     end
 
@@ -236,6 +257,27 @@ RSpec.describe PikuriWeb::ConversationStore do
       assert_equal conversation.title, row.title
     end
 
+    it 'reads the saved connection back out of the envelope' do
+      commit(at)
+      row = store.list.first
+      assert_equal 'qwen3.6', row.model_at_mint
+      assert_equal 'http://localhost:8080/v1', row.server_at_mint
+    end
+
+    # These values reach the conversation factory, and half a pair is worse
+    # than none: an envelope written before this shell recorded a server holds
+    # the *boot* model, which matching on alone is the conflation the pair
+    # exists to prevent.
+    it 'takes half a connection, or a non-string one, as no connection' do
+      commit(at, 'server' => nil)
+      assert_nil store.list.first.model_at_mint
+
+      commit(Time.utc(2026, 8, 28, 9, 0, 0), 'model' => 42)
+      assert store.list.first.supported
+      assert_nil store.list.first.model_at_mint
+      assert_nil store.list.first.server_at_mint
+    end
+
     it 'points each row at its directory' do
       conversation = commit(at)
       assert_equal conversation.dir, store.list.first.dir
@@ -245,12 +287,12 @@ RSpec.describe PikuriWeb::ConversationStore do
   context '#find' do
     it 'resolves a listed conversation' do
       conversation = store.create(at: at)
-      store.save(conversation, SpyHistory.new)
+      save(conversation, SpyHistory.new)
       assert_equal conversation.id, store.find(conversation.id).id
     end
 
     it 'answers nil for anything not in the listing, path-shaped ids included' do
-      store.save(store.create(at: at), SpyHistory.new)
+      save(store.create(at: at), SpyHistory.new)
       assert_nil store.find('2026-08-27T12-03-51Z-ffff')
       assert_nil store.find('../../etc')
       assert_nil store.find('')
@@ -262,7 +304,7 @@ RSpec.describe PikuriWeb::ConversationStore do
     # delete has to take with it.
     def saved(at: self.at)
       conversation = store.create(at: at)
-      store.save(conversation, HistoryWithAttachment.new)
+      save(conversation, HistoryWithAttachment.new)
       conversation
     end
 
@@ -312,7 +354,7 @@ RSpec.describe PikuriWeb::ConversationStore do
         ]
       )
 
-      store.save(conversation, history)
+      save(conversation, history)
       # #save's order is history-then-envelope; assert the reverse direction
       # too, since History#save is the one that could clobber.
       history.save(conversation.dir)

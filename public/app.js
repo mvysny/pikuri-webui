@@ -26,6 +26,8 @@ const cancelBtn = document.getElementById('cancel');
 const newBtn = document.getElementById('new-conversation');
 const statusState = document.getElementById('status-state');
 const statusPending = document.getElementById('status-pending');
+const statusModel = document.getElementById('status-model');
+const statusModelPending = document.getElementById('status-model-pending');
 const statusTokens = document.getElementById('status-tokens');
 const themeToggle = document.getElementById('theme-toggle');
 
@@ -51,9 +53,19 @@ const upsertBlock = ({ id, kind, html }) => {
 
 // `queued` means the turn is accepted but another conversation is holding the
 // executor. Saying so beats showing "busy" for a turn that has not started.
-const updateStatus = ({ state, busy, pending, tokens }) => {
+//
+// `model` is what the agent is on; `modelPending` a pick that has not reached
+// the top of a turn yet. The arrow between them is CSS's, so this span holds a
+// bare name that /model can read back as the intended connection.
+const updateStatus = ({
+  state, busy, pending, tokens, model,
+  model_pending: modelPending, model_missing: modelMissing,
+}) => {
   statusState.textContent = state === 'queued' ? 'waiting for a free slot' : state;
   statusPending.textContent = pending > 0 ? `${pending} queued` : '';
+  statusModel.textContent = model;
+  statusModel.dataset.missing = modelMissing ?? '';
+  statusModelPending.textContent = modelPending ?? '';
   statusTokens.textContent = tokens;
   cancelBtn.hidden = !busy;
   // Nothing else is gated on busy any more: sending queues rather than
@@ -136,7 +148,11 @@ cancelBtn.addEventListener('click', () => {
 // Named rather than inlined into the click: /new dispatches to it too, and the
 // button and the command must not become two paths that drift.
 const startConversation = () => {
-  fetch('/conversations', { method: 'POST' })
+  const body = new FormData();
+  // What the new conversation inherits its connection from: the server has no
+  // other way to know which conversation this tab is reading.
+  body.set('viewing', viewing);
+  fetch('/conversations', { method: 'POST', body })
     .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
     .then((id) => { location.href = `/c/${encodeURIComponent(id)}`; })
     .catch(() => {});
@@ -263,6 +279,35 @@ const openThemePicker = () => {
   });
 };
 
+// The connection picker. The marked row is the *intended* one — a pick that has
+// not landed yet is still what the user asked for — which is why the pending
+// span is consulted before the live one. Both are read out of the status bar
+// for the theme picker's reason: the server rendered the page before either
+// could move.
+//
+// The server answers 204 and the switch shows up on the status bar's own
+// frame, so there is nothing to apply here.
+const openModelPicker = () => {
+  const dialog = openDialog('Model', cloneTemplate('tpl-model'));
+  const current = statusModelPending.textContent || statusModel.textContent;
+  const missing = statusModel.dataset.missing;
+  if (missing) {
+    const note = dialog.querySelector('.model-missing');
+    note.textContent = `${missing} is no longer in the config file; this conversation is on ${current}.`;
+    note.hidden = false;
+  }
+  dialog.querySelectorAll('[data-model]').forEach((option) => {
+    if (option.dataset.model === current) option.setAttribute('aria-current', 'true');
+    option.addEventListener('click', () => {
+      const body = new FormData();
+      body.set('conversation', viewing);
+      body.set('name', option.dataset.model);
+      fetch('/model', { method: 'POST', body });
+      dialog.close();
+    });
+  });
+};
+
 // textContent, never markup: `name` is whatever was typed.
 const reportUnknownCommand = (name) => {
   const body = cloneTemplate('tpl-unknown-command');
@@ -278,6 +323,7 @@ const runCommand = (name) => {
   closeMenu();
   switch (name) {
     case '/new': startConversation(); break;
+    case '/model': openModelPicker(); break;
     case '/theme': openThemePicker(); break;
     case '/trifecta': openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')); break;
   }
