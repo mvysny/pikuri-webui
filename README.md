@@ -103,6 +103,18 @@ running. Reaching it from a phone also means binding off loopback, which
 is the thing the warning further down tells you not to do — on an iPad
 sharing the machine's own browser, none of that applies.
 
+In Safari, not in another browser:
+
+1. Open the address the server printed at boot — `http://127.0.0.1:9292`
+   on the machine itself, its LAN address from a phone.
+2. Tap **Share** — the square with the arrow out of it, in the bottom
+   toolbar on an iPhone, the top-right one on an iPad.
+3. Scroll the share sheet to **Add to Home Screen**.
+4. The name defaults to `pikuri`; change it or don't, then tap **Add**.
+
+Launch it from the icon and you get the page standalone — no address bar,
+no tabs, Kuri in the app switcher.
+
 The icon is Kuri, a pika: a small alpine animal that spends the summer
 stacking cut grass into a pile under a rock, spends the winter eating it,
 and never leaves its own mountain.
