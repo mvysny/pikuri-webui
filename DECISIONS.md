@@ -1222,6 +1222,33 @@ inherited by every subprocess pikuri spawns; a project-local file is
 git-committable. There is deliberately no `--api-key` flag and there
 should never be one.
 
+**Amended 2026-08-29: `--server` and `--model` dropped too, so a
+connection has exactly one source.** They overlaid the primary `[[llm]]`
+via `Config.apply_llm_overrides`, which meant a connection had two
+sources and a precedence rule between them — and the per-conversation
+model picker was about to add a third, saved one, turning the rule into
+a three-way question ("I booted `--model Z`, then opened an old
+conversation — what am I talking to?"). Removing the flags deletes the
+question rather than documenting it. Consequences: pointing the shell at
+a different server now requires writing `~/.config/pikuri/config.toml`,
+which is a handful of lines and a thing the user does once; the built-in
+`Config.default_llm` still covers the zero-config case on the defaults,
+so a first run against a stock llama.cpp needs no file at all.
+`Config.load(overrides:)` survives for `:sandbox` / `:confirm`, which a
+sibling shell may wire (`D_chat_only_entry_point`).
+
+**Rejected as an alternative to dropping them: keeping the flags and
+writing the precedence down** (saved wins on reopen; the flag is the
+default for new conversations). It costs no code, but it leaves a shell
+whose behaviour needs a paragraph to explain — complexity *plus*
+documentation of that complexity, where removal leaves neither.
+
+**Noted divergence from pikuri-tui**, whose three shells still take
+`--server` / `--model`. Accepted: a TUI is invoked ad-hoc many times a
+day, where a flag is genuinely the fastest path; pikuri-web is started
+once and lives, so the flag buys almost nothing and the ambiguity costs
+the same as anywhere. The intent is for the TUI to follow.
+
 ## D_track_pikuri_master — Path dependencies on `../pikuri`, not released gems (2026-08-27)
 
 **Status:** Accepted, shipped 2026-08-27; `pikuri-core` / `pikuri-pdf`

@@ -226,10 +226,13 @@ the alternatives that were rejected, live one entry per slug in
   path is the last step of cross-shell interop, not the first — the
   *format* is what travels. See `D_per_shell_state_root`.
 
-- **One config file for every pikuri shell, and secrets live only
-  there.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
-  schema, including sections this host never reads. No `--api-key`
-  flag, ever; no `ENV`; no project-local file.
+- **One config file for every pikuri shell, and a connection has exactly
+  one source.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
+  schema, including sections this host never reads. No `--api-key` flag,
+  ever; no `ENV`; no project-local file — and no `--server` / `--model`
+  either, so there is never a precedence rule between a flag, the file and
+  a conversation's own saved model. Pointing the shell somewhere new means
+  editing the file.
   See `D_schema_complete_config`.
 
 - **`--dev` is Sinatra's development mode, not code reloading** — the
@@ -304,8 +307,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `bin/pikuri-web-chat` — boot script: config load, the conversation
   factory (agent + tools + Interloper, one wiring for every
   conversation), the shared turn executor, the trifecta report, Puma start (server settings and
-  the shutdown hook). Same flags as the TUI plus `--port` / `--bind` /
-  `--dev`; never an `--api-key`.
+  the shutdown hook). Flags are only what the config file has no home for
+  — `--port` / `--bind` / `--turns` / `--dev`; never an `--api-key`, and
+  never a `--server` / `--model`.
 
 ## Conventions
 

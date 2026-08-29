@@ -66,11 +66,10 @@ describe PikuriWeb::Config do
   end
 
   describe 'CLI overrides (highest precedence)' do
-    it 'overrides the primary connection server/model, leaving the key untouched' do
+    it 'ignores connection keys — a server/model never comes from the command line' do
       c = load_bare(server: 'http://host:9', model: 'm2')
-      assert_equal 'http://host:9', c.primary_llm.server
-      assert_equal 'm2', c.primary_llm.model
-      assert_nil c.primary_llm.api_key
+      assert_equal described_class::DEFAULT_SERVER, c.primary_llm.server
+      assert_equal described_class::DEFAULT_MODEL, c.primary_llm.model
     end
 
     it 'treats false sandbox/confirm overrides as real values (not "absent")' do

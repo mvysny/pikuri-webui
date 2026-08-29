@@ -6,7 +6,7 @@ module PikuriWeb
   # The `~/.config/pikuri/config.toml` model connections and provider
   # keys, resolved once at boot and read from there on:
   #
-  #   config = PikuriWeb::Config.load(overrides: { model: cli_model })
+  #   config = PikuriWeb::Config.load
   #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
   #
@@ -162,11 +162,13 @@ module PikuriWeb
     #
     # @param overrides [Hash{Symbol => String, Boolean, nil}] CLI
     #   overrides; +nil+ values are ignored (treated as "flag not given").
-    #   Recognized keys: +:server+, +:model+ (each overrides the field of
-    #   the primary {Llm}); +:sandbox+, +:confirm+. There is no key
-    #   override: a secret must never travel on the command line (visible
-    #   in +ps+ and shell history) — it comes only from {Llm#api_key} in
-    #   this file.
+    #   Recognized keys: +:sandbox+, +:confirm+ — the coding switches, for
+    #   a sibling shell that wires them (`D_chat_only_entry_point`).
+    #   Nothing about a *connection* is overridable: no server, no model
+    #   and no key. A secret must never travel on the command line
+    #   (visible in +ps+ and shell history), and server/model would be a
+    #   second source of truth for something the file already owns
+    #   (`D_schema_complete_config`).
     # @param env [#[]] environment consulted for +XDG_CONFIG_HOME+ /
     #   +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
     # @return [Config] the resolved configuration.
@@ -196,7 +198,7 @@ module PikuriWeb
       check_unique!(mcp.map(&:id), 'code.mcp id')
 
       new(
-        llms:    apply_llm_overrides(llms, overrides),
+        llms:    llms,
         search:  build_search(merged['search']),
         sandbox: pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
         confirm: pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
@@ -498,19 +500,6 @@ module PikuriWeb
       "Basic #{["#{username}:#{password}"].pack('m0')}"
     end
 
-    # Overlay the primary-connection CLI overrides. A +nil+ override keeps
-    # the loaded/default value. Only the first {Llm} is touched — it is the
-    # one the shell boots on.
-    def self.apply_llm_overrides(llms, overrides)
-      return llms unless overrides[:server] || overrides[:model]
-
-      primary = llms.first.with(
-        server: overrides[:server] || llms.first.server,
-        model:  overrides[:model] || llms.first.model
-      )
-      [primary, *llms[1..]]
-    end
-
     def self.default_llm
       Llm.new(name: DEFAULT_LLM_NAME, server: DEFAULT_SERVER, model: DEFAULT_MODEL, api_key: nil,
               context_window: nil)
@@ -529,7 +518,7 @@ module PikuriWeb
 
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
                          :validate_top!, :validate_code!, :build_llm, :build_mcp, :build_mcp_headers,
-                         :build_basic_auth, :build_mcp_env, :build_search, :apply_llm_overrides, :default_llm,
+                         :build_basic_auth, :build_mcp_env, :build_search, :default_llm,
                          :pick, :check_unique!, :non_empty_string?
   end
 end

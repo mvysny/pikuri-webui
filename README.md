@@ -61,13 +61,15 @@ bundle install
 bin/pikuri-web-chat
 ```
 
-Then open <http://localhost:4567>. Defaults to the LLM server at
-`http://localhost:8080` and model
-`unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M`. Override with `--server`,
-`--model`, `--port` and `--bind`:
+Then open <http://localhost:4567>. With no config file it talks to the LLM
+server at `http://localhost:8080` using model
+`unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M`. To point it anywhere else, write an
+`[[llm]]` entry in `~/.config/pikuri/config.toml` (see
+[Configure](#configure)) — there are no `--server` / `--model` flags.
+`--port` and `--bind` are this shell's own:
 
 ```sh
-bin/pikuri-web-chat --server http://localhost:8082 --model my-model --port 9292
+bin/pikuri-web-chat --port 9292
 ```
 
 Ctrl+C stops it. Open browser tabs don't delay the exit.
@@ -254,10 +256,14 @@ from DuckDuckGo (and so from Bing, which fulfils its web results). Naming an
 engine whose key you did not set aborts at boot.
 
 `chmod 600` it — pikuri-web logs an advisory at boot if a file holding a
-literal key is group/other-readable. The first `[[llm]]` is the boot
-connection; `--server` / `--model` override its fields. Layering runs
-`/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml` →
-CLI flags.
+literal key is group/other-readable. The first `[[llm]]` is the connection
+a conversation starts on when it has no saved one of its own. Layering runs
+`/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml`.
+
+There is deliberately no `--server` or `--model` flag: a connection lives in
+this file and nowhere else, so there is never a question of which of the two
+wins. To talk to a different server or model, add or reorder an `[[llm]]`
+entry.
 
 > [!WARNING]
 > There is no authentication of any kind, and no notion of who is asking:

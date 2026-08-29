@@ -34,13 +34,11 @@ require 'pikuri-core'
 require 'pikuri-pdf'
 require 'pikuri_web'
 
-# CLI overrides start nil ("flag not given") so PikuriWeb::Config can tell
-# an explicit flag from an absent one; they override the primary [[llm]]
-# connection's fields. Built-in connection defaults live in Config, the
-# single source of truth shown in --help. --port / --bind are ours alone
-# and have no config-file home.
-cli_server = nil
-cli_model  = nil
+# Every flag here is one this shell alone owns and the config file has no
+# home for. Which model a conversation talks to is deliberately *not* among
+# them: connections come from [[llm]] in config.toml and from nowhere else,
+# and which one a given conversation is on is that conversation's own saved
+# state (`D_schema_complete_config`).
 port = 4567
 bind = '127.0.0.1'
 turns = 1
@@ -50,8 +48,6 @@ parser = OptionParser.new do |opts|
   opts.banner = 'Usage: pikuri-web-chat [options]'
   opts.separator ''
   opts.separator 'Options:'
-  opts.on('--server URL', "LLM server base URL (default: #{PikuriWeb::Config::DEFAULT_SERVER})") { |v| cli_server = v }
-  opts.on('--model NAME', "Model identifier (default: #{PikuriWeb::Config::DEFAULT_MODEL})") { |v| cli_model = v }
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
   opts.on('--turns N', Integer,
@@ -83,7 +79,7 @@ end
 # only from the config file. Boot-time, before Puma binds, so a bad file
 # is a plain warn + exit rather than a server that serves a broken agent.
 begin
-  config = PikuriWeb::Config.load(overrides: { server: cli_server, model: cli_model })
+  config = PikuriWeb::Config.load
   # Asked here rather than left to WebSearch.build below, so an unusable
   # [search] selection exits like any other config error instead of a
   # backtrace out of the agent wiring.

@@ -3,7 +3,7 @@
 Switch the model without restarting the server, and have each conversation remember the one it is
 on. A new conversation inherits the model of the conversation currently shown.
 
-Status: **backend-only work, with a designed shape and five open questions.** The UI question is
+Status: **backend-only work, with a designed shape and four open questions.** The UI question is
 closed (the slash palette shipped), the library half is done, nothing is blocked on upstream, and
 the two questions that gated the implementation shape — where the selection lives and when it is
 written — are settled below. What is left open is how loud the edge cases are. The leans under
@@ -44,8 +44,8 @@ written — are settled below. What is left open is how loud the edge cases are.
 - `bin/pikuri-web-chat:96` takes `config.primary_llm` (`llms.first`) into a local `llm`, and the
   conversation factory closes over it: every agent gets the same
   `ChatTransport.from_openai_server(server:, model:, api_key:, context_window:)`
-  (`bin/pikuri-web-chat:181`). The only knobs are `--server` / `--model` at launch
-  (`Config.apply_llm_overrides`) or the first `[[llm]]` in the config file.
+  (`bin/pikuri-web-chat:181`). The only knob is the first `[[llm]]` in the config file — the
+  `--server` / `--model` flags were removed on 2026-08-29.
 - `Config` already parses *every* `[[llm]]` and validates it — unique `name`, per-connection
   `server` / `model` / `api_key` / `context_window` — and exposes them as `Config#llms`. Nothing
   reads past `primary_llm`. Both rdocs say so on purpose: "the rest await a model picker this shell
@@ -211,10 +211,11 @@ Plain work, no fork in it:
   stops being true. What it *draws* is `Q_switch_marker`.
 - **The boot banner** (`bin/pikuri-web-chat:296`, "agent: model @ server") becomes the *default*
   model, not the model.
-- **`--model` / `--server`** keep meaning "override the primary connection", which is now also
-  "the default for a conversation that has no saved one". `README.md`'s config section needs the
-  distinction; `D_schema_complete_config` is untouched — no new keys, the `[[llm]]` array is
-  already the schema. Whether saved outranks the override is `Q_saved_vs_cli_override`.
+- **`--model` / `--server` are gone** (2026-08-29, ahead of this work rather than as part of it).
+  They were a second source for a connection, and this feature was about to add a third; the
+  three-way precedence question is deleted rather than documented. So the first `[[llm]]` is
+  simply "the connection a conversation starts on when it has no saved one", with nothing
+  outranking it. See the 2026-08-29 amendment to `D_schema_complete_config`.
 - **`restore!`** (`agent_runner.rb:124`) needs no change: the agent is already on the right
   transport when it runs, because the factory resolved it at mint.
 
@@ -282,15 +283,6 @@ and not `supported: false` (that flag means "unreadable envelope"; overloading i
 else. Open: is a silent fallback actually fine, given the identity is the `[model, server]` pair, so
 a config edit that only renames a connection is invisible by design?
 
-### `Q_saved_vs_cli_override` — does a saved model outrank `--model` / `--server`?
-
-Someone who boots `--model Z` to try Z, then opens an old conversation, silently gets that
-conversation's saved model instead. Which is the feature working as designed, and also a surprise.
-
-**Lean: saved wins on reopen; the override is the default for *new* conversations** — one README
-sentence. Open: whether `--model` should instead mean "this run, everything", which is what it means
-today and what a user who has never seen the picker will assume.
-
 ## The upstream question, answered: not blocked
 
 `../pikuri/ideas/thinking-block-replay.md` is an open pikuri note about `load_history!`'s thinking-
@@ -312,8 +304,8 @@ are worth recording so nobody re-opens the coupling:
 - **The one place it does reach us** is that `[[llm]]` is provider-generic, so an OpenRouter /
   DeepSeek / vLLM entry *is* that live consumer — and that is precisely the user who has more than
   one connection, i.e. the one this picker is for. But it is reachable today with a single
-  connection too (boot `--model Z`, reopen an old conversation, same load-time scrub). A picker
-  makes it routine, not new.
+  connection too (edit the `[[llm]]`'s `model`, restart, reopen an old conversation — same
+  load-time scrub). A picker makes it routine, not new.
 
 Nothing to re-argue here; if the behaviour changes, it changes under us and the CHANGELOG says how.
 
@@ -339,5 +331,6 @@ Nothing to re-argue here; if the behaviour changes, it changes under us and the 
   reality → `AgentRunner`'s rdoc.
 - The catalog-as-constructor-argument seam → the **Layout** line for `bin/pikuri-web-chat`, and a
   sentence in the `D_pikuri_free_core` invariant if the wording no longer covers it.
-- `--model` as "default for new conversations", and the picker itself → `README.md`.
+- The picker itself, and "the first `[[llm]]` is what a conversation with no saved connection
+  starts on" → `README.md`.
 - Anything about the library's repair → `../pikuri`, never here.
