@@ -42,15 +42,15 @@ module PikuriWeb
   # name is a config file away from being renamed, and a model id alone cannot
   # tell two servers running one model apart. +server+ is the transport's
   # normalized +api_base+, so the pair is exactly what {ModelCatalog#resolve}
-  # matches on. Adding these keys needed no {SCHEMA} bump — {#load_meta} checks
-  # the version and ignores what it does not read, so an older envelope simply
-  # reads back as a conversation with no saved connection.
+  # matches on. An envelope missing either half reads as a conversation with no
+  # saved connection — a key can be added here without a {SCHEMA} bump, because
+  # {#load_meta} checks the version and ignores what it does not read.
   #
   # {#save} takes the pair per call rather than the store holding one, because
-  # what gets written is the *agent's own* transport at turn end: a store-wide
-  # field could only ever record the boot connection. {Conversation}'s
-  # +_at_mint+ pair is the other direction — what disk said when the runner was
-  # minted — and is deliberately not refreshed by a save.
+  # what gets written is the *agent's own* transport at turn end; a store-wide
+  # field could only ever record the connection this process booted on.
+  # {Conversation}'s +_at_mint+ pair runs the other way — what disk said when
+  # the runner was minted — and a save deliberately does not refresh it.
   #
   # == Implementation details
   #
@@ -114,8 +114,9 @@ module PikuriWeb
     # @!attribute [r] model_at_mint
     #   @return [String, nil] the model +meta.json+ held when this value object
     #     was built, or what {#create} inherited; nil for a conversation with
-    #     no saved connection. Stale the moment a turn saves — the name says
-    #     so, and the conversation factory is its only reader
+    #     no saved connection. Read once, when a runner is minted on it —
+    #     the next save moves +meta.json+ on and this never follows, which is
+    #     what the suffix is there to say at the call site
     # @!attribute [r] server_at_mint
     #   @return [String, nil] the +server+ half of the same pair
     Conversation = Data.define(:id, :dir, :title, :created_at, :supported,
@@ -236,7 +237,8 @@ module PikuriWeb
 
     # Commit a conversation to disk — the directory, the history, the envelope.
     #
-    #   store.save(conversation, agent.export_history)   # => the directory
+    #   store.save(conversation, agent.export_history,
+    #              model: transport.model, server: transport.api_base)   # => the directory
     #
     # +meta.json+ goes last because it is the commit point: {#list} skips a
     # directory without one, so a save that dies half-way leaves an *unlisted*
@@ -352,14 +354,14 @@ module PikuriWeb
     #   until something better replaces it
     def stamp_title(at) = at.getlocal.strftime('%Y-%m-%d %H:%M')
 
-    # The pair is one value: half of it is none of it. An envelope written
-    # before this shell recorded a +server+ has a +model+ that named the *boot*
-    # connection rather than the conversation's, and matching on it alone is
-    # exactly the conflation the pair exists to prevent — so such a
-    # conversation reads as one with nothing saved and opens on the default.
+    # The pair is one value: half of it is none of it, and a half-written or
+    # hand-edited one reads as no connection at all rather than travelling on
+    # to the conversation factory.
     #
-    # A non-string (hand-edited, or a schema someone bent) reads the same way:
-    # these values reach the conversation factory.
+    # An envelope carrying a +model+ and no +server+ is the case that matters:
+    # that +model+ named the connection its *writer* was booted on, not the
+    # conversation's, so matching on it alone is the very conflation the pair
+    # exists to prevent.
     #
     # @param meta [Hash, nil]
     # @return [Array(String, String), Array(nil, nil)]

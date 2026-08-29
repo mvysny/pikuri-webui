@@ -109,9 +109,8 @@ module PikuriWeb
     #   from, and what turns the agent's transport into a display name
     # @param missing_connection [String, nil] +"model @ server"+ when this
     #   conversation was minted on {ModelCatalog#primary} because the
-    #   connection it had saved is no longer in the config file — a note for
-    #   the +/model+ dialog, and true only until the next save records the
-    #   fallback
+    #   connection it had saved has left the config file. Reported until a
+    #   save or a pick makes it untrue, after which it describes nothing
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
                    conversations:, transcript:, listener:, executor:, catalog:,
                    token_log: nil, missing_connection: nil)
@@ -223,6 +222,7 @@ module PikuriWeb
         next :discarded if @discarded
 
         @pending = choice.transport == @agent.transport ? nil : choice.transport
+        # Choosing supersedes being told what was lost.
         @missing_connection = nil
         :selected
       end
@@ -233,11 +233,11 @@ module PikuriWeb
     # The connection this conversation will talk to *next* — the pick if one
     # is parked, what the agent is on otherwise.
     #
-    #   registry.create(from: viewing)   # a new conversation inherits this
+    #   runner.model   # => ['qwen3.6', 'http://localhost:8080/v1']
     #
     # Intent rather than reality on purpose: a pick made on a busy conversation
     # and immediately followed by "new conversation" should hand the new one
-    # what the user asked for.
+    # what the user asked for, not what the old one is still finishing on.
     #
     # @return [Array(String, String)] the +[model, server]+ pair, in the form
     #   {ConversationStore} stores and {ModelCatalog#resolve} matches
@@ -248,8 +248,7 @@ module PikuriWeb
 
     # Retire this runner for good: it will start no turn, inject nothing, take
     # no model and write no folder again. One-way, and refused while a turn is
-    # in flight —
-    # so a deleter asks for the folder and the turn in one move:
+    # in flight — so a deleter asks for the folder and the turn in one move:
     #
     #   return :busy if runner && !runner.discard!   # then remove the folder
     #

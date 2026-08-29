@@ -8,22 +8,20 @@ module PikuriWeb
   # forth between what the browser says and what +run_loop+ takes:
   #
   #   catalog = ModelCatalog.from_llms(config.llms)
-  #   catalog.find('Local Qwen 3.6')&.transport   # a name the browser posted
-  #   catalog.resolve(model: m, server: s)        # a pair meta.json saved
-  #   catalog.name_for(agent.transport)           # → 'Local Qwen 3.6', for the status bar
-  #   catalog.rows                                # what the /model dialog lists
-  #
-  # {#primary} is what a conversation with no saved connection starts on, and
-  # the fallback for one whose saved connection has left the config file.
+  #   catalog.find('Local Qwen 3.6')&.transport   # from a name the browser posted
+  #   catalog.resolve(model: m, server: s)        # from a pair meta.json saved
+  #   catalog.name_for(agent.transport)           # => 'Local Qwen 3.6'
+  #   catalog.rows                                # => [{name:, model:, context_window:}, …]
   #
   # == Identity is the +[model, api_base]+ pair
   #
-  # {#name} is the unique key ({Config} enforces it) but is *not* recoverable
-  # from a transport, so every transport-side lookup keys on the pair instead —
-  # two +[[llm]]+ entries may run one model on two servers, and the model alone
-  # would conflate them. Port of pikuri-tui's +Shared::Model::Choice.key+,
-  # including {#name_for}'s fall back to the raw model id: a transport minted
-  # outside this catalog still renders as something.
+  # {Choice#name} is the unique key ({Config} enforces it) but is *not*
+  # recoverable from a transport, so every transport-side lookup keys on the
+  # pair instead — two +[[llm]]+ entries may run one model on two servers, and
+  # the model alone would conflate them. Port of pikuri-tui's
+  # +Shared::Model::Choice.key+, including {#name_for}'s fall back to the raw
+  # model id: a transport minted outside this catalog still renders as
+  # something.
   #
   # Immutable.
   class ModelCatalog
@@ -38,11 +36,11 @@ module PikuriWeb
       # @return [Array(String, String)] the +[model, api_base]+ identity pair
       def key = [transport.model, transport.api_base]
 
-      # @return [String] model identifier, as the dialog lists it
+      # @return [String] the model identifier the transport talks to
       def model = transport.model
 
-      # @return [String] normalized server base (the +/v1+ suffix included),
-      #   which is what +meta.json+ stores and {#resolve} matches on
+      # @return [String] normalized server base, +/v1+ suffix included — the
+      #   form +meta.json+ stores and {ModelCatalog#resolve} matches on
       def server = transport.api_base
 
       # @return [Integer, nil] explicit cap, or nil where pikuri's +/props+
@@ -50,12 +48,12 @@ module PikuriWeb
       def context_window = transport.context_window
     end
 
-    # The connection (+api_base+ / +api_key+) rides each transport's own
-    # per-chat +RubyLLM::Context+, so nothing here touches a process-global
-    # +RubyLLM.configure+ and two conversations on two servers coexist.
+    # Each transport carries its own connection, which pikuri turns into a
+    # per-chat +RubyLLM::Context+ — so no process-global +RubyLLM.configure+ is
+    # involved and two conversations on two servers coexist.
     #
     # @param llms [Array<Config::Llm>] every configured connection, in
-    #   declaration order — {#primary} is the first
+    #   declaration order
     # @return [ModelCatalog]
     def self.from_llms(llms)
       new(choices: llms.map do |llm|
@@ -82,12 +80,12 @@ module PikuriWeb
     # @return [Array<Choice>] every connection, declaration order
     attr_reader :choices
 
-    # @return [Choice] the connection a conversation starts on when it has no
-    #   saved one, and where a saved one that has left the config falls back to
+    # @return [Choice] the first +[[llm]]+ — where a conversation with no
+    #   saved connection starts, and what a vanished one falls back to
     def primary = @choices.first
 
-    # @return [Boolean] whether there is anything to pick between — what the
-    #   +/model+ palette entry is gated on
+    # @return [Boolean] whether there is more than one connection to pick
+    #   between
     def multiple? = @choices.size > 1
 
     # @param name [String] as posted by the browser
@@ -109,8 +107,9 @@ module PikuriWeb
       @by_key[[transport.model, transport.api_base]]&.name || transport.model.to_s
     end
 
-    # @return [Array<Hash>] +{name:, model:, context_window:}+ per connection —
-    #   the Pikuri-free form the +/model+ dialog is rendered from
+    # @return [Array<Hash>] +{name:, model:, context_window:}+ per connection:
+    #   everything a picker displays, and nothing that would carry a
+    #   +Pikuri::*+ type across the seam
     def rows
       @choices.map do |choice|
         { name: choice.name, model: choice.model, context_window: choice.context_window }
