@@ -33,6 +33,12 @@ module PikuriWeb
     # dev-mode path rewriting interferes with rack-test assertions.
     disable :show_exceptions, :static_cache_control
 
+    # Rack's table has no +.webmanifest+ entry, so +public/manifest.webmanifest+
+    # would go out as octet-stream and every browser refuses to parse a manifest
+    # served as one. Registering the type is the whole server side of the PWA
+    # install path — the manifest itself stays a static file like style.css.
+    mime_type :webmanifest, 'application/manifest+json'
+
     # The connections +/model+ offers, as {ModelCatalog#rows} — plain hashes,
     # so this side of the seam never sees a transport. Empty until the host
     # sets it, which is also what keeps +/model+ out of a palette that could

@@ -26,6 +26,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
   <title><%= title %> · pikuri-web</title>
+
+  <!-- Kuri, the mascot, at every size a browser asks for. Firefox takes the
+       SVG; the 32px PNG is the fallback. iOS reads only `apple-touch-icon` for
+       the home screen, ignores the manifest's icons there, and composites
+       transparency onto black — which is why every PNG here carries an opaque
+       plate rather than a bare mascot. See DECISIONS.md D_icon_plate.
+
+       `theme-color` is rendered per theme rather than left to the manifest, so
+       iOS's status bar matches the palette the cookie actually resolved to;
+       the manifest's own value can only ever be the dark default. -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="<%= theme == 'light' ? '#fbfbfa' : '#1e1f22' %>">
+  <meta name="apple-mobile-web-app-title" content="pikuri">
+
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>

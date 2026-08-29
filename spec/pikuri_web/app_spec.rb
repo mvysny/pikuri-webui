@@ -208,6 +208,25 @@ RSpec.describe PikuriWeb::App do
       assert_includes last_response.body, '☾ dark'
     end
 
+    # theme-color paints the chrome around the page — on iOS, the status bar of
+    # the installed app. The manifest carries one value for the whole app and it
+    # can only be the dark default, so the resolved theme has to override it
+    # here, or a light-theme user gets a dark bar over a paper-white page.
+    it 'renders theme-color from the resolved theme, not the manifest default' do
+      get_live
+      assert_includes last_response.body, '<meta name="theme-color" content="#1e1f22">'
+      set_cookie 'theme=light'
+      get_live
+      assert_includes last_response.body, '<meta name="theme-color" content="#fbfbfa">'
+    end
+
+    it 'links the icons and the manifest the install path needs' do
+      get_live
+      assert_includes last_response.body, '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
+      assert_includes last_response.body, '<link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+      assert_includes last_response.body, '<link rel="manifest" href="/manifest.webmanifest">'
+    end
+
     it 'renders the whole slash-command catalog for app.js to filter in place' do
       get_live
       PikuriWeb::SlashCommand.catalog(connections: models.size).each do |command|

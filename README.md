@@ -93,6 +93,20 @@ Note that web searches still serialize across conversations however high
 you set this — the rate limiter that keeps you off provider blocklists is
 scoped to your IP, not to a conversation.
 
+### Keeping it on a home screen
+
+The page ships a web manifest, so Safari's **Add to Home Screen** on an
+iPad or iPhone gives pikuri its own icon and opens it without browser
+chrome. It is still the same server on the same machine: the icon is a
+bookmark, not an app, and it opens on nothing if the server isn't
+running. Reaching it from a phone also means binding off loopback, which
+is the thing the warning further down tells you not to do — on an iPad
+sharing the machine's own browser, none of that applies.
+
+The icon is Kuri, a pika: a small alpine animal that spends the summer
+stacking cut grass into a pile under a rock, spends the winter eating it,
+and never leaves its own mountain.
+
 ## Slash commands
 
 Type `/` in the message box and a list of commands appears above it. Keep

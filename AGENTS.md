@@ -187,6 +187,19 @@ the alternatives that were rejected, live one entry per slug in
   correctness argument on that number.
   See `D_serial_turn_executor`.
 
+- **`kuri.svg` is the mascot; every rasterized icon is that drawing on an
+  opaque plate.** Kuri the pika in the Talus coat — a mid grey, so no
+  ground can be assumed. The master SVG is transparent; the favicon, the
+  two manifest icons, the maskable variant and `apple-touch-icon` all sit
+  on `#1e1f22`, because iOS composites transparency onto black and takes
+  its home-screen icon from `apple-touch-icon` rather than the manifest.
+  The geometry has exactly one sanctioned duplicate (`favicon.svg`, which
+  cannot reference an external file); change the drawing and both files
+  *and* the four PNGs move together. The plate colour and `index.erb`'s
+  `theme-color` are the only raw colours outside `style.css`, and are
+  exceptions on the record — don't grow a third from them.
+  See `D_icon_plate`.
+
 - **Theme is a presentational cookie, not transcript state.** Eleven
   semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
   renders `data-theme` onto `<html>` and app.js rewrites the cookie in
@@ -318,6 +331,15 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
   thinking, cyan tool lines).
+- `public/kuri.svg` — the mascot, transparent and unplated; master
+  artwork every icon beside it is rendered from.
+- `public/favicon.svg` — the tab icon: Kuri on a plate; the one
+  sanctioned copy of the master's geometry.
+- `public/icon-{32,192,512}.png`, `public/icon-maskable-512.png`,
+  `public/apple-touch-icon.png` — the plated raster set; generated, see
+  `D_icon_plate` for the sizes.
+- `public/manifest.webmanifest` — the PWA manifest: name, standalone
+  display, the three manifest icons.
 - `bin/pikuri-web-chat` — boot script: config load, the model catalog, the
   conversation factory (agent + tools + Interloper + the connection this
   conversation is minted on, one wiring for every conversation), the

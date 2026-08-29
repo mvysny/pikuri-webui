@@ -84,6 +84,91 @@ design or the invariant.
 
 ---
 
+## D_icon_plate — Every rasterized app icon carries an opaque plate; only the master SVG is transparent (2026-08-29)
+
+**Status:** Accepted, shipped 2026-08-29 in `public/` (`kuri.svg`,
+`favicon.svg`, the four PNGs, `manifest.webmanifest`), `views/index.erb`
+and `App`'s `mime_type :webmanifest`.
+
+**Context.** Making the shell installable needs an icon, and pikuri had
+no mascot at all. The one drawn for it — Kuri, a pika, in the *Talus*
+coat — is a **mid grey** (`#a89c8e`) with a cream muzzle. The coat was
+chosen over a warmer amber precisely because it reads as the animal
+rather than a cartoon, and that choice is what forces this decision: a
+mid grey has no ground it reliably contrasts against.
+
+Two platform facts narrow it further, both downstream of
+`D_target_browsers` (Firefox on the desktop, Safari on iPad and iPhone —
+so the install path that actually matters here is iOS *Add to Home
+Screen*, not Android):
+
+- iOS takes its home-screen icon from `apple-touch-icon`, **not** from
+  the manifest's `icons`, and it **composites transparency onto black**.
+  A transparent PNG of a grey animal loses its dark eyes and whiskers
+  into the black iOS fills in behind them.
+- `purpose: "maskable"` is an Android concept that iOS ignores, but it
+  costs one file and is the only way an Android launcher crops the icon
+  without clipping Kuri's ears.
+
+**Decision.** `kuri.svg` is the master: transparent, no plate, tight
+`viewBox` on the art's own bounding square, for the README and anywhere
+a bare mascot is wanted. Every *rasterized* icon is that drawing centred
+on an opaque `#1e1f22` plate — rounded for the `any` icons and the
+favicon, square and full-bleed for `apple-touch-icon` (iOS applies its
+own superellipse) and for the maskable variant. The manifest stays a
+static file; the only server-side change is registering the
+`.webmanifest` MIME type, which Rack's table lacks and without which
+every browser refuses to parse it.
+
+**Rejected: transparent PNGs, letting each platform supply the ground.**
+The tidier asset set, and what a saturated mascot could afford. Talus
+cannot: on iOS the ground is black whatever the wallpaper, and on a white
+tab strip a grey blob with a cream face is a smudge. The plate is the
+price of the coat, and it was paid deliberately — the alternative was
+re-opening the coat choice to suit the file format, which is the tail
+wagging the dog.
+
+**Rejected: SVG-only icons, no PNGs at all.** Tempting for a project with
+no build step: one file, every size. But `apple-touch-icon` does not
+accept SVG, and manifest SVG-icon support is uneven enough that the
+install prompt is the wrong place to discover it. The PNGs are generated
+artifacts committed to the repo, the same bargain as any other
+checked-in asset.
+
+**Consequences.** The geometry lives in `kuri.svg` and is duplicated
+**once**, in `favicon.svg` — a favicon cannot reference an external file,
+so that copy is sanctioned and marked as such in both headers. Changing
+the drawing means changing both *and* re-rendering the four PNGs. There
+is deliberately no generator script: nothing here has a build step, and
+the mascot changes about as often as a logo does. Any SVG rasterizer
+reproduces them from a plated wrapper at the percentages below.
+
+| file | px | plate | art |
+|---|---|---|---|
+| `icon-512.png` | 512 | rounded, r=104 | 76% |
+| `icon-192.png` | 192 | rounded, r=39 | 76% |
+| `icon-32.png` | 32 | rounded, r=6.5 | 82% |
+| `apple-touch-icon.png` | 180 | square | 72% |
+| `icon-maskable-512.png` | 512 | square | 74% |
+
+The maskable percentage is not taste. Android keeps only the centred
+circle of 80% diameter, and Kuri's widest point (an ear's outer edge)
+sits at 0.518× his own width from centre, so art much above 77% starts
+losing an ear. 74% is that bound with margin.
+
+**This is a sanctioned exception to `D_theme_cookie`'s "nothing outside
+`style.css` may read a raw colour", in two places, both unavoidable
+rather than sloppy.** An icon is a *file*, rendered by a launcher that
+never loads the page, so it cannot resolve a CSS token — `#1e1f22` is
+baked into the plate. And `<meta name="theme-color">` is read by the
+browser before any stylesheet applies, so `index.erb` writes the literal
+for the resolved theme. Neither is a themed *surface*: the icons commit
+to the dark plate under both themes, and the meta tag is the one place a
+palette value is legitimately written twice. A *third* raw colour outside
+`style.css` should be argued for, not assumed from these two.
+
+---
+
 ## D_per_conversation_model — A conversation's model is `[model, server]` in `meta.json`, minted onto the agent by the factory and written back at turn end from the agent's own transport (2026-08-29)
 
 **Status:** Accepted, shipped 2026-08-29. `/model` switches a live
