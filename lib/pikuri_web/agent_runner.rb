@@ -402,17 +402,19 @@ module PikuriWeb
     # how a queued turn is dropped without the executor needing to support
     # dequeuing.
     #
+    # Both paths broadcast. Nothing else reports the start of a turn that
+    # really did wait for a slot: {#submit}'s frame says +:running+ only when
+    # the executor happens to get here before it.
+    #
     # @return [:running, :abandoned]
     def claim_running
       abandoned = @mutex.synchronize do
         @state = :running unless @abandon
         @abandon
       end
-      return :running unless abandoned
-
-      @mutex.synchronize { @state = :idle }
+      @mutex.synchronize { @state = :idle } if abandoned
       broadcast_status
-      :abandoned
+      abandoned ? :abandoned : :running
     end
 
     # @return [Pikuri::Agent::ChatTransport, nil] the parked selection, taken;

@@ -115,7 +115,10 @@ RSpec.describe 'conversations end to end' do
 
       refute_empty first.transcript.to_a
       assert_empty second.transcript.to_a
-      assert_empty drain_frames(watching_second)
+      # Not silence: the sidebar signal is addressed to every tab on purpose,
+      # because the first conversation's row now has a dot. What must never
+      # arrive is a frame carrying the first conversation's content or status.
+      assert_equal ['conversations'], event_types(drain_frames(watching_second)).uniq
       refute (second.conversation.dir / 'history.json').exist?
     end
 

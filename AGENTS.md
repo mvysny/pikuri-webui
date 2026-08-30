@@ -84,11 +84,15 @@ the alternatives that were rejected, live one entry per slug in
   no UI thread, no marshaling.
   See `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
-- **No owner thread, and no session concept — but if state ever becomes
-  shared, it gets *one global* mechanism**, a queue or a lock and **never
-  a Vaadin-style per-session one**. Server state is partitioned per
-  conversation and single-writer; each browser owns its own view state.
-  {Broadcaster} stays outside either, as a sink. See `D_no_event_queue`.
+- **No session concept, and anything genuinely shared gets *one global*
+  mechanism** — a queue or a lock, **never a Vaadin-style per-session
+  one**. Server state is partitioned per conversation and single-writer;
+  each browser owns its own view state. {Broadcaster} stays outside
+  either, as a sink. **The "no owner thread" half is reopened**: the
+  partition buys isolation but not atomicity across a seam — two objects
+  mutated or read as one unit — and a mechanism for that is being chosen.
+  Until it is, a new seam is a thing to raise, not to add quietly.
+  See `D_no_event_queue`.
 
 - **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
   trap** — both run on the far side of Puma's unbounded graceful wait.

@@ -713,9 +713,10 @@ default than a warning in the README.
 
 ## D_no_event_queue — No owner thread: state is partitioned per conversation, browser state stays in the browser, and anything genuinely shared gets *one global* mechanism
 
-**Status:** Accepted. Nothing to ship: this is a decision *not* to build
-the owner thread that was on the roadmap. The idea file that argued for it
-graduated into this entry.
+**Status:** **Reopened.** What follows was accepted, and its audit still
+holds — but it answered "do we need an owner thread?" when the question
+was "what provides atomicity?". See *Reopened* at the foot of the entry;
+the mechanism chosen lands as its own entry.
 
 **Context.** The standing plan was to give all mutable state a single
 owner thread, Tuile-style: every other thread posts a command, no locks,
@@ -770,7 +771,14 @@ subscribe behind a running turn and the shutdown path behind a wedged one
 Sinatra has no concurrency model and no server-side state model —
 `session` is a signed cookie, so there is nothing to lock — and mainstream
 Rack/Rails practice is to *not have this problem*: stateless processes,
-shared state in Postgres or Redis, the database doing the locking. A live
+shared state in Postgres or Redis, the database doing the locking. And in
+that sentence the database is not storage, it is the *concurrency
+architecture*: decompose ACID and it is this entry's whole subject —
+atomicity is the work packet, isolation is the untorn cross-object read,
+serializability is the total order. A Rails app has had an owner queue all
+along, spelled `BEGIN` / `COMMIT`. Sinatra offers no opinion because the
+opinion was always downstream of it; remove the database and a thread pool
+is the entire remaining concurrency model. A live
 in-memory object graph plus a worker thread is structurally a desktop app
 that speaks HTTP, so the precedents are Tuile, Swing and Vaadin rather
 than Rails. It is also why a global queue and a global lock are one
@@ -794,11 +802,69 @@ owns nothing, so it would guard the empty set while adding the session
 concept this app refuses. Recorded as a rejection rather than an omission
 because it is what a reader who knows Vaadin reaches for first.
 
+**Amended: the case that reopens this is *reproducibility*, and a
+defect-shaped trigger could never have caught it.** Found by inspection:
+{AgentRunner#claim_running} moved a turn from `:queued` to `:running`
+without broadcasting, so a turn that really waited for an executor slot
+left the status bar reading "waiting for a free slot" until it ended.
+It survived because `#submit` broadcasts *after* posting the job and the
+pool thread usually wins the race to set `:running` first — the frame is
+right by luck. A lucky race making the system *usually* work is worse
+than one that always fails: what it hides is unreportable ("sometimes the
+status bar doesn't move") and, being a statement-level interleaving,
+unreproducible on demand. Fixed by broadcasting on both of
+`#claim_running`'s paths.
+
+That is a better argument than the hygiene case rejected above, and a
+different one. The value of one global queue is not that it serializes
+but that it makes a **work packet atomic**: the system is only ever
+observed *between* packets, never inside one. It does not buy determinism
+— whether a submit lands before or after a turn ends is genuine external
+concurrency, and both orders stay reachable — but it shrinks the
+reachable set from arbitrary interleavings of *statements* to arbitrary
+orderings of *actions*, and an action ordering is finite, enumerable and
+writable as a test. This suite can already pin one interleaving, with a
+gate job holding the executor; what it cannot do is pin one nobody
+thought to look for.
+
+**What still holds it off, and neither reason is comfort.** The owner
+thread trades a defect class for a *blast radius*. "The owner must never
+block" (below) is reviewable in a way that reasoning about interleavings
+is not — the action bodies are a small enumerable set — but it is still
+discipline nothing enforces, and the realistic breach is not a blocking
+call, which review catches. It is head-of-line stalling behind a packet
+that merely runs *long*, and two are already in hand: kramdown, which
+`D_rerender_and_replace` runs at 15 fps, and {ConversationStore#save} at
+turn end. Both sit on the agent thread today, where a stall costs one
+conversation; behind an owner they cost every conversation at once. But
+the cost is blast radius only, *not* diagnosis — and that asymmetry cuts
+the other way from the paragraph above. A stall is a stable state holding
+its own evidence: one dump of `Thread.list` backtraces names the packet
+and the line. The race consumes its evidence instead, leaving a system
+that has already moved on to a state that looks correct. A freeze you can
+read; a lost frame you cannot.
+
+And there is currently exactly **one** cross-thread
+compose-then-publish site, {AgentRunner#status_data}: it is composed off
+unlocked state and handed to a {Broadcaster} that snapshots subscribers
+under its lock and pushes *outside* it, so two threads can compose in one
+order and push in the other, leaving the browser holding the older frame.
+{Transcript} already solved the same problem the other way, with an
+immutable `Block` snapshot no reader can have rewritten underneath it.
+One site is a site to fix, not an architecture.
+
 **If one is ever built, these constraints come from decisions already
 made** and would otherwise be rediscovered by hitting them:
 
 - **The owner must never block** — not on I/O, a socket, a lock, or a
   reply from a thread that might be waiting on it.
+- **The stall must be dumpable.** Ruby has no `jstack`, so the one
+  advantage a freeze has over a race — that it holds still and keeps its
+  evidence — is not free: a signal trap printing every `Thread.list`
+  backtrace is what turns "it hung" into a five-minute read. Nothing about
+  it waits for the owner thread, and the hazards `D_shutdown_on_state_stop`
+  names — a parked `/events` drain loop, a graceful stop that never
+  finishes — have exactly the same shape.
 - **The agent loop keeps its own thread** (`D_worker_thread_agent_loop`);
   what changes is direction — it posts events instead of calling the
   listener stack inline.
@@ -816,14 +882,59 @@ made** and would otherwise be rediscovered by hitting them:
 
 **Consequences.**
 
-- **The triggers to reopen are named, and none has fired.** More server
-  state than the transcript and the resident runners — a search index,
-  generated titles, a cache to invalidate — or a second writer to one
-  conversation. Raising `--turns` is *not* one of them.
+- **The trigger to reopen had to be structural, because a defect-shaped
+  one cannot work here** — this architecture is good at *hiding* the
+  defects that argue against it, so "wait for a live one" waits forever.
+  The trigger was **a second site needing atomicity across two objects**,
+  and it fired on the second: {AgentRunner#claim_running}, a state change
+  and its notification, and {AgentRunner#status_data}, a read from one
+  object and a publish to another. Both found by reading, neither by a
+  report. The state-volume triggers never got the chance — more server
+  state than the transcript and the resident runners, or a second writer
+  to one conversation. Raising `--turns` was never one of them.
 - **The snapshot-read design was taken, minus the queue.** {Transcript}'s
   `Block` is a `Data`, so `#update` replaces rather than mutates and a
   caller rendering a snapshot cannot have a block rewritten underneath it.
   That was the one piece of the idea that stood on its own.
+
+**Reopened: the target is atomicity, and the mechanism is open.** The
+entry above framed the choice as "owner thread, coarse lock, or per-object
+locks" and answered it on cost. The framing was wrong. What a database
+gives a Rack app is not storage, it is A and I; this app removed the
+database and replaced neither, so its seams hold by timing. The two
+defects above are the evidence, and both were found by reading the code —
+which is the point, because this architecture cannot *report* them.
+
+**Scoped, because "we need ACID" over-buys.** D is already had:
+{ConversationStore} commits by temp-file-and-rename with `meta.json` as
+the commit point (`D_no_store_lock`), which is durability enough for a
+single-user shell. C is domain invariants, and the partition holds most of
+them. I is largely had for the same reason — one writer per conversation
+(`D_conversation_owns_agent`). **A is the hole**, and specifically A
+across a *seam*: two objects mutated or read as one unit. Anything built
+should be sized to that and no larger.
+
+**The mechanism is genuinely open, and no plugin exists.** Rack's contract
+is `call(env)` — middleware is request-scoped by construction and has no
+purchase on a graph that outlives a request — so there is no Sinatra
+answer to adopt. The primitive is already in the bundle: an owner queue is
+a `Concurrent::SingleThreadExecutor`, from the gem the `Gemfile` already
+justifies for `FixedThreadPool`. Candidates in ascending cost: an atomic
+helper per seam; one global `Monitor`; a true owner thread. Vaadin's
+`UI.access()` is the middle one and Tuile is the last, as the entry above
+already notes.
+
+**What Node.js does and does not prove.** It proves the abstraction is
+ergonomic at scale — a single loop is a design people ship on, not a
+compromise forced by the lack of threads. It does *not* prove ACID: Node's
+atomic unit is a synchronous run-to-completion, and every `await` is an
+interleaving point, which is why read-modify-write races are ordinary Node
+bugs. So Node is evidence for the mechanism and evidence that the
+never-block constraint above is load-bearing — with one asymmetry that
+matters here. Node enforces run-to-completion structurally: you cannot
+block, you must `await`, and awaiting visibly yields. A Ruby owner thread
+*can* block, silently, at any call. Node gets the discipline from the
+language; we would have to get it from review.
 
 ## D_conversation_owns_agent — A conversation owns its agent; a tab owns which conversation it views
 

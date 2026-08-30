@@ -231,7 +231,7 @@ RSpec.describe PikuriWeb::AgentRunner do
     # A `conversations` frame rides along on each busy transition: the
     # sidebar's per-row dot is the only sign a conversation you are not
     # looking at is working, and it is server-rendered.
-    it 'broadcasts status on submit and on turn end, and the sidebar signal on each transition' do
+    it 'broadcasts status on submit, on the turn starting and on turn end, the sidebar signal on each transition' do
       queue = broadcaster.subscribe(conversation.id)
       runner.submit('hello')
       wait_until { runner.state == :running }
@@ -239,8 +239,39 @@ RSpec.describe PikuriWeb::AgentRunner do
       wait_until { !runner.busy? }
       types = drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
 
-      assert_equal 2, types.count('status')
+      assert_equal 3, types.count('status')
+      # Two, not three: the middle frame is queued → running, and both are busy.
       assert_equal 2, types.count('conversations')
+    end
+
+    # The frame nothing else can send. A turn that really waited for a slot has
+    # no event at all between the queued frame and its end, so a browser left
+    # holding ":queued" reads "waiting for a free slot" for the whole turn —
+    # which is what shipped until #claim_running broadcast on both paths.
+    it 'broadcasts the start of a turn that waited for an executor slot' do
+      blocker = Concurrent::SingleThreadExecutor.new
+      gate = Thread::Queue.new
+      blocker.post { gate.pop }
+      queued = described_class.new(
+        conversation: conversation, agent: agent, interloper: interloper,
+        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+        listener: listener, transcript: transcript, catalog: catalog, executor: blocker
+      )
+      subscription = broadcaster.subscribe(conversation.id)
+
+      queued.submit('hello')
+      assert_equal :queued, queued.state
+      gate.push(:go) # the slot frees and the turn starts
+
+      states = []
+      wait_until do
+        states.concat(drain_frames(subscription).filter_map { |f| f[/"state":"(\w+)"/, 1] })
+        states.include?('running')
+      end
+      assert_equal %w[queued running], states
+
+      agent.release
+      wait_until { !queued.busy? }
     end
 
     it 'sends the sidebar signal to every tab, not just this conversation' do
