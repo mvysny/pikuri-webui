@@ -17,12 +17,12 @@ all pikuri. We own the web shell only.
 Working against a live llama.cpp server: turns stream, conversations save
 and reopen, and a turn keeps running while you read another conversation.
 
-Tracks pikuri **master**, not a release: `pikuri-core` / `pikuri-pdf` are
-path dependencies on `../pikuri`. Upgrades follow pikuri's `CHANGELOG.md`
-— its `**Breaking:**` entries carry the migration instructions, and
-pikuri-tui's HEAD is the worked example for anything ambiguous. CI must
-clone `../pikuri` before bundling. See `DECISIONS.md`
-`D_track_pikuri_master`.
+Depends on **released** `pikuri-core` / `pikuri-pdf`, pinned to one minor
+(`~> 0.1.0`) because pikuri is pre-1.0 — never widen that to `~> 0.1`,
+and never bump one gem without the other. An upgrade follows pikuri's
+`CHANGELOG.md` — its `**Breaking:**` entries carry the migration
+instructions, and pikuri-tui's HEAD is the worked example for anything
+ambiguous. See `DECISIONS.md` `D_released_pikuri_gems`.
 
 ## Scope decisions
 

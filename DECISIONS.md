@@ -53,6 +53,49 @@ replacement fresh.
 
 ---
 
+## D_released_pikuri_gems — Released `pikuri-core` / `pikuri-pdf` from RubyGems, pinned to one minor
+
+**Status:** Accepted, shipped. Supersedes `D_track_pikuri_master`, whose
+path dependencies on `../pikuri` this removes; the CI clone step went
+with them.
+
+**Context.** The path dependencies bought one thing: master's unreleased
+surface — the boot-time trifecta report, `Interloper#on_change`,
+`Testing.fake_transport`. pikuri 0.1.0 ships all three, so the reason is
+spent, and what remains is the bill: a checkout every clone of this repo
+must also have at the right tip, a CI step that clones it, and a
+lockfile that can name no checksum for the two gems that matter most.
+
+**Decision.** `gem 'pikuri-core', '~> 0.1.0'` and the same for
+`pikuri-pdf`. One minor, not one major: pikuri is pre-1.0, where semver
+lets 0.2 break what 0.1 promised, so an upgrade is a deliberate edit made
+with pikuri's `CHANGELOG.md` open at its `**Breaking:**` entries —
+pikuri-tui's HEAD stays the worked example for anything ambiguous.
+
+**Rejected: `~> 0.1`.** Reads like the same pin and is not: it admits
+0.2, 0.3 and every break they are allowed to carry, silently, on whatever
+day someone runs `bundle update`. Pre-1.0 that is the whole risk surface.
+
+**Rejected: staying on path dependencies for the convenience of editing
+pikuri and this shell together.** That is a real workflow and it survives
+without the Gemfile: `bundle config local.pikuri-core` or a one-line
+uncommitted `path:` override does it per-machine, without every other
+clone — and CI — paying for a sibling checkout it does not want. The
+committed Gemfile should describe what this shell depends on, not one
+developer's desk.
+
+**Rejected: pinning `pikuri-core` alone and letting `pikuri-pdf` float.**
+Impossible by construction — pikuri-pdf's gemspec pins
+`pikuri-core = <exact version>` — and this is the lockstep
+`D_track_pikuri_master` cited as a reason to avoid released gems
+altogether. It is not one: the two gems are released together from one
+repo, so the constraint costs nothing as long as both lines here move in
+the same commit. Never bump one alone.
+
+**Consequences.** CI no longer clones anything, `Gemfile.lock` carries
+real checksums for both gems, and a pikuri upgrade is now two edited
+version constraints plus `bundle update pikuri-core pikuri-pdf`.
+
 ## D_subscribe_then_snapshot — `GET /events` subscribes first and opens with the transcript, so the page-render-to-connect window loses nothing
 
 **Status:** Accepted, shipped in `App#GET /events` + `App#catch_up_frames`
@@ -1665,8 +1708,9 @@ the same as anywhere. The intent is for the TUI to follow.
 
 ## D_track_pikuri_master — Path dependencies on `../pikuri`, not released gems
 
-**Status:** Accepted, shipped; `pikuri-core` / `pikuri-pdf` are path
-dependencies in the `Gemfile`.
+**Status:** **Superseded by `D_released_pikuri_gems`.** Held while the
+surface this shell needed existed only on master; pikuri 0.1.0 released
+it, and the path dependencies are gone.
 
 **Context.** This shell already wanted master's surface — the boot-time
 trifecta report and `Interloper#on_change`, neither of which was in a
@@ -1816,8 +1860,9 @@ a list of classes**, when {ConversationStore#save} took over writing
 was never the invariant — "translation happens at named boundaries, and
 nowhere else" is — and the list of names had begun to read as the rule.
 
-**Context.** This project tracks pikuri master (`D_track_pikuri_master`),
-so pikuri's surface moves under it by design. What that costs depends
+**Context.** This project follows pikuri's releases closely
+(`D_released_pikuri_gems`), and pikuri is pre-1.0, so its surface moves
+under this shell by design. What that costs depends
 entirely on *where* the types are: a pikuri type in the rendering path
 prices an upgrade at a sweep of every file the browser's state flows
 through, while one in a disk utility prices it at that utility.

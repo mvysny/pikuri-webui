@@ -45,9 +45,6 @@ go *find* one.
 
 - Ruby ≥ 3.3
 - A local LLM server (e.g. [llama.cpp](https://github.com/ggerganov/llama.cpp) `server`)
-- A [pikuri](https://codeberg.org/mvysny/pikuri) checkout at `../pikuri`
-  — this shell tracks pikuri master, so `pikuri-core` and `pikuri-pdf`
-  are path dependencies rather than released gems
 
 ## Install
 
