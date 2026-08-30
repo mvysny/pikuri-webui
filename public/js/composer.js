@@ -8,7 +8,7 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  * keyboard that drives both, and what a sent buffer *means* — a message posted
  * to the conversation, or a command run.
  *
- *     initComposer({ conversation: viewing, commands: { '/new': startConversation } });
+ *     initComposer({ conversation: viewing, commands: { '/new': conversations.start } });
  *
  * Markup contract: `#composer`, `#prompt` and `#slash-menu` must exist and each
  * palette row must carry its name in `data-command` — a missing one throws

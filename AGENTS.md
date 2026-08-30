@@ -62,9 +62,9 @@ the alternatives that were rejected, live one entry per slug in
 - **One `index.erb` for the phone and the desktop; the difference is
   placement, so it is CSS's.** `#drawer` *is* the desktop sidebar column,
   restyled to an overlay under `@media (max-width: 40rem)`. No UA
-  sniffing, no second shell, no device branch in `app.js`. The breakpoint
-  is written twice (`style.css`, and `app.js`'s `matchMedia` keeping
-  `inert` from stranding) and the two move together.
+  sniffing, no second shell, no device branch in the scripts. The
+  breakpoint is written twice (`style.css`, and `conversations.js`'s
+  `matchMedia` keeping `inert` from stranding) and the two move together.
   See `D_one_shell_two_layouts`.
 
 - **The transcript is server-authoritative.** {Transcript} holds the
@@ -279,14 +279,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/` — the static root, served at the URL root: scripts under
   `js/`, the mascot and every icon under `images/`. `style.css` and the
   manifest stay at the top because each is the only file of its kind.
-- `public/js/app.js` — the composition root: SSE, sidebar, drawer, theme,
-  and the mount + command arms of the composer.
+- `public/js/app.js` — the composition root: the SSE fan-out, the theme,
+  the command dialogs, and every feature's mount.
 - `public/js/composer.js` — `initComposer`, everything `#composer` does:
   buffer, auto-grow, slash palette, keyboard, `POST /messages`.
 - `public/js/statusbar.js` — `initStatusBar`, `#status-bar` and its ■:
   status frames, `POST /cancel`, and the intended model read back.
 - `public/js/transcript.js` — `initTranscript`, `#transcript`: blocks
   upserted by id, dropped, emptied, and the stick-to-bottom scroll.
+- `public/js/conversations.js` — `initConversations`, the list and how a
+  phone reaches it: `#sidebar` refresh, delete, mint, and the drawer.
 - `public/js/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one

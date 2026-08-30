@@ -56,9 +56,10 @@ replacement fresh.
 ## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them
 
 **Status:** Accepted, shipped with `public/js/composer.js`, the first
-one, then `public/js/statusbar.js` and `public/js/transcript.js`. `app.js`
-is not being split further on principle — the next feature moves out when
-it earns it.
+one, then `public/js/statusbar.js`, `public/js/transcript.js` and
+`public/js/conversations.js`. What is left in `app.js` is the spine, the
+theme and the wiring; it is not being split further on principle — the
+next feature moves out when it earns it.
 
 **Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
@@ -427,8 +428,9 @@ command, so `/usr/share/foo is broken` sends normally.
   row is Enter's run.
 - **`Q_error_dialog_weight` stays open.** A modal for a typo is intrusive;
   the alternative that keeps the intent is a status-bar note, for which
-  `app.js` has precedent (`'not sent'`). Shipped as the dialog because it can
-  list the known commands and a status line cannot. Revisit if it grates.
+  there is precedent (`statusbar.say('not sent')`). Shipped as the dialog
+  because it can list the known commands and a status line cannot.
+  Revisit if it grates.
 
 ---
 
@@ -462,7 +464,7 @@ one of which is close to sufficient:
   says a new block kind means touching {SseListener}, `index.erb` and
   `style.css`. A second shell makes that four files forever, to buy a
   divergence that is one media query.
-- *`app.js` would have to branch.* It reaches a dozen elements by id.
+- *The scripts would have to branch.* They reach a dozen elements by id.
   Two shells means either the same ids in both — in which case the second
   file is a copy, not a variant — or per-layout branches in the one file
   whose whole premise is minimalism (`D_no_js_build_step`).
@@ -498,8 +500,9 @@ controls, stop revealed by `busy`.
 `<label for>`s) — it genuinely covers open, close and select, since
 tapping a row is a page load. But a full-screen overlay that is not a
 modal leaves the chat behind it tabbable and readable to a screen
-reader, and `inert` is a DOM property, not a selector. `app.js` owns the
-toggle for that one attribute's sake, and gets Escape-to-close with it.
+reader, and `inert` is a DOM property, not a selector. `conversations.js`
+owns the toggle for that one attribute's sake, and gets Escape-to-close
+with it.
 **Rejected alongside it: `<dialog>` + `showModal()`**, which would hand
 over focus containment for free but has to be an in-flow sidebar on the
 desktop and a top-layer modal on the phone; mixing the `open` attribute
@@ -513,9 +516,9 @@ with `showModal()` for that is worse than the ten lines it saves.
   the one change the desktop sees, and it reads better anyway: starting a
   conversation belongs with the list of conversations.
 - The breakpoint is written twice — `style.css`'s media query and
-  `app.js`'s `matchMedia`, which closes the drawer when the layout
-  changes so `inert` cannot strand a chat column nothing covers. They
-  must move together.
+  `conversations.js`'s `matchMedia`, which closes the drawer when the
+  layout changes so `inert` cannot strand a chat column nothing covers.
+  They must move together.
 - The composer is one auto-grown row on the desktop too, and its
   keyboard hint moved from the placeholder to a `title`: a paragraph of
   placeholder wraps to three lines at phone width, and Chrome sizes an
@@ -1066,8 +1069,9 @@ deleting.
 - A bare `conversations` SSE event now means "the sidebar's list changed,
   re-fetch it" — deleting a non-live conversation emits no `reset`, so
   without it every *other* tab would keep a row that 404s when clicked.
-  `app.js` grew one `refreshSidebar()` that `reset` and the new event
-  share; a future titles or search feature should reuse the same signal.
+  `conversations.js` exposes one `refresh()` that `reset` and the new
+  event share; a future titles or search feature should reuse the same
+  signal.
 - The ✕ is revealed on hover and `:focus-within`, and shown
   unconditionally under `@media (hover: none)` — on a touch device the row
   itself is a link, so a tap opens the conversation instead of revealing
