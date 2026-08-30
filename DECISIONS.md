@@ -57,9 +57,9 @@ replacement fresh.
 
 **Status:** Accepted, shipped with `public/js/composer.js`, the first
 one, then `public/js/statusbar.js`, `public/js/transcript.js` and
-`public/js/conversations.js`. What is left in `app.js` is the spine, the
-theme and the wiring; it is not being split further on principle — the
-next feature moves out when it earns it.
+`public/js/conversations.js`. `app.js` is down to the spine, the theme
+and the wiring. Whether a fifth file is coming is not a question this
+line answers — *Extraction is earned* below is the gate.
 
 **Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
