@@ -651,4 +651,27 @@ button:hover { border-color: var(--accent); }
   .flat-button { min-height: 44px; padding: 0.3rem 0.6rem; }
   .dialog-close { min-width: 44px; min-height: 44px; }
   #slash-menu li { min-height: 44px; align-items: center; }
+
+  /* — installed to the home screen —
+
+     In standalone mode iOS hands the page the entire screen: there is no
+     browser toolbar under the composer any more, and the home-indicator strip
+     is drawn *over* the bottom edge, where the system claims the swipe. The
+     textarea ends up flush against it, so aiming for the bottom line of the
+     field reaches Siri rather than the field.
+
+     `env(safe-area-inset-bottom)` cannot lift it: without `viewport-fit=cover`
+     on the viewport meta it resolves to 0, and asking for `cover` would push
+     every other edge of the browser layout under the notch and the corners to
+     fix one edge of the installed one. So the gap is a constant, and it is the
+     hardware's — 34px, the home indicator's own height, the same kind of
+     literal as the 44px tap targets above.
+
+     Nested rather than a second `(max-width: 40rem)`: the desktop layout ends
+     in the status bar, not the composer, and there is nothing to type into
+     down there. A media query inside a media query is plain CSS — both
+     conditions have to hold. */
+  @media (display-mode: standalone) {
+    #composer { padding-bottom: calc(0.5rem + 34px); }
+  }
 }
