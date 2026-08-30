@@ -53,6 +53,76 @@ replacement fresh.
 
 ---
 
+## D_subscribe_then_snapshot — `GET /events` subscribes first and opens with the transcript, so the page-render-to-connect window loses nothing
+
+**Status:** Accepted, shipped in `App#GET /events` + `App#catch_up_frames`
+and `Broadcaster#frame`.
+
+**Context.** Loading a conversation takes two requests: `GET /c/:id`
+renders the transcript at T1, and the browser opens `GET /events` at T2 —
+after HTML parse, module fetch and the EventSource handshake. A block the
+agent finalized in between belonged to neither: too late for the rendered
+snapshot, too early for the subscription. It was silently, permanently
+missing from that tab until a reload.
+
+Found by reading during the `D_no_event_queue` seam audit, not by a
+report — which is the point of that entry's argument. The damage was
+bounded but real: a streaming block self-heals, because every delta
+re-sends the whole accumulated source under one id
+(`D_rerender_and_replace`), so only *finalized one-shot* blocks were lost
+— `tool_call`, `tool_result`, `thinking`, the assistant bookend,
+`notice`, `error`. Losing the tool line out of the middle of a turn you
+opened the page to watch.
+
+**Decision. Subscribe first, snapshot second, and let the duplicate
+absorb the race.** The route registers with the {Broadcaster}, *then*
+reads {Transcript}`#to_a`, then writes that snapshot onto the connection
+ahead of the drain loop. A block landing between the two is now delivered
+**twice** rather than not at all, and a repeat costs nothing: the browser
+upserts blocks by id, and {Transcript#clear} deliberately keeps its id
+counter so an id is never reused. A miss is permanent; a repeat is a
+no-op. The seam closes on *ordering*, with no lock and no new mechanism.
+
+The catch-up leads with `reset`, because the window can swallow one of
+those too — a tab that rendered its page a moment before a `/clear` would
+otherwise keep showing blocks the server has forgotten.
+
+**Rejected: a lock shared by the writer and the subscriber**, so that
+append-and-broadcast and snapshot-and-subscribe are each atomic. It works
+and it is what the seam looks like it needs — but it puts {Transcript}
+and {Broadcaster} behind one lock, which `D_no_event_queue` keeps the
+broadcaster out of on purpose, and it buys nothing that ordering does not.
+
+**Rejected: sequence numbers plus a replay buffer**, with SSE `id:` fields
+and `Last-Event-ID` on reconnect. The real answer for a multi-client
+system, and far too much machinery here: a ring buffer per conversation,
+a retention policy, and a resume path to get wrong — for a single user on
+localhost whose reconnects already reload (`app.js`, `es.reconnected`).
+
+**Rejected: leave it, the reload covers it.** It does not. The reload
+covers a *reconnect*; the first connection of every page load has no
+reconnect to trigger it, and that is the common path. The reload also
+lands right back in this same window.
+
+**Consequences.**
+
+- **SSE now carries a snapshot, not only deltas.**
+  `D_server_authoritative_transcript` still holds — the server is still
+  the only authority — but "GET renders, SSE deltas" is now "GET renders,
+  SSE re-opens with the transcript and then deltas".
+- **Every connect re-sends the whole transcript.** One extra pass over a
+  conversation that was just rendered into HTML. Acceptable on localhost;
+  the refinement, if it ever matters, is for the page to pass its last
+  block id and the route to send only the tail — which stays correct under
+  the same ordering argument.
+- **{Broadcaster#frame} is public**, because the route writes catch-up
+  straight onto its own connection and one place still has to own the wire
+  format.
+- **A conversation nobody has resident gets no catch-up** — there is no
+  transcript to send, and `GET /events` deliberately does not mint one.
+
+---
+
 ## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them
 
 **Status:** Accepted, shipped with `public/js/composer.js`, the first
@@ -844,14 +914,20 @@ and the line. The race consumes its evidence instead, leaving a system
 that has already moved on to a state that looks correct. A freeze you can
 read; a lost frame you cannot.
 
-And there is currently exactly **one** cross-thread
-compose-then-publish site, {AgentRunner#status_data}: it is composed off
-unlocked state and handed to a {Broadcaster} that snapshots subscribers
-under its lock and pushes *outside* it, so two threads can compose in one
-order and push in the other, leaving the browser holding the older frame.
-{Transcript} already solved the same problem the other way, with an
-immutable `Block` snapshot no reader can have rewritten underneath it.
-One site is a site to fix, not an architecture.
+And the seams turned out to want four different
+tools. The audit that followed this entry found five and closed three
+without a global mechanism: one by putting the broadcast where the
+transition is, one by *ordering* (`D_subscribe_then_snapshot` — a seam
+whose halves are two HTTP requests, which no server-side serialization
+can reach), one with the monitor {ConversationRegistry} already held.
+{Transcript} had already solved a fourth the other way, with an immutable
+`Block` snapshot no reader can have rewritten underneath it. What is left
+is {AgentRunner#status_data}: composed off unlocked state and handed to a
+{Broadcaster} that snapshots subscribers under its lock and pushes
+*outside* it, so two threads can compose in one order and push in the
+other, leaving the browser holding the older frame. One remaining site is
+a site to fix, not an architecture — see `ideas/atomicity-across-seams.md`
+for the standing tally.
 
 **If one is ever built, these constraints come from decisions already
 made** and would otherwise be rediscovered by hitting them:
@@ -1225,6 +1301,18 @@ deleting.
   resurrection two bullets up, and unlike that one it was reachable by a
   single user with two tabs — which is why it is fixed rather than
   accepted.
+- **Amended: the resurrection had a second door, and {AgentRunner#discard!}
+  could not reach it.** `discard!` retires the runner that is *already*
+  resident when the delete lands. A caller that resolved the conversation a
+  moment earlier and opened it *afterwards* minted a fresh runner instead —
+  no runner existed for the delete to have retired — and that one came back
+  in the sidebar as an unsaved resident, then wrote its folder again at the
+  next turn end. Fixed by {ConversationRegistry#open_id}: resolve and open
+  are one step under the monitor `#delete` already holds, so either the
+  delete finds a runner to refuse or retire, or the open finds nothing to
+  resolve. `#open(conversation)` itself is unguarded still, and is now only
+  reached by `#create`, holding a conversation it just minted. Found by
+  reading during the `D_no_event_queue` seam audit, not by a report.
 - Deleting is the whole answer to retention: still no cap and no
   auto-prune. `rm -r` on the state folder remains a complete reset.
 

@@ -77,8 +77,21 @@ module PikuriWeb
     #   +nil+ addresses every subscriber
     # @return [void]
     def broadcast(event:, data:, conversation: nil)
-      frame = "event: #{event}\ndata: #{JSON.generate(data)}\n\n"
-      each_queue(conversation) { |q| q.push(frame) }
+      formatted = frame(event: event, data: data)
+      each_queue(conversation) { |q| q.push(formatted) }
+    end
+
+    # One formatted frame, for a subscriber writing catch-up directly onto its
+    # own connection instead of receiving it through a queue. Same wire format
+    # as {#broadcast}, which is the point of it living here.
+    #
+    #   out << broadcaster.frame(event: :block, data: { id: 'b1', … })
+    #
+    # @param event [String, Symbol] SSE event type
+    # @param data [Hash] JSON-serialized into the frame's +data:+ line
+    # @return [String]
+    def frame(event:, data:)
+      "event: #{event}\ndata: #{JSON.generate(data)}\n\n"
     end
 
     # Push an SSE comment frame (ignored by EventSource) to every subscriber.

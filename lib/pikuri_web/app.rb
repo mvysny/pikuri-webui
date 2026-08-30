@@ -106,6 +106,11 @@ module PikuriWeb
     #
     # The drain loop blocks on the subscribed queue until the client goes away
     # (write raises) or the broadcaster shuts down (nil sentinel).
+    #
+    # Opens with the transcript as it stands, because this connection and the
+    # +GET /c/:id+ that rendered the page are two separate requests: anything
+    # the agent finished in between belongs to neither. See {#catch_up_frames}
+    # for why subscribing *first* is what makes that safe.
     get '/events' do
       content_type 'text/event-stream'
       headers 'Cache-Control' => 'no-cache'
@@ -113,6 +118,7 @@ module PikuriWeb
       stream do |out|
         queue = settings.broadcaster.subscribe(conversation)
         begin
+          catch_up_frames(conversation).each { |frame| out << frame }
           while (frame = queue.pop)
             out << frame
           end
@@ -202,13 +208,47 @@ module PikuriWeb
     # Resolve an id and open it, 404ing on anything not listed — which is what
     # keeps user input from ever becoming a path.
     #
+    # One registry call, not a resolve followed by an open: a delete landing
+    # between the two would be answered by minting a runner for the folder it
+    # just removed (`D_delete_no_undo`).
+    #
     # @param id [String, nil]
     # @return [AgentRunner]
     def open_conversation(id)
-      conversation = settings.registry.find(id.to_s)
-      halt 404, 'no such conversation' if conversation.nil?
+      runner = settings.registry.open_id(id.to_s)
+      halt 404, 'no such conversation' if runner.nil?
 
-      settings.registry.open(conversation)
+      runner
+    end
+
+    # What a just-connected tab needs to be level with the server: the whole
+    # transcript, as +reset+ plus one +block+ each.
+    #
+    # Taken *after* {Broadcaster#subscribe}, and that order is the whole
+    # mechanism. Snapshot-then-subscribe loses whatever lands between the two;
+    # subscribe-then-snapshot delivers it twice instead, and a duplicate is
+    # free — the browser upserts blocks by id, and {Transcript#clear} keeps its
+    # id counter so no id is ever reused. A miss is permanent, a repeat is a
+    # no-op, so the seam is closed by ordering rather than by a lock.
+    #
+    # +reset+ leads because the window may have swallowed one: without it a tab
+    # that rendered its page just before a +/clear+ would keep showing blocks
+    # the server has forgotten.
+    #
+    # @param conversation [String] id; one nobody has opened has no transcript
+    #   and needs no catch-up
+    # @return [Array<String>] formatted SSE frames
+    def catch_up_frames(conversation)
+      runner = settings.registry.resident(conversation)
+      return [] if runner.nil?
+
+      frames = [settings.broadcaster.frame(event: :reset, data: {})]
+      runner.transcript.to_a.each do |block|
+        frames << settings.broadcaster.frame(
+          event: :block, data: { id: block.id, kind: block.kind, html: block.html }
+        )
+      end
+      frames
     end
 
     # The sidebar's model.

@@ -174,6 +174,29 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     end
   end
 
+  # The second door into the resurrection #discard! closes. That one guards a
+  # runner already resident when the delete lands; this is a caller that
+  # resolved the conversation a moment earlier and opens it afterwards, when
+  # there is no runner for the delete to have retired.
+  context '#open_id' do
+    it 'opens a conversation in one step' do
+      conversation = registry.create.conversation
+      assert_equal conversation.id, registry.open_id(conversation.id).conversation.id
+    end
+
+    it 'is nil for an id that is neither resident nor saved' do
+      assert_nil registry.open_id('no-such-conversation')
+    end
+
+    it 'mints nothing for a conversation deleted after the caller resolved it' do
+      resolved = registry.create.conversation
+      assert_equal :deleted, registry.delete(resolved)
+
+      assert_nil registry.open_id(resolved.id), 'minted a runner for a deleted conversation'
+      assert_empty registry.rows, 'and put it back in the sidebar'
+    end
+  end
+
   context '#default' do
     it 'mints a conversation when there is nothing at all' do
       assert_empty registry.rows

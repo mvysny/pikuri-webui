@@ -73,6 +73,11 @@ RSpec.describe PikuriWeb::App do
     def resident(id) = @runners[id]
     def find(id) = @list.find { |c| c.id == id }
 
+    def open_id(id)
+      conversation = find(id)
+      conversation && open(conversation)
+    end
+
     def create(from: nil)
       @created += 1
       @created_from << from
@@ -115,6 +120,9 @@ RSpec.describe PikuriWeb::App do
 
     def unsubscribe(queue) = @unsubscribed << queue
     def broadcast(**) = nil
+    # The catch-up path writes frames straight onto the connection, so the
+    # real formatter is what the route is entitled to here.
+    def frame(event:, data:) = PikuriWeb::Broadcaster.new.frame(event: event, data: data)
   end
 
   let(:live) { ConversationRows.row('2026-08-27T12-03-51Z-3f9a', 'the open one') }
@@ -404,6 +412,24 @@ RSpec.describe PikuriWeb::App do
     it 'unsubscribes its queue when the drain loop ends' do
       get '/events', conversation: live.id
       assert_equal 1, described_class.settings.broadcaster.unsubscribed.size
+    end
+
+    # The page and this connection are two requests; a block finalized between
+    # them is in neither the rendered snapshot nor the queue. Opening with the
+    # transcript is what closes that, and subscribing first is what makes the
+    # overlap a duplicate rather than a miss.
+    it 'opens with the resident transcript, reset first' do
+      runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>')
+
+      get '/events', conversation: live.id
+
+      assert_equal ['reset', 'block', 'status'], last_response.body.scan(/event: (\w+)/).flatten
+      assert_includes last_response.body, 'calculator'
+    end
+
+    it 'opens with nothing for a conversation nobody has resident' do
+      get '/events', conversation: 'never-opened'
+      assert_equal ['status'], last_response.body.scan(/event: (\w+)/).flatten
     end
   end
 

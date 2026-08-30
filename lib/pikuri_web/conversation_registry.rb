@@ -62,6 +62,29 @@ module PikuriWeb
     # @return [AgentRunner, nil] without minting one
     def resident(id) = @monitor.synchronize { @runners[id] }
 
+    # Resolve an id and open it as one step.
+    #
+    #   runner = registry.open_id(params['conversation'])
+    #
+    # {#find} then {#open} as two calls leaves a window for {#delete}: the
+    # folder goes, and the open that follows mints a live runner for it
+    # anyway — back in the sidebar as an unsaved resident, and written to disk
+    # again at its next turn end. {AgentRunner#discard!} cannot help, because
+    # it retires the runner that is *already* resident and this one does not
+    # exist yet. Holding the monitor across both is what forces the two into an
+    # order: either the delete finds a runner to refuse or retire, or this
+    # finds nothing to resolve.
+    #
+    # @param id [String]
+    # @return [AgentRunner, nil] nil for an id that is neither resident nor
+    #   saved — including one deleted a moment ago
+    def open_id(id)
+      @monitor.synchronize do
+        conversation = find(id)
+        conversation && open(conversation)
+      end
+    end
+
     # Mint a brand-new conversation and open it.
     #
     #   registry.create(from: params['viewing'])

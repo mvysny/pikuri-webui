@@ -68,9 +68,17 @@ the alternatives that were rejected, live one entry per slug in
   See `D_one_shell_two_layouts`.
 
 - **The transcript is server-authoritative.** {Transcript} holds the
-  rendered blocks; `GET /c/:id` renders the full snapshot, SSE carries
-  only deltas. Never introduce client-only conversation state.
+  rendered blocks; `GET /c/:id` renders the full snapshot, `GET /events`
+  re-opens with it, and SSE carries deltas after that. Never introduce
+  client-only conversation state.
   See `D_server_authoritative_transcript`.
+
+- **`GET /events` subscribes *before* it snapshots.** The page and the
+  EventSource are two requests, and a block finalized between them must
+  not fall down the gap. Subscribing first makes the overlap a duplicate
+  instead of a miss, and duplicates are free because blocks upsert by id
+  and {Transcript#clear} never reuses one. Don't reorder those two lines,
+  and don't reach for a lock. See `D_subscribe_then_snapshot`.
 
 - **A saved conversation is `history.json` plus our `meta.json`, and
   nothing else.** Blocks are re-derived by replaying synthesized events
