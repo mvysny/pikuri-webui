@@ -91,7 +91,7 @@ def wrapper(body, art:, round:)
       <title>pikuri</title>
       #{plate}
       <g transform="translate(#{CANVAS / 2},#{CANVAS / 2}) scale(#{scale}) translate(#{-ART_CX},#{-ART_CY})">
-    #{body.gsub(/^/, '    ')}
+    #{body.gsub(/^/, '  ')}
       </g>
     </svg>
   SVG
