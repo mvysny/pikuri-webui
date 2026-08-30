@@ -1857,19 +1857,6 @@ server could have produced is the server's, always. That clause is not new
 — it is what `D_server_authoritative_transcript` and `D_replay_from_history`
 have been resting on all along.
 
-**Dropped: the line count and the file count.** This entry used to say "one
-hand-written `public/app.js` (~100 lines)". Both halves had to go, and the
-line count is its own argument for why: it was already wrong — ~180 against
-a stated ~100 — and it had rotted silently, with no change ever rejected for
-busting it. A budget nobody enforces is a fossil, not an invariant, and
-`wc -l public/*.js` never goes stale where a number in prose always does.
-The file count went with it: once "no bundler" is said outright, how many
-files the source is split across says nothing about the thing being
-protected, and `public/dom.js` splitting generic DOM mechanics away from the
-app is a clarity win the old clause would have forbidden on a technicality.
-Neither count is coming back — any successor would rot the same way as the
-app grows.
-
 **The admission rule, in three tiers.** What decides which file a function
 belongs in is how much of *this page* it has to know:
 
