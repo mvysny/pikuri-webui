@@ -1,25 +1,15 @@
-// The app: one EventSource consuming the server's SSE feed, the transcript,
-// the status bar, the sidebar, the drawer and the theme — plus the wiring that
-// mounts the composer. All rendering happens server-side (kramdown), so this
-// file only places ready-made HTML fragments into the page by block id and
-// keeps the status bar in sync.
+// The page's spine: one EventSource fanned out to the transcript, the status
+// bar, the sidebar, the drawer and the theme, plus the composer's mount and the
+// arms of its slash commands — the wiring *between* features, which is why
+// `/theme` and `/new` live here and the palette does not.
 //
-// A feature that owns a slice of the page can own a file (composer.js is the
-// first); what stays here is the page's spine — the one EventSource feeding
-// several of them — and the wiring between features, which is why the slash
-// commands' arms live here: `/theme` is the theme's, `/new` the conversation
-// list's, and only this file knows both. Generic DOM mechanics with no markup
-// knowledge at all are next door in dom.js.
-//
-// A module, so none of them leaks a global (and modules are already strict,
-// hence no 'use strict').
+// Rendering is the server's (kramdown): this places ready-made HTML fragments
+// by block id and builds no markup of its own.
 import { cloneTemplate, openDialog } from './dom.js';
 import { initComposer } from './composer.js';
 
-// The conversation this tab has open, fixed for the life of the page: it came
-// from the URL, and it is what the EventSource subscribes to. Everything this
-// file receives is already about this conversation — the server does the
-// addressing, so there is nothing here to filter.
+// The conversation this tab reads, fixed for the life of the page. The server
+// addresses every frame to it, so nothing here filters.
 const viewing = document.documentElement.dataset.conversation;
 
 const transcript = document.getElementById('transcript');
@@ -42,8 +32,8 @@ const themeToggle = document.getElementById('theme-toggle');
 const nearBottom = () =>
   transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
 
-// `block` upserts by id: first frame of a streamed message creates the
-// div, every re-render replaces its innerHTML in place.
+// Upsert by id: the first frame of a streamed message creates the div, every
+// re-render replaces it in place.
 const upsertBlock = ({ id, kind, html }) => {
   const stick = nearBottom();
   let el = document.getElementById(id);
@@ -57,12 +47,10 @@ const upsertBlock = ({ id, kind, html }) => {
   if (stick) transcript.scrollTop = transcript.scrollHeight;
 };
 
-// `queued` means the turn is accepted but another conversation is holding the
-// executor. Saying so beats showing "busy" for a turn that has not started.
-//
-// `model` is what the agent is on; `modelPending` a pick that has not reached
-// the top of a turn yet. The arrow between them is CSS's, so this span holds a
-// bare name that /model can read back as the intended connection.
+// `queued` means the turn is accepted but another conversation holds the
+// executor — saying so beats showing "busy" for a turn that has not started.
+// The two model spans hold bare names (the arrow between them is CSS's)
+// because /model reads them back as the intended connection.
 const updateStatus = ({
   state, busy, pending, tokens, tokens_detail: tokensDetail, model,
   model_pending: modelPending, model_missing: modelMissing,
@@ -75,34 +63,28 @@ const updateStatus = ({
   statusTokensCtx.textContent = tokens;
   statusTokensDetail.textContent = tokensDetail;
   cancelBtn.hidden = !busy;
-  // Nothing else is gated on busy any more: sending queues rather than
-  // refusing, a new conversation touches no existing one, and delete is
-  // refused per row by the server's own re-render of the sidebar.
+  // Nothing else is gated on busy: sending queues rather than refusing, and
+  // delete is refused per row by the server's own re-render of the sidebar.
 };
 
-// The sidebar's list, re-rendered by the server. Every conversation change
-// funnels through here rather than reloading the page, which would cost each
-// tab its half-typed message. `viewing` rides along so the server can mark
-// which row this tab has open, which it cannot know otherwise.
+// The sidebar's list, re-rendered by the server; `viewing` rides along so it
+// can mark this tab's row. In place rather than a reload, which would cost each
+// tab its half-typed message.
 const refreshSidebar = () =>
   fetch(`/conversations?viewing=${encodeURIComponent(viewing)}`)
     .then((r) => r.text())
     .then((html) => { sidebar.innerHTML = html; });
 
-// Subscribed to this tab's conversation: the server sends only its frames,
-// plus the server-wide `conversations` signal.
 const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
 es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
 es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
 es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
-// This conversation's transcript was emptied — a history load replaying into
-// it. Emptying in place rather than reloading keeps a half-typed message.
+// A history load is replaying into this conversation; emptying in place rather
+// than reloading keeps a half-typed message.
 es.addEventListener('reset', () => transcript.replaceChildren());
-// A conversation was deleted somewhere — this tab or another. Nothing about
-// the transcript changed unless a `reset` said so, only the list.
 es.addEventListener('conversations', refreshSidebar);
-// On EventSource auto-reconnect the page may have missed frames; reload
-// to re-snapshot from the server-authoritative transcript.
+// An auto-reconnect may have missed frames; reload to re-snapshot from the
+// server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
 
 cancelBtn.addEventListener('click', () => {
@@ -111,15 +93,11 @@ cancelBtn.addEventListener('click', () => {
   fetch('/cancel', { method: 'POST', body });
 });
 
-// The fresh conversation has its own URL, so follow it. Other tabs stay
-// exactly where they are — nothing about their conversation changed.
-//
-// Named rather than inlined into the click: /new dispatches to it too, and the
-// button and the command must not become two paths that drift.
+// The fresh conversation has its own URL, so this tab follows it; other tabs
+// stay where they are.
 const startConversation = () => {
   const body = new FormData();
-  // What the new conversation inherits its connection from: the server has no
-  // other way to know which conversation this tab is reading.
+  // What the new conversation inherits its connection from.
   body.set('viewing', viewing);
   fetch('/conversations', { method: 'POST', body })
     .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
@@ -129,34 +107,25 @@ const startConversation = () => {
 
 newBtn.addEventListener('click', startConversation);
 
-// Deleting a conversation. Delegated to the nav so it survives the sidebar
+// Deleting a conversation, delegated to the nav so it survives the sidebar
 // being re-rendered from the server; `redirect: 'manual'` declines the 303 the
-// route owes a no-JS browser. Selecting needs nothing here any more — rows are
-// links, and the browser follows them.
-//
-// Deletion is irreversible and there is no undo, hence the confirm.
+// route owes a no-JS browser.
 sidebar.addEventListener('submit', (e) => {
   e.preventDefault();
   const row = e.target.closest('li');
   const title = row.querySelector('.conversation-title').textContent;
   if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
   fetch(e.target.action, { method: 'POST', redirect: 'manual' }).then(() => {
-    // Deleting what this tab is reading leaves it on a page that no longer
-    // exists; `/` picks the newest conversation left, or mints one.
+    // Deleting what this tab reads leaves it on a page that no longer exists;
+    // `/` picks the newest conversation left, or mints one.
     if (row.querySelector('.conversation').classList.contains('current')) location.href = '/';
-    // Refresh otherwise: on 404 this tab's list was the stale thing, and
-    // re-fetching is what heals it.
     else refreshSidebar();
   });
 });
 
-// The phone's conversation drawer: a full-screen overlay over the chat. Only
-// the class is CSS's business — `inert` is the reason this is not the zero-JS
-// checkbox trick, since an overlay that is not a modal leaves the chat behind
-// it tabbable and readable to a screen reader.
-//
-// Opening a conversation needs nothing here: rows are links, so a tap is a page
-// load and the page that arrives has the drawer closed by construction.
+// The phone's conversation drawer, a full-screen overlay over the chat. `inert`
+// is why this is not the zero-JS checkbox trick: an overlay that is not a modal
+// leaves the chat behind it tabbable and readable to a screen reader.
 const setDrawer = (open) => {
   document.body.classList.toggle('drawer-open', open);
   chat.inert = open;
@@ -167,15 +136,13 @@ drawerOpenBtn.addEventListener('click', () => setDrawer(true));
 drawerCloseBtn.addEventListener('click', () => setDrawer(false));
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setDrawer(false); });
 // Leaving the phone layout with the drawer open would strand `inert` on a chat
-// column that is no longer covered by anything. Keep the query in sync with
-// style.css's own breakpoint.
+// column nothing covers any more. Keep the query in sync with style.css's own
+// breakpoint.
 matchMedia('(max-width: 40rem)').addEventListener('change', () => setDrawer(false));
 
 // The cookie is the store — the server reads it back on the next GET / and
 // renders `data-theme` into the shell, so this only has to flip the live page.
-// The toggle's label and title name the theme it switches *to*, matching what
-// index.erb rendered. Shared with /theme, so the button and the command cannot
-// disagree about what applying a theme means.
+// The toggle's label names the theme it switches *to*, matching index.erb.
 const applyTheme = (theme) => {
   const other = theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = theme;
@@ -187,13 +154,6 @@ const applyTheme = (theme) => {
 themeToggle.addEventListener('click', () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 
-// — the slash commands —
-//
-// The palette itself is the composer's (see composer.js): it filters the
-// server-rendered rows, tracks the highlight, and resolves what was picked.
-// What lives here is what each name *does*, because that is the half that
-// names dialogs, routes and this tab's conversation.
-
 const openThemePicker = () => {
   const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
   const current = document.documentElement.dataset.theme;
@@ -203,14 +163,9 @@ const openThemePicker = () => {
   });
 };
 
-// The connection picker. The marked row is the *intended* one — a pick that has
-// not landed yet is still what the user asked for — which is why the pending
-// span is consulted before the live one. Both are read out of the status bar
-// for the theme picker's reason: the server rendered the page before either
-// could move.
-//
-// The server answers 204 and the switch shows up on the status bar's own
-// frame, so there is nothing to apply here.
+// The marked row is the *intended* connection, so a pick that has not landed
+// yet wins over the live one. The server answers 204 and the switch arrives on
+// the status bar's own frame, so there is nothing to apply here.
 const openModelPicker = () => {
   const dialog = openDialog('Model', cloneTemplate('tpl-model'));
   const current = statusModelPending.textContent || statusModel.textContent;
@@ -239,14 +194,9 @@ const reportUnknownCommand = (name) => {
   openDialog('No such command', body);
 };
 
-// The composer, mounted. The arms are the other half of the contract
-// PikuriWeb::SlashCommand describes: every name in the server's catalog needs
-// one here, and a name the config gated out of the catalog keeps its arm — it
-// is simply never rendered a row to reach it by.
-//
-// `viewing` goes in because the conversation is the page's, not the
-// composer's; the failure note comes back out because the status bar is this
-// file's to write.
+// One arm per name in PikuriWeb::SlashCommand's catalog — the other half of
+// that contract. A name the config gated out keeps its arm; it is simply never
+// rendered a row to reach it by.
 initComposer({
   conversation: viewing,
   onunknown: reportUnknownCommand,

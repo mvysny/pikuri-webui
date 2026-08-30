@@ -1,27 +1,42 @@
-// DOM utilities.
-
-// Create an element and assign properties in one expression, so building a
-// tree reads as a tree.
+/**
+ * Creates an element and assigns properties in one expression, so building a
+ * tree reads as a tree:
+ *
+ *     header.append(el('h2', { textContent: title }), close);
+ *
+ * @param {string} tag
+ * @param {object} [props] assigned as *properties*, not attributes — `aria-*`
+ *   still needs `setAttribute`.
+ * @returns {HTMLElement}
+ */
 export const el = (tag, props = {}) => Object.assign(document.createElement(tag), props);
 
-// The content of a <template>, ready to append. Cloned, so the template stays
-// intact for the next time the same dialog is opened.
+/**
+ * The content of the `<template>` with this id, cloned so the template survives
+ * being opened again.
+ *
+ * @param {string} id
+ * @returns {DocumentFragment}
+ */
 export const cloneTemplate = (id) => document.getElementById(id).content.cloneNode(true);
 
-// Open `body` as a modal dialog titled `title`, and return the <dialog> so the
-// caller can wire up whatever it just put inside:
-//
-//   const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
-//   dialog.querySelectorAll('button').forEach(...);
-//
-// `body` is a Node — never an HTML string — so a caller filling in a value can
-// only do it through textContent, and no dialog can become a concatenation of
-// something the user typed.
-//
-// showModal() is doing the heavy lifting: it makes the rest of the page inert,
-// handles ESC, contains focus, and gives ::backdrop something to paint. The
-// dialog is removed from the DOM when it closes, so none of them sit in the
-// page at rest.
+/**
+ * Opens `body` as a modal dialog titled `title` and returns the `<dialog>`, so
+ * the caller can wire up what it just put inside:
+ *
+ *     const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
+ *     dialog.querySelectorAll('[data-theme]').forEach(...);
+ *
+ * Cleanup: the dialog removes itself on close and hands focus back to the
+ * opener, so none of them sit in the page at rest.
+ *
+ * @param {string} title
+ * @param {Node} body never an HTML string, so a caller filling in a value can
+ *   only do it through textContent and no dialog becomes a concatenation of
+ *   something the user typed.
+ * @returns {HTMLDialogElement} already open; `showModal` owns ESC, focus
+ *   containment and `::backdrop`.
+ */
 export const openDialog = (title, body) => {
   const opener = document.activeElement;
 
