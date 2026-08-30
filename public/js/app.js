@@ -7,6 +7,7 @@
 // by block id and builds no markup of its own.
 import { cloneTemplate, openDialog } from './dom.js';
 import { initComposer } from './composer.js';
+import { initStatusBar } from './statusbar.js';
 
 // The conversation this tab reads, fixed for the life of the page. The server
 // addresses every frame to it, so nothing here filters.
@@ -17,15 +18,10 @@ const chat = document.getElementById('chat');
 const sidebar = document.getElementById('sidebar');
 const drawerOpenBtn = document.getElementById('drawer-open');
 const drawerCloseBtn = document.getElementById('drawer-close');
-const cancelBtn = document.getElementById('cancel');
 const newBtn = document.getElementById('new-conversation');
-const statusState = document.getElementById('status-state');
-const statusPending = document.getElementById('status-pending');
-const statusModel = document.getElementById('status-model');
-const statusModelPending = document.getElementById('status-model-pending');
-const statusTokensCtx = document.getElementById('status-tokens-ctx');
-const statusTokensDetail = document.getElementById('status-tokens-detail');
 const themeToggle = document.getElementById('theme-toggle');
+
+const statusbar = initStatusBar({ conversation: viewing });
 
 // Stick to the bottom only when the user is already there — scrolling up
 // to re-read must survive streaming updates.
@@ -47,26 +43,6 @@ const upsertBlock = ({ id, kind, html }) => {
   if (stick) transcript.scrollTop = transcript.scrollHeight;
 };
 
-// `queued` means the turn is accepted but another conversation holds the
-// executor — saying so beats showing "busy" for a turn that has not started.
-// The two model spans hold bare names (the arrow between them is CSS's)
-// because /model reads them back as the intended connection.
-const updateStatus = ({
-  state, busy, pending, tokens, tokens_detail: tokensDetail, model,
-  model_pending: modelPending, model_missing: modelMissing,
-}) => {
-  statusState.textContent = state === 'queued' ? 'waiting for a free slot' : state;
-  statusPending.textContent = pending > 0 ? `${pending} queued` : '';
-  statusModel.textContent = model;
-  statusModel.dataset.missing = modelMissing ?? '';
-  statusModelPending.textContent = modelPending ?? '';
-  statusTokensCtx.textContent = tokens;
-  statusTokensDetail.textContent = tokensDetail;
-  cancelBtn.hidden = !busy;
-  // Nothing else is gated on busy: sending queues rather than refusing, and
-  // delete is refused per row by the server's own re-render of the sidebar.
-};
-
 // The sidebar's list, re-rendered by the server; `viewing` rides along so it
 // can mark this tab's row. In place rather than a reload, which would cost each
 // tab its half-typed message.
@@ -78,7 +54,7 @@ const refreshSidebar = () =>
 const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
 es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
 es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
-es.addEventListener('status', (e) => updateStatus(JSON.parse(e.data)));
+es.addEventListener('status', (e) => statusbar.update(JSON.parse(e.data)));
 // A history load is replaying into this conversation; emptying in place rather
 // than reloading keeps a half-typed message.
 es.addEventListener('reset', () => transcript.replaceChildren());
@@ -86,12 +62,6 @@ es.addEventListener('conversations', refreshSidebar);
 // An auto-reconnect may have missed frames; reload to re-snapshot from the
 // server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
-
-cancelBtn.addEventListener('click', () => {
-  const body = new FormData();
-  body.set('conversation', viewing);
-  fetch('/cancel', { method: 'POST', body });
-});
 
 // The fresh conversation has its own URL, so this tab follows it; other tabs
 // stay where they are.
@@ -163,13 +133,12 @@ const openThemePicker = () => {
   });
 };
 
-// The marked row is the *intended* connection, so a pick that has not landed
-// yet wins over the live one. The server answers 204 and the switch arrives on
-// the status bar's own frame, so there is nothing to apply here.
+// The server answers 204 and the switch arrives on the status bar's own frame,
+// so there is nothing to apply here.
 const openModelPicker = () => {
   const dialog = openDialog('Model', cloneTemplate('tpl-model'));
-  const current = statusModelPending.textContent || statusModel.textContent;
-  const missing = statusModel.dataset.missing;
+  const current = statusbar.intendedModel();
+  const missing = statusbar.missingModel();
   if (missing) {
     const note = dialog.querySelector('.model-missing');
     note.textContent = `${missing} is no longer in the config file; this conversation is on ${current}.`;
@@ -200,7 +169,7 @@ const reportUnknownCommand = (name) => {
 initComposer({
   conversation: viewing,
   onunknown: reportUnknownCommand,
-  onsendfailed: () => { statusState.textContent = 'not sent'; },
+  onsendfailed: () => statusbar.say('not sent'),
   commands: {
     '/new': startConversation,
     '/model': openModelPicker,

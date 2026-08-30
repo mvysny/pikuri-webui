@@ -56,8 +56,9 @@ replacement fresh.
 ## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them (2026-08-30)
 
 **Status:** Accepted, shipped 2026-08-30 with `public/js/composer.js`, the
-first one. `app.js` is not being split further on principle — the next
-feature moves out when it earns it.
+first one; `public/js/statusbar.js` followed the same day. `app.js` is not
+being split further on principle — the next feature moves out when it
+earns it.
 
 **Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
@@ -121,17 +122,23 @@ the other consumer. Revisit if two features ever want the same short name.
 **Consequences.**
 
 - `app.js` no longer names `#prompt`, `#slash-menu` or `/messages`.
-- **`Q_composer_edges` stays open.** Two things inside `#composer` are
-  still `app.js`'s: the stop button (`#cancel` sits in the form but is
-  driven by the status frame and posts `/cancel`) and the unknown-command
-  dialog (arguably the palette's own feedback, but its `<template>` lives
-  outside the form with the others). Both are the same question — where
-  the status bar's own state ends up — and are deliberately parked until
-  the second feature file makes the answer obvious.
+- **`Q_composer_edges` is half-answered.** `statusbar.js` took `#cancel`:
+  the id is the contract, not the nesting, so a button sitting in
+  `#composer`'s markup belongs to whoever the status frame drives. The
+  unknown-command dialog stays the root's — it is already reached through
+  `onunknown`, which is wiring, and its `<template>` lives outside the
+  form with the others.
+- **The status bar is the store for the intended connection, and now says
+  so.** `/model` used to read `#status-model-pending`'s text straight out
+  of the DOM, legal only because both halves sat in one file; it now asks
+  `statusbar.intendedModel()`. The DOM-as-store choice survives the split
+  — the alternative, keeping the last status frame in the root, would have
+  been a second copy of state the bar already renders.
 - A moved function stops being covered by anything that scanned only
-  `app.js`. `client_contract_spec.rb` reads every script that may name a
-  server-side name, joined, so a split cannot quietly shrink the protocol
-  check.
+  `app.js`. `client_contract_spec.rb` reads every script joined, and
+  globs `public/js/` rather than listing names — the `statusbar.js` split
+  broke it on a hardcoded list, which is the failure mode the rule exists
+  to prevent, so a split cannot quietly shrink the protocol check.
 
 ---
 

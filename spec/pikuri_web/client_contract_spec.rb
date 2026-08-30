@@ -25,9 +25,11 @@
 # over the delete form's own action, name nothing to check.
 RSpec.describe 'the client/server contract' do
   root = Pathname(__dir__).join('../..').expand_path
-  # dom.js is left out because it names nothing: it is handed every id and
-  # every node it touches.
-  client_js = %w[app.js composer.js].map { |name| (root / 'public/js' / name).read }.join("\n")
+  # Every script, globbed rather than listed: a named list would quietly shrink
+  # the protocol check the next time a feature moves out of app.js, which is the
+  # one thing D_feature_owns_its_file asks of this file. dom.js joins in and
+  # contributes nothing, since it names no id, template or route.
+  client_js = Pathname.glob(root / 'public/js/*.js').sort.map(&:read).join("\n")
   index_erb = (root / 'views/index.erb').read
   sidebar_erb = (root / 'views/_sidebar.erb').read
 
