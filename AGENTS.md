@@ -279,12 +279,14 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/` — the static root, served at the URL root: scripts under
   `js/`, the mascot and every icon under `images/`. `style.css` and the
   manifest stay at the top because each is the only file of its kind.
-- `public/js/app.js` — the composition root: SSE, transcript, sidebar,
-  drawer, theme, and the mount + command arms of the composer.
+- `public/js/app.js` — the composition root: SSE, sidebar, drawer, theme,
+  and the mount + command arms of the composer.
 - `public/js/composer.js` — `initComposer`, everything `#composer` does:
   buffer, auto-grow, slash palette, keyboard, `POST /messages`.
 - `public/js/statusbar.js` — `initStatusBar`, `#status-bar` and its ■:
   status frames, `POST /cancel`, and the intended model read back.
+- `public/js/transcript.js` — `initTranscript`, `#transcript`: blocks
+  upserted by id, dropped, emptied, and the stick-to-bottom scroll.
 - `public/js/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one

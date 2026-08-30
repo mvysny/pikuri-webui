@@ -3,17 +3,16 @@
 // arms of its slash commands — the wiring *between* features, which is why
 // `/theme` and `/new` live here and the palette does not.
 //
-// Rendering is the server's (kramdown): this places ready-made HTML fragments
-// by block id and builds no markup of its own.
+// Rendering is the server's: what markup this places, it was handed.
 import { cloneTemplate, openDialog } from './dom.js';
 import { initComposer } from './composer.js';
 import { initStatusBar } from './statusbar.js';
+import { initTranscript } from './transcript.js';
 
 // The conversation this tab reads, fixed for the life of the page. The server
 // addresses every frame to it, so nothing here filters.
 const viewing = document.documentElement.dataset.conversation;
 
-const transcript = document.getElementById('transcript');
 const chat = document.getElementById('chat');
 const sidebar = document.getElementById('sidebar');
 const drawerOpenBtn = document.getElementById('drawer-open');
@@ -22,26 +21,7 @@ const newBtn = document.getElementById('new-conversation');
 const themeToggle = document.getElementById('theme-toggle');
 
 const statusbar = initStatusBar({ conversation: viewing });
-
-// Stick to the bottom only when the user is already there — scrolling up
-// to re-read must survive streaming updates.
-const nearBottom = () =>
-  transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
-
-// Upsert by id: the first frame of a streamed message creates the div, every
-// re-render replaces it in place.
-const upsertBlock = ({ id, kind, html }) => {
-  const stick = nearBottom();
-  let el = document.getElementById(id);
-  if (!el) {
-    el = document.createElement('div');
-    el.id = id;
-    el.className = `block ${kind}`;
-    transcript.append(el);
-  }
-  el.innerHTML = html;
-  if (stick) transcript.scrollTop = transcript.scrollHeight;
-};
+const transcript = initTranscript();
 
 // The sidebar's list, re-rendered by the server; `viewing` rides along so it
 // can mark this tab's row. In place rather than a reload, which would cost each
@@ -52,12 +32,10 @@ const refreshSidebar = () =>
     .then((html) => { sidebar.innerHTML = html; });
 
 const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
-es.addEventListener('block', (e) => upsertBlock(JSON.parse(e.data)));
-es.addEventListener('remove', (e) => document.getElementById(JSON.parse(e.data).id)?.remove());
+es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
+es.addEventListener('remove', (e) => transcript.remove(JSON.parse(e.data).id));
 es.addEventListener('status', (e) => statusbar.update(JSON.parse(e.data)));
-// A history load is replaying into this conversation; emptying in place rather
-// than reloading keeps a half-typed message.
-es.addEventListener('reset', () => transcript.replaceChildren());
+es.addEventListener('reset', () => transcript.reset());
 es.addEventListener('conversations', refreshSidebar);
 // An auto-reconnect may have missed frames; reload to re-snapshot from the
 // server-authoritative transcript.

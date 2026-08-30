@@ -56,8 +56,9 @@ replacement fresh.
 ## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them
 
 **Status:** Accepted, shipped with `public/js/composer.js`, the first
-one, and `public/js/statusbar.js` behind it. `app.js` is not being split
-further on principle — the next feature moves out when it earns it.
+one, then `public/js/statusbar.js` and `public/js/transcript.js`. `app.js`
+is not being split further on principle — the next feature moves out when
+it earns it.
 
 **Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
