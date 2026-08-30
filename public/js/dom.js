@@ -1,11 +1,4 @@
-// DOM mechanics the platform exposes only to script, with no knowledge of this
-// app: no element ids, no conversation, no routes. That is the admission rule —
-// a function that names something in index.erb belongs in app.js instead, or
-// this file becomes the junk drawer its name is meant to prevent.
-//
-// Nothing here renders content. Markup the server can produce is the server's;
-// what is left for script is the part HTML cannot declare — opening a modal,
-// measuring a textarea — and that is what lives here.
+// DOM utilities.
 
 // Create an element and assign properties in one expression, so building a
 // tree reads as a tree.
