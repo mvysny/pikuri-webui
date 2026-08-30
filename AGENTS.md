@@ -39,247 +39,175 @@ the alternatives that were rejected, live one entry per slug in
   project's premise rather than a fork, so no `D_` entry.)
 
 - **The seam: no `Pikuri::*` type reaches what the browser sees.**
-  {Transcript}, {Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
-  {ConversationRegistry}, {Config} and {App} are Pikuri-free — they speak
-  ids, kinds, HTML strings, paths and queues, so a shifted pikuri surface
-  never costs a sweep of the rendering path. Server-side of that line,
-  pikuri types are used freely: `bin/pikuri-web-chat`, {SseListener},
-  {AgentRunner}, {HistoryReplay}, {ModelCatalog} and
-  {ConversationStore#save}. A pikuri type appearing in a class the
-  browser's own state flows through has to argue for itself — which is
-  why the catalog crosses the line as names and `[model, server]` pairs,
-  never as a `ChatTransport`. See `D_pikuri_free_core`.
+  Pikuri-free: {Transcript}, {Broadcaster}, {StreamingMessage},
+  {MarkdownRenderer}, {ConversationRegistry}, {Config}, {App}. Pikuri
+  types used freely: `bin/pikuri-web-chat`, {SseListener}, {AgentRunner},
+  {HistoryReplay}, {ModelCatalog}, {ConversationStore#save}. The catalog
+  crosses as names and `[model, server]` pairs, never a `ChatTransport`.
+  See `D_pikuri_free_core`.
 
 - **Deleting a conversation is irreversible, and it stays deleted.**
   `confirm()` then `rm_r`, `meta.json` unlinked first; no undo, no
-  tombstone, no retention cap. Refused while *that* conversation is
-  mid-turn: the delete *retires* the runner ({AgentRunner#discard!}, one
-  atomic busy-check-and-claim on the runner's mutex) and only then removes
-  the folder. A retired runner starts no turn and writes no folder, so
-  nothing can save the conversation back. See `D_delete_no_undo`.
+  tombstone, no retention cap. A delete mid-turn *retires* the runner
+  ({AgentRunner#discard!}, one atomic busy-check-and-claim) before
+  removing the folder, so nothing can save the conversation back.
+  See `D_delete_no_undo`.
 
 - **Firefox on the desktop, Safari on iPad, Safari on iPhone — greenfield
-  only.** No polyfills, no prefixes for a fourth browser; `:has()`,
-  `:focus-within`, `@media (hover: none)`, `dvh`, `inert` and
-  `SubmitEvent#submitter` are all fair game. iPads count as desktops, so
-  no breakpoint may sit at or above their 768px portrait width. The
-  iPhone layout is unverified on hardware, and a layout is not a phone
-  *recommendation* — `--bind` off loopback still has no auth.
-  See `D_target_browsers`.
+  only.** No polyfills, no fourth browser; `:has()`, `:focus-within`,
+  `dvh`, `inert`, `SubmitEvent#submitter` are fair game. iPads count as
+  desktops, so no breakpoint may sit at or above 768px. The iPhone layout
+  is unverified on hardware. See `D_target_browsers`.
 
 - **One `index.erb` for the phone and the desktop; the difference is
-  placement, so it is CSS's.** `#drawer` *is* the desktop sidebar column
-  — same element, same `_sidebar.erb` — restyled to a full-screen overlay
-  under `@media (max-width: 40rem)`, where `#topbar`'s ☰ opens it. No UA
-  sniffing, no second shell, no device branch in `app.js`: different
-  *content* would be a template's job, different placement never is. The
-  breakpoint is written twice (`style.css`, and `app.js`'s `matchMedia`
-  that keeps `inert` from stranding) and the two move together.
+  placement, so it is CSS's.** `#drawer` *is* the desktop sidebar column,
+  restyled to an overlay under `@media (max-width: 40rem)`. No UA
+  sniffing, no second shell, no device branch in `app.js`. The breakpoint
+  is written twice (`style.css`, and `app.js`'s `matchMedia` keeping
+  `inert` from stranding) and the two move together.
   See `D_one_shell_two_layouts`.
 
-- **The transcript is server-authoritative.** {Transcript} holds one
-  conversation's rendered blocks; `GET /c/:id` renders the full snapshot
-  and SSE carries only deltas. Never introduce client-only conversation
-  state.
+- **The transcript is server-authoritative.** {Transcript} holds the
+  rendered blocks; `GET /c/:id` renders the full snapshot, SSE carries
+  only deltas. Never introduce client-only conversation state.
   See `D_server_authoritative_transcript`.
 
 - **A saved conversation is `history.json` plus our `meta.json`, and
   nothing else.** Blocks are re-derived by replaying synthesized events
-  through {SseListener}, never stored — so old conversations get today's
-  renderer and today's CSS. A runner replays its history once, when the
-  registry mints it. No rendered HTML on disk, no second renderer.
+  through {SseListener}, never stored, so old conversations get today's
+  renderer. No rendered HTML on disk, no second renderer.
   See `D_replay_from_history`.
 
 - **The threading rule.** The agent loop runs as a job on the shared
   executor — never on a Sinatra request thread. Thread-safety lives in
   the sinks ({Transcript}, {Broadcaster}) and in {ConversationRegistry};
-  there is no UI thread and no marshaling.
+  no UI thread, no marshaling.
   See `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
 - **No owner thread, and no session concept — but if state ever becomes
-  shared, it gets *one global* mechanism.** Single-user server; each
-  browser owns its own state (draft, scroll, theme, and which conversation
-  it reads — that one lives in the URL). The server's state is partitioned
-  per conversation and single-writer for that reason, so there is nothing
-  for an event queue or a coarse lock to own. Should something genuinely
-  shared appear, the answer is one global queue or one global lock —
-  **never a Vaadin-style per-session one**, because a session here owns
-  nothing to guard. {Broadcaster} stays outside either, as a sink.
-  See `D_no_event_queue`.
+  shared, it gets *one global* mechanism**, a queue or a lock and **never
+  a Vaadin-style per-session one**. Server state is partitioned per
+  conversation and single-writer; each browser owns its own view state.
+  {Broadcaster} stays outside either, as a sink. See `D_no_event_queue`.
 
 - **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
-  trap** — both run on the far side of Puma's unbounded graceful wait,
-  which parked `GET /events` drain threads would otherwise never end.
-  {Broadcaster} is closed from Puma's `:state, :stop` event, and
-  `#close` must stay idempotent *and* keep refusing new subscribers.
+  trap** — both run on the far side of Puma's unbounded graceful wait.
+  {Broadcaster} is closed from Puma's `:state, :stop` event, and `#close`
+  must stay idempotent *and* keep refusing new subscribers.
   See `D_shutdown_on_state_stop`.
 
 - **The browser shows the conversation; diagnostics go to stderr.**
   {SseListener} renders events, never log lines, and `PikuriWeb.logger`
-  is never pointed at the {Broadcaster}. Never cross the streams.
-  See `D_diagnostics_to_stderr`.
+  is never pointed at the {Broadcaster}. See `D_diagnostics_to_stderr`.
 
 - **JavaScript is mechanics, never a renderer.** Zero JS dependencies, no
-  npm, no bundler, no build step. What script is for: transport
-  (`EventSource`, `fetch`), platform mechanics only it can reach
-  (`showModal`, `inert`, `scrollTop`, textarea measurement, `matchMedia`),
-  and per-browser state that must never reach the server. Markup or
+  npm, no bundler, no build step. Script is for transport, platform
+  mechanics only it can reach, and per-browser state. Markup or
   conversation content the server could have produced is the server's,
-  always, and `public/js/dom.js` knows no markup at all. The rule is about
-  rendering and state, *not* latency — the palette filter stays local.
-  See `D_no_js_build_step`.
+  always. The rule is about rendering and state, *not* latency — the
+  palette filter stays local. See `D_no_js_build_step`.
 
-- **A feature that owns a slice of the page owns a script file, and is
-  paired with the markup it renders from.** `public/js/composer.js` owns
-  `#composer` whole — the buffer, the auto-grow, the palette, the
-  keyboard, `POST /messages` — and looks its elements up by id, because
-  those ids are index.erb's contract with it. `public/js/app.js` is the
-  composition root: the page's spine (one `EventSource` fanned out to
-  several features) plus the wiring *between* them, which is what the
-  slash `commands` map is. Anything crossing a boundary goes through the
-  root, never through another feature's DOM. Extraction is earned — a
-  fifteen-line `theme.js` would be ceremony. The Ruby suite pins the
-  protocol and has no opinion on the split.
-  See `D_feature_owns_its_file`.
+- **A feature that owns a slice of the page owns a script file, paired
+  with the markup it renders from** and naming its ids. `app.js` is the
+  composition root: the page's spine plus the wiring *between* features.
+  Anything crossing a boundary goes through the root, never through
+  another feature's DOM. `dom.js` knows no markup at all. Extraction is
+  earned. See `D_feature_owns_its_file`.
 
 - **Slash commands: the catalog is the server's, the palette is the
   browser's, and a command never writes to the transcript.**
-  {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and
-  `composer.js` filters it in place, while what each name *does* is the
-  `commands` map `app.js` hands it at mount — the palette is the
-  composer's, the arms are wiring between features. A command's own effect — a dialog, a
-  navigation, a color change — is its only feedback. It runs however it
-  was sent — Enter,
-  or the ↑ button, which is the phone's Enter — and is never posted as a
-  message; the palette's rows activate on `pointerup`, because a tap on iOS
-  never becomes a `click`. Dialogs are real `<dialog>`s opened
-  through `dom.js`'s `openDialog`, which takes a *Node*, never an HTML
-  string. See `D_slash_command_palette`.
+  {SlashCommand}`::CATALOG` renders whole into `#slash-menu`; what each
+  name *does* is the `commands` map `app.js` hands the composer. A
+  command's own effect is its only feedback, it runs however it was sent
+  (Enter, or ↑ — the phone's Enter), and is never posted as a message.
+  Rows activate on `pointerup`, because a tap on iOS never becomes a
+  `click`. Dialogs are real `<dialog>`s via `openDialog`, which takes a
+  *Node*, never an HTML string. See `D_slash_command_palette`.
 
 - **Streaming is re-render-and-replace.** {StreamingMessage} re-renders
-  the whole accumulated source per (rate-limited) delta; delta coalescing
-  stays in pikuri (`Listener::RateLimited`, 15 fps). Its lifecycle
-  contract mirrors the TUI's `StreamingMarkdownBuffer`: deltas
-  preview-only, the bookend finalizes with authoritative content, dead
-  after finalize.
-  See `D_rerender_and_replace`.
+  the whole accumulated source per rate-limited delta; coalescing stays
+  in pikuri (15 fps). Deltas preview-only, the bookend finalizes with
+  authoritative content, dead after finalize. See `D_rerender_and_replace`.
 
 - **Mid-loop input goes through `Control::Interloper`, and the input
   stays enabled while busy.** {AgentRunner#submit} starts a turn when
   idle and injects when busy; it never refuses for being busy — the one
-  non-answer is a conversation deleted under it.
-  Interloper delivers at turn start and at
-  tool-batch completion, so the status bar's queued count (pushed by
-  `Interloper#on_change`) exists to make that wait legible — and a turn
-  that ends holding a queue starts a bare turn to deliver it, so the
-  count never sits above zero over an idle conversation. Only after a
-  turn that returned normally: a cancelled or failed one leaves the queue
-  for the next submit.
-  See `D_interloper_mid_loop_input`.
+  non-answer is a conversation deleted under it. A turn ending with a
+  queue starts a bare turn to deliver it, so the count never sits above
+  zero over an idle conversation; a cancelled or failed turn leaves the
+  queue for the next submit. See `D_interloper_mid_loop_input`.
 
-- **The chat script stays chat-only; new capability means a new
-  script.** A disk- or shell-touching tool added to
-  `bin/pikuri-web-chat` breaks a trifecta guarantee the README has
-  already made. An OS or code shell lands as a sibling script with its
-  own tool set and its own trifecta report.
+- **The chat script stays chat-only; new capability means a new script.**
+  A disk- or shell-touching tool added to `bin/pikuri-web-chat` breaks a
+  trifecta guarantee the README has made. An OS or code shell lands as a
+  sibling script with its own tool set and report.
   See `D_chat_only_entry_point`.
 
 - **A conversation owns its agent; a tab owns which one it views — and
   single-user for good.** {ConversationRegistry} holds one {AgentRunner}
-  per conversation opened, each with its own agent, history and
-  transcript. Which conversation a tab views is that tab's own state and
-  lives in the URL (`GET /c/:id`), and SSE frames are addressed per
-  conversation, so a turn runs on undisturbed while you read something
-  else. No sessions, no auth, no accounts: a second person runs their own
-  process under their own OS account. `--bind` defaults to 127.0.0.1 and
-  anything else is the operator's risk.
+  per conversation opened; which one a tab views lives in the URL, and
+  SSE frames are addressed per conversation, so a turn runs on undisturbed
+  while you read something else. No sessions, no auth, no accounts.
+  `--bind` defaults to 127.0.0.1; anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
 - **Turns run on one shared executor, and its pool size is a load cap, not
-  a correctness device.** Sending never refuses for load: a turn submitted
-  when the slots are taken is *queued*, which the status bar says out loud. `--turns`
-  exists so turns don't outnumber the inference server's parallel slots;
-  match it to llama.cpp's `--parallel`. Single-writer safety comes from the
-  partition instead — one agent per conversation, and a conversation admits
-  one turn at a time — so it holds at any pool size. Don't rebuild a
-  correctness argument on that number.
-  See `D_serial_turn_executor`.
+  a correctness device.** Sending never refuses for load — a turn with no
+  free slot is *queued*, which the status bar says out loud. Match
+  `--turns` to llama.cpp's `--parallel`. Single-writer safety comes from
+  the partition, so it holds at any pool size; don't rebuild a correctness
+  argument on that number. See `D_serial_turn_executor`.
 
-- **The mascot is the library's; the plate is ours.** Kuri the pika in
-  the Talus coat is decided in `../pikuri` (`D_kuri_mascot`), and
-  `public/images/kuri.svg` is a **verbatim** copy of
-  `../pikuri/assets/kuri.svg` — byte for byte; upstream is the only source
-  of truth for the drawing, so re-copy rather than redraw. What this
-  repo owns is that **every rasterized icon is that drawing on an opaque
-  plate**, because Talus is a mid grey and no ground can be assumed. The
-  master SVG stays transparent; the favicon, the
-  two manifest icons, the maskable variant and `apple-touch-icon` all sit
-  on `#1e1f22`, because iOS composites transparency onto black and takes
-  its home-screen icon from `apple-touch-icon` rather than the manifest.
-  Every plated file is generated from the master by `bin/regen-icons`,
-  which is where the sizes and the plate colour live; `favicon.svg` is a
-  sanctioned duplicate of the geometry (a favicon cannot reference an
-  external file) but not a hand-maintained one. The plate colour and
+- **The mascot is the library's; the plate is ours.** `public/images/kuri.svg`
+  is a **verbatim** copy of `../pikuri/assets/kuri.svg` (`D_kuri_mascot`)
+  — re-copy, never redraw. Every rasterized icon is that drawing on an
+  opaque `#1e1f22` plate, generated from the master by `bin/regen-icons`,
+  which is where the sizes and the plate colour live. That colour and
   `index.erb`'s `theme-color` are the only raw colours outside
-  `style.css`, and are exceptions on the record — don't grow a third from
-  them. See `D_icon_plate`.
+  `style.css`, and are exceptions on the record — don't grow a third.
+  See `D_icon_plate`.
 
 - **Theme is a presentational cookie, not transcript state.** Eleven
-  semantic CSS tokens, two palettes, both in `public/style.css`; `GET /`
-  renders `data-theme` onto `<html>` and app.js rewrites the cookie in
-  place. A new themed color means both palettes and both mappings, and
-  nothing outside `style.css` reads a raw color. Never repurpose a block
-  kind's color for a control.
-  See `D_theme_cookie`.
+  semantic tokens, two palettes, both in `public/style.css`; `GET /`
+  renders `data-theme` and app.js rewrites the cookie in place. A new
+  themed color means both palettes and both mappings, and nothing outside
+  `style.css` reads a raw color. Never repurpose a block kind's color for
+  a control. See `D_theme_cookie`.
 
 - **{ConversationStore} has no lock, and does not need one.** One writer
-  per conversation directory (from the per-conversation partition, not
-  from the class), temp-file-and-rename for both files, and a `#row` that
-  takes a read's own `ENOENT` as the answer. `#save` owns the whole
-  commit — directory 0700, then `History#save`, then `meta.json` as the
-  commit point — so nothing writes beside it and no caller decides the
-  order. Cross-call sequences (`#find` then `#delete`) are deliberately
-  *not* atomic. Don't add a `Monitor` for safety: it would serialize what
-  is already safe to interleave and invite a correctness argument resting
-  on the wrong mechanism. See `D_no_store_lock`.
+  per conversation directory, temp-file-and-rename for both files, a
+  `#row` that takes `ENOENT` as the answer. `#save` owns the whole commit
+  — 0700, `History#save`, then `meta.json` as the commit point — so
+  nothing writes beside it. Cross-call sequences (`#find` then `#delete`)
+  are deliberately *not* atomic. Don't add a `Monitor` for safety.
+  See `D_no_store_lock`.
 
 - **One process per state root — and nothing enforces it, ever.** Two
-  `pikuri-web-chat` processes sharing `conversations/` silently overwrite
-  each other's turns and can resurrect a deleted conversation;
-  last-writer-wins is accepted, `README.md` warns, and no `flock` is
-  coming. A second process buys nothing a single one doesn't already do,
-  so don't add lock state for it. Revisit only if a state root shared
-  across shells lands (`D_per_shell_state_root`).
+  processes sharing `conversations/` silently overwrite each other;
+  last-writer-wins is accepted, `README.md` warns, no `flock` is coming.
   See `D_no_multi_process_lock`.
 
 - **All state under one folder named after the shell.**
   `~/.local/state/pikuri/pikuri-web-chat/`, derived once in the boot
-  script as `state_root`; anything new this shell persists goes beside
-  `conversations/`, never straight into `Pikuri::Paths.state`. A shared
-  path is the last step of cross-shell interop, not the first — the
-  *format* is what travels. See `D_per_shell_state_root`.
+  script as `state_root`; anything new goes beside `conversations/`,
+  never straight into `Pikuri::Paths.state`. See `D_per_shell_state_root`.
 
 - **A conversation's model is `[model, server]` in `meta.json`, minted
   onto the agent by the factory and written back at turn end from the
-  agent's own transport.** Never a `name` (renameable) and never a model
-  id alone (two servers can run one model). Three readers, and they must
-  not collapse: `Conversation#model_at_mint` (what disk said at mint; the
-  factory is its only reader), {AgentRunner#model} (intent — what
-  `registry.create(from:)` inherits), and `@agent.transport` (reality,
-  read only inside {AgentRunner}). A pick parks in {AgentRunner}'s
-  pending slot and lands at the top of the next turn, because pikuri
-  confines the switch there; nothing subscribes to `ModelSwitched`, and
-  a switch draws no transcript block — the status bar carries the model.
-  See `D_per_conversation_model`.
+  agent's own transport.** Never a `name` (renameable), never a model id
+  alone (two servers can run one model). Three readers that must not
+  collapse: `Conversation#model_at_mint` (disk, at mint — the factory is
+  its only reader), {AgentRunner#model} (intent), `@agent.transport`
+  (reality, read only inside {AgentRunner}). A pick parks in the pending
+  slot and lands at the top of the next turn; a switch draws no transcript
+  block. See `D_per_conversation_model`.
 
 - **One config file for every pikuri shell, and a connection has exactly
   one source.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
   schema, including sections this host never reads. Anything the file has
-  a home for — the connection, the model, the secrets — comes from the
-  file and from nowhere else: no flag, no `ENV`, no project-local file
-  overlays it, so there is never a precedence rule between an override,
-  the file and a conversation's own saved model. Pointing the shell
-  somewhere new means editing the file.
+  a home for comes from the file and nowhere else — no flag, no `ENV`, no
+  project-local overlay — so there is never a precedence rule between an
+  override, the file and a conversation's saved model.
   See `D_schema_complete_config`.
 
 - **`--dev` is Sinatra's development mode, not code reloading** — the
@@ -415,7 +343,13 @@ before deleting). Where the lasting nuggets go, in the order to try:
 
 - **The choice made and the alternatives rejected** → a `DECISIONS.md`
   entry, plus a flat invariant + `See D_<slug>` in **Scope decisions**.
-  **No entry without a real fork.**
+  **No entry without a real fork**, and none for a fork whose loss a
+  future change would not notice.
+- **A procedure — "change this and those move together"** → next to the
+  thing it operates on, as a script wherever one can run it
+  (`bin/regen-icons`). A manual in prose cannot be executed or tested,
+  and `DECISIONS.md` is the wrong home for it in any case: past tense is
+  a decision, imperative future is a manual.
 - **Work deferred as a consequence of a logged decision** → that entry's
   *Consequences*, not a surviving idea file.
 - **How one class works and why it is shaped that way** → its YARD

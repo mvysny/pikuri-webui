@@ -1,86 +1,55 @@
 # DECISIONS.md
 
-A living record of the design decisions behind pikuri-web — especially
-the *roads not taken*. It exists because the graduation pipeline (see
-[`AGENTS.md`](AGENTS.md)) had no home for one fact class: a rejected
-alternative. Both candidate homes refuse it on their own stated terms —
-a source file's YARD header explains the class *as it is* to someone
-reading that class, and gains nothing from an argument against a design
-that never shipped; and `AGENTS.md` is pulled into *every* session's
-context by `CLAUDE.md`, so rationale parked there is paid for on every
-turn. This file is the lazy side of that split: never context-loaded,
-read only when someone asks "why this way?".
-
-It is the *why-we-chose* record. It is not the *how-it-works* reference
-(the YARD headers), the *what-you-must-not-break* list (`AGENTS.md`), or
+The *why-we-chose* record for pikuri-web — especially the roads not
+taken, which nothing else here has a home for. Never context-loaded; read
+when someone asks "why this way?". It is not the how-it-works reference
+(the YARD headers), the what-you-must-not-break list (`AGENTS.md`), or
 the user-facing promise (`README.md`). An entry links out rather than
-restating.
+restating: `AGENTS.md` states the invariant flat with a `See D_<slug>`
+pointer, this file holds the argument behind it, and never two
+half-answers. A fork inside the agent loop, a tool, or LLM transport
+belongs to `../pikuri/DECISIONS.md` — cite it, don't re-argue it.
 
-**Boundaries** — the ones that keep this from becoming a second copy of a
-neighbour:
+**Format.** One entry per decision, newest first by decided date. The ID
+is `D_` plus a 1–4-word snake_case slug, so a citation carries meaning on
+its own. The `(date)` is *decided* provenance; git owns the edit history,
+so never narrate how an entry used to read. `grep '^## D_' DECISIONS.md`
+is the index — there is no ToC, and every `D_<slug>` referenced in the
+repo must exist as a heading here.
 
-- **vs. `AGENTS.md`.** That file is context-loaded and holds the
-  *invariant*: the rule a future change must not break, stated flat, with
-  a `See D_<slug>` pointer. This file holds the argument behind it — the
-  alternatives, the measurements, the consequence a contributor would
-  trip over. One line there, the reasoning here; never two half-answers.
-- **vs. the YARD headers.** A header describes its class as it is, for
-  someone about to change that class. It keeps the local contract
-  ({Transcript}'s thread-safety, {StreamingMessage}'s lifecycle). Only
-  the *fork* comes here.
-- **vs. `README.md`.** That file is the front door: what the app is,
-  the chat-only trifecta promise, how to run it. Why the promise was
-  drawn there rather than somewhere else is an entry here.
-- **vs. pikuri's own `DECISIONS.md`** (`../pikuri/DECISIONS.md`). This
-  project owns the web shell and nothing else, and the same split applies
-  to the decision log: a fork inside the agent loop, a tool, the
-  Interloper's delivery boundary, LLM transport — that is logged
-  upstream, and an entry here cites it rather than re-arguing it. What
-  belongs here is the shell's own forks, prominently including *what we
-  deliberately did not port* from pikuri-tui.
+**Two tests before writing an entry, and both must pass:**
 
-**Format.** One entry per decision. The ID is a slug, not a number:
-`D_` plus a 1–4-word snake_case hint at the subject
-(`D_rerender_and_replace`), so a citation carries meaning on its own.
-The `(date)` on the heading is *decided* provenance, not a log position —
-git owns the edit history, so don't narrate how an entry used to read.
-Keep each entry tight: context, the decision, the alternatives rejected
-and why, and the consequences a future contributor would trip over. A
-decision is worth logging the moment it's *made*; implementation can lag
-(the `Status:` line says which).
+- **Is there a real fork?** If nothing was seriously considered and
+  rejected, it isn't a decision — it's how the thing works, and that's
+  the YARD header. This is the guard against a diary.
+- **Would a future change silently break without it?** If rediscovering
+  the rejection costs a rebuild anyway, the fork isn't worth an entry.
 
-**No entry without a real fork.** If nothing was seriously considered and
-rejected, it isn't a decision — it's how the thing works, and that's the
-YARD header. This is the guard against a diary.
+**A manual is not a decision, and it does not live here.** The tense
+tells you which you are holding: past — *"we chose X over Y because Z"* —
+is a decision; imperative future — *"change this and those move
+together"* — is a manual, and belongs next to the thing, ideally as a
+script that cannot drift from what it produces. `bin/regen-icons` is the
+worked example: `D_icon_plate` argues the plate, the script holds the
+sizes.
 
-**Newest first.** Entries run reverse-chronologically by decided date, so
-a scan hits recent decisions first.
+**Budget the parts, not the entry.** Some decisions need more room than
+others, so there is no line cap — but the compulsory core is short:
+Status, Context, Decision, and the rejected alternatives at **one line
+each**. A rejection earns a paragraph only when its argument *surprised*
+you — when the obvious option failed for a reason a reader could not
+reconstruct. Below that, an optional tail may hold only: a measurement
+actually run, a mechanism that cannot be re-derived (the iOS compositing
+fact, the `pointerup` tap), or constraints binding future work. Prose
+that re-explains the decision at greater length is not on that list.
 
-**Never read wholesale.** `grep '^## D_' DECISIONS.md` is the index;
-there is no ToC (same discipline as `ls ideas/`). Cite an entry by slug.
-Grep tripwire: every `D_<slug>` referenced anywhere in the repo must
-exist as a `^## D_` heading here.
-
-**Entries are mutable — edit in place, don't append addendums.** Each
-entry is the single coherent home for one *live* decision; keep it
-current as the decision is refined or extended. Two things this does
-*not* license:
-
-- **The roads-not-taken stay.** "We chose X, rejected Y because Z" is
-  live content of the current decision, not stale history — never edit it
-  away. It's the most valuable thing in the file.
-- **A reversed *shipped* decision forks a tombstone, it is not
-  overwritten.** When a design was tried, shipped, and then thrown away,
-  leave the old entry as the scar, set its `Status:` to **Superseded by
-  `D_<slug>`**, and write the replacement fresh. The line: *refined or
-  extended* → edit in place; *reversed after shipping* → tombstone + new
-  entry.
-
-**Backfill is opportunistic.** Rationale that already sits inline in a
-YARD header or in `AGENTS.md`'s **Scope decisions** stays put — this file
-is the home going *forward*. Move an old one only when you're already
-editing that doc and the inline reasoning is crowding out the live
-design or the invariant.
+**Entries are mutable — edit in place, don't append addendums.** Keep an
+entry current as its decision is refined. Two limits: the
+roads-not-taken **stay** (they are live content, not stale history, and
+the most valuable thing here); and a decision *reversed after shipping*
+forks a tombstone rather than being overwritten — leave the old entry,
+set its `Status:` to **Superseded by `D_<slug>`**, and write the
+replacement fresh.
 
 ---
 
@@ -240,105 +209,78 @@ the status bar names the connection.
 ever used. pikuri's half was done too — `Agent#run_loop(user_message:,
 transport:)` applies a switch at the top of a turn, keeping history,
 callbacks, tools and controls, and `apply_transport!` is *private*, so the
-kwarg is the only way in. That is deliberate on pikuri's side: the chat is
-single-thread-confined and "a background thread mutating the connection
-mid-completion would tear an in-flight stream". The library cannot know
-nothing is in flight; `AgentRunner`'s state machine can. So the pending-slot
-shape was **forced, not chosen** — the only question was where the *selection*
-lives and when it is written.
+kwarg is the only way in. That is deliberate upstream: the chat is
+single-thread-confined, and a background thread mutating the connection
+mid-completion would tear an in-flight stream. The library cannot know
+nothing is in flight; `AgentRunner`'s state machine can. The pending-slot
+shape was therefore **forced, not chosen** — the open question was only where
+the *selection* lives and when it is written.
 
 **Decision, in four parts.**
 
-*Identity is the `[model, api_base]` pair, never a name and never a model
-id.* Two `[[llm]]` entries may run one model on two servers (the TUI's own
-example: local vs. remote Qwen), so the model alone conflates them; and a
-`name` is not recoverable from a transport — a landed `ModelSwitched` carries
-transports — besides being one config edit away from changing. This is
-pikuri-tui's `Shared::Model::Choice.key`, ported into `ModelCatalog`
-including its fall back to the raw model id for a transport from outside the
-catalog.
+*Identity is the `[model, api_base]` pair* — never a name (one config edit
+from changing, and not recoverable from a transport) and never a model id
+alone (two `[[llm]]` entries may run one model on two servers). This is
+pikuri-tui's `Shared::Model::Choice.key` ported into `ModelCatalog`, including
+its fall back to the raw model id for a transport from outside the catalog.
 
-*It lives in `meta.json`, written at turn end from the agent's own
-transport.* `#save` runs from `finish_turn`, under the runner's mutex, on the
-executor thread. Reading the field off `@agent.transport` rather than off the
-selection makes the envelope and `history.json`'s last `model_id` agree by
-construction.
+*It lives in `meta.json`, written at turn end from the agent's own transport.*
+`#save` runs from `finish_turn`, under the runner's mutex, on the executor
+thread. Reading the field off the agent rather than off the selection makes
+the envelope and `history.json`'s last `model_id` agree by construction.
 
-*A reopened conversation is **minted** on its saved transport; the pending
-slot is only ever a live switch.* The factory resolves
-`Conversation#model_at_mint` / `#server_at_mint` against the catalog and hands
-the result to `Agent.new`.
+*A reopened conversation is **minted** on its saved transport* — the factory
+resolves `Conversation#model_at_mint` / `#server_at_mint` against the catalog
+and hands the result to `Agent.new`. The pending slot is only ever a live
+switch.
 
 *The status bar is the model's only surface, and reality there is free.*
 `apply_transport!` assigns the agent's transport only *after* `with_model`
 returns, so `status_data[:model]` — read straight off it — can never advertise
-a model the switch did not reach. That is pikuri-tui's footer rule
-(`StatusFooterUpdater` moves the name only once `ModelSwitched` lands)
-satisfied by construction rather than by a subscription: a footer cannot read
-the agent, and we can.
+a model the switch did not reach. That is pikuri-tui's footer rule satisfied
+by construction rather than by a subscription: a footer cannot read the agent,
+and we can.
 
-**Rejected: deriving the model from `history.json`'s `model_id`.** pikuri does
-record it per message. But it is a model *string* — it cannot express the
-server half of the identity above; `ConversationStore#row` would have to parse
-every stored history to render one sidebar, where today it reads the envelope
-and nothing else; and a conversation that inherited a model but has not spoken
-yet has no `model_id` anywhere.
+**Rejected: deriving the model from `history.json`'s `model_id`** — it is a
+model *string*, so it cannot carry the server half; `#row` would have to parse
+every stored history to render one sidebar; and a conversation that inherited
+a model but has not spoken yet has no `model_id` at all.
 
 **Rejected: persisting at pick time.** A pick arrives on a request thread, so
-this either exports history mid-`complete` — what the turn-end rule exists to
-prevent — or writes `meta.json` beside `#save`, which `D_no_store_lock`
-forbids in as many words ("nothing writes beside it"). And for a conversation
-with no turn yet it writes the *commit point* over no `history.json`: a listed
-conversation that cannot be opened, the exact failure `#save`'s and
-`#delete`'s orderings were chosen to prevent. **Accepted cost:** a pick with
-no message after it is lost across a restart.
+this either exports history mid-`complete` or writes `meta.json` beside
+`#save`, which `D_no_store_lock` forbids in as many words. For a conversation
+with no turn yet it also writes the *commit point* over no `history.json` — a
+listed conversation that cannot be opened. **Accepted cost:** a pick with no
+message after it is lost across a restart.
 
-**Rejected: seeding the pending slot instead of minting.** The tempting
-argument for minting was history integrity — `load_history!` scrubbing
-thinking signatures whose `model_id` does not match — and that argument is
-**retracted**: it is a measured no-op on every backend we point at (see
-`../pikuri/ideas/thinking-block-replay.md`). The real reasons are two. First,
+**Rejected: seeding the pending slot instead of minting.** Two reasons, and
+neither is the tempting one — history integrity via `model_id`-mismatched
+thinking signatures is a measured no-op on every backend we point at
+(`../pikuri/ideas/thinking-block-replay.md`). First,
 `Agent#detect_and_emit_context_cap!` runs in the agent's **constructor**, so
-minting on the factory default probes the *wrong* server's window: a reopened
-conversation would show the wrong token cap until it was used, and pay a
-second probe to correct it. Second, a pending slot that is set on every reopen
-stops meaning "you picked something and it has not landed yet", which is the
-meaning the status bar's arrow and the dialog's marker both need it to have.
+minting on the factory default probes the *wrong* server's window. Second, a
+pending slot set on every reopen stops meaning "picked and not yet landed",
+which is the meaning the status bar's arrow and the dialog's marker need.
 
-**Rejected: a transcript block for a switch.** `:notice` exists and
-`History::Message#model_id` would even let `HistoryReplay` derive a switch
-boundary, so the block *would* survive a reopen — unlike the general
-slash-command case `D_slash_command_palette` rules out. But that means two
-producers of one block, the live arm and the replay-derived one, and two
-derivations disagree eventually — a reload would then silently rewrite the
-transcript. The status bar carries the model instead, which leaves
-`SseListener`'s `ModelSwitched` arm silent and `HistoryReplay` untouched.
+**Rejected: a transcript block for a switch.** It would survive a reopen —
+`History::Message#model_id` lets `HistoryReplay` derive a switch boundary —
+but that means two producers of one block, and two derivations disagree
+eventually, so a reload would silently rewrite the transcript. The status bar
+carries the model instead, leaving `SseListener`'s `ModelSwitched` arm silent.
 
-**Rejected: a synthetic bare turn to apply a pick early.** `run_loop(user_message:
-nil, transport: …)` would move the display sooner at the cost of a round-trip,
+**Rejected: a synthetic bare turn to apply a pick early** — costs a round-trip
 and raises `EmptyTurnError` against a prompt-only conversation on a
-separate-system-field provider. A pick made while idle sits until the next
-real turn, and the status bar's arrow says so.
+separate-system-field provider.
 
 **Rejected: subscribing to `ModelSwitched` to clear the arrow at the landing.**
-`SseListener` would need an `on_model_switched` hook — the shape the runner
-already uses for `Interloper#on_change` — to push a status frame the moment
-the switch lands. Without it the arrow clears at `finish_turn` instead, so a
-pick made while idle leaves the bar reading `local → remote` for the whole
-turn it is already running. That is early, not wrong: the bar never claims a
-model the switch did not reach. Not worth a non-rendering hook on the
-renderer; revisit if the lag grates against a slow first token.
+Without it the arrow clears at `finish_turn`, so a pick made while idle leaves
+the bar reading `local → remote` for the turn already running. That is early,
+not wrong — the bar never claims a model the switch did not reach — and not
+worth a non-rendering hook on the renderer. Revisit if the lag grates against
+a slow first token.
 
 **Consequences.**
 
-- **`ConversationStore#initialize(model:)` is gone.** A store-wide field could
-  only ever record the boot model — it was a lie waiting to happen. `#save`
-  takes the pair per call, in keeping with its already owning the whole commit.
-- **Half a pair is no pair.** An envelope written before this landed has a
-  `model` and no `server`, and that `model` named the *boot* connection rather
-  than the conversation's — so `#row` reads such a conversation as having
-  nothing saved, and it opens on the default. No migration, no `SCHEMA` bump
-  (`load_meta` checks the version and ignores what it does not read).
 - **Three readers, and they must not collapse into one.**
   `Conversation#model_at_mint` (what disk said at mint; the factory is its only
   reader), `AgentRunner#model` (intent — `pending || current`, what
@@ -348,31 +290,25 @@ renderer; revisit if the lag grates against a slow first token.
   from merging them.
 - **The mint-time pair is stale against disk by design** — `#save` moves
   `meta.json` on and the Data never follows. Harmless because the factory is
-  its only reader, at mint. `ConversationRegistry#find` does hand out a
-  resident runner's stale `Conversation`, but its caller's next move is `#open`,
-  which discards the passed object for a resident conversation.
-- **A switch onto a smaller window is accepted, not refused.** The re-emitted
-  `ContextCap` self-corrects the token readout for free; nothing re-baselines
-  the history, so 90k of conversation moved onto a 32k connection fails on the
-  next turn. The dialog lists each connection's `context_window` so the pick is
-  informed rather than discovered — that is the whole mitigation.
-- **A saved connection gone from the config falls back to `primary_llm`, and
-  the `/model` dialog is the only place it is said.** Not the transcript (a
-  block absent from `history.json`) and not `supported: false` (that means
-  "unreadable envelope"). The note is printed from the pair, because the name
-  went with the config entry, and it is cleared on the first save and on any
-  pick — by then `meta.json` holds the fallback and the note would describe a
-  deviation from nothing.
+  its only reader, at mint.
+- **Half a pair is no pair.** An envelope predating this has a `model` naming
+  the *boot* connection and no `server`, so `#row` reads it as having nothing
+  saved and it opens on the default. No migration, no `SCHEMA` bump.
+- **A switch onto a smaller window is accepted, not refused.** Nothing
+  re-baselines the history, so 90k of conversation moved onto a 32k connection
+  fails on the next turn; the dialog lists each `context_window` so the pick is
+  informed rather than discovered, and that is the whole mitigation.
+- **A saved connection gone from the config falls back to `primary_llm`, said
+  only in the `/model` dialog** — not the transcript (a block absent from
+  `history.json`) and not `supported: false` (which means "unreadable
+  envelope"). Cleared on the first save or pick, by when `meta.json` holds the
+  fallback and the note would describe a deviation from nothing.
 - **`--server` / `--model` were removed ahead of this**, so there is no
   precedence rule between a flag, the file and a conversation's saved model.
   See the 2026-08-29 amendment to `D_schema_complete_config`.
-- **The catalog is a constructor argument, not a second wiring.** One
-  conversation factory still means one tool set, so the boot trifecta report
-  stays true of every agent.
-- **The status bar shows the model even for a single-`[[llm]]` user**, where it
-  is a constant; the `/model` palette entry is gated on there being more than
-  one, as pikuri-tui gates its own. The asymmetry is deliberate: naming the
-  connection is worth a segment even when it cannot change.
+- **The catalog is a constructor argument, not a second wiring** — one factory
+  still means one tool set, so the boot trifecta report stays true of every
+  agent.
 
 ---
 
@@ -382,83 +318,71 @@ renderer; revisit if the lag grates against a slow first token.
 `/trifecta`; `/model` joined them later the same day
 (`D_per_conversation_model`) and is the first command gated on the config —
 `SlashCommand.catalog(connections:)` drops it when there is nothing to pick
-between. Amended 2026-08-30: the palette's mechanics moved into
-`public/js/composer.js` and the dispatch became a map app.js hands it, replacing
-`runCommand`'s switch.
+between. The palette's mechanics live in `public/js/composer.js` since
+2026-08-30 (`D_feature_owns_its_file`).
 
 **Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
 is the obvious thing to port: a list above the input, filtered as you type,
-Up/Down + Enter. On the phone it is worth more than on the desktop, because
+Up/Down + Enter. It is worth more on the phone than on the desktop, because
 the drawer footer's two buttons — new conversation, theme — cost a drawer
-open to reach, and `/theme` costs three keystrokes from where the caret
+open to reach, where `/theme` costs three keystrokes from where the caret
 already is.
 
-**Decision, in three parts.**
+**Decision, in four parts.**
 
-*The catalog is server-rendered; the dispatch is not.* `PikuriWeb::SlashCommand::CATALOG`
-renders whole into `#slash-menu`, and the browser filters it by toggling
-`hidden` per row. A command *runs* in the browser, because most of them
-are browser-side anyway (a navigation, a cookie, a dialog); the one that is
-not, `/model`, still opens its dialog there and posts a name.
-That makes adding a command a three-place contract — catalog, an arm in the
-browser, and a `<template>` for a command with a dialog — which is the same
-shape the block kinds already have, and is written down in `AGENTS.md` beside
-them.
+*The catalog is server-rendered; the dispatch is not.* `SlashCommand::CATALOG`
+renders whole into `#slash-menu` and the browser filters it by toggling
+`hidden` per row. A command *runs* in the browser because most of them are
+browser-side anyway (a navigation, a cookie, a dialog); `/model`, the one that
+is not, still opens its dialog there and posts a name. Adding a command is
+therefore a three-place contract — catalog, an arm, and a `<template>` for one
+with a dialog — the same shape the block kinds have, and written down in
+`AGENTS.md` beside them.
 
-*The palette is the composer's; the arms are the app's.* The mechanics — the
-filter, the highlight, resolving a buffer to a name — moved into
-`public/js/composer.js` when the composer became a component
-(`D_no_js_build_step`'s three tiers). What each name *does* could not follow
-it: `/new` posts a route, `/model` opens a dialog over this tab's
-conversation, `/theme` writes a cookie — all of it page knowledge the
-component is not allowed to hold. So app.js hands the component a `commands`
-map, one arm per name, and the component dispatches into it. That map is the
-"arm in the browser" the contract above means, and a name it holds that the
-config gated out of the catalog is simply never rendered a row to reach it by
-— which is how `/model` stays gated in the one place that decides it.
+*The palette is the composer's; the arms are the app's.* The mechanics —
+filter, highlight, resolving a buffer to a name — are the component's. What
+each name *does* could not follow: `/new` posts a route, `/model` opens a
+dialog over this tab's conversation, `/theme` writes a cookie, all of it page
+knowledge the component may not hold. So `app.js` hands it a `commands` map
+and the component dispatches into it. A name in that map which the config
+gated out of the catalog is simply never rendered a row to reach it by — which
+is how `/model` stays gated in the one place that decides it.
 
 *A command never writes to the transcript.* This is where the TUI's design
-stops porting: its `SlashCommand#callback` returns a String that gets echoed
-into the conversation pane. Here the client-side form of that is conversation
-state the server does not hold (`D_server_authoritative_transcript`), and the
-server-side form is a block absent from `history.json`, which
-`D_replay_from_history`'s replay would silently drop on the next reopen —
-the line would show now and be gone after a reload. So `SlashCommand` carries
-no callback and no outcome String, and each command's own visible effect is
-the feedback.
+stops porting: its `SlashCommand#callback` returns a String echoed into the
+conversation pane. Here the client-side form of that is conversation state the
+server does not hold (`D_server_authoritative_transcript`), and the
+server-side form is a block absent from `history.json` that
+`D_replay_from_history`'s replay would silently drop — the line would show now
+and be gone after a reload. So `SlashCommand` carries no callback and no
+outcome String; each command's own visible effect is the feedback.
 
 *Every dialog is a real `<dialog>`, opened through one helper.* `showModal()`
 gives modality, ESC, focus containment and `::backdrop` outright under
 `D_target_browsers`, where the drawer had to hand-roll `inert` for the same
 job. `dom.js`'s `openDialog(title, body)` builds the chrome, appends,
-`showModal()`s, and removes the element on close, so no dialog sits in the
-page at rest.
+`showModal()`s and removes the element on close, so no dialog sits in the page
+at rest.
 
-**Rejected: `/dark` and `/light` as two commands.** Each is one keystroke
-shorter than `/theme` + a pick, but the catalog would then grow a row per
-*value* of every future setting, and the picker is the shape `/model` wants
-anyway. The cost is that `/t` no longer resolves uniquely — it matches
-`/theme` and `/trifecta` both — which is precisely the case a palette exists
-for, and is what the phone story ("type `/t`, tap the one you want")
-actually wanted.
+**Rejected: `/dark` and `/light` as two commands** — the catalog would grow a
+row per *value* of every future setting, and the picker is the shape `/model`
+wants anyway. The cost is that `/t` stops resolving uniquely, which is
+precisely the case a palette exists for.
 
-**Rejected: `GET /commands?q=` per keystroke.** Server-rendered in the
-strictest sense, and absurd for a three-item list: see
-`D_no_js_build_step`'s latency qualifier, which this is the worked example of.
+**Rejected: `GET /commands?q=` per keystroke** — absurd for a three-item list,
+and the worked example of `D_no_js_build_step`'s latency qualifier.
 
-**Rejected: an HTML-string signature for `openDialog`.** The
-unknown-command dialog interpolates *what the user typed*, so a string API
-would make that caller a concatenation of user input — an escaping hazard
-designed into the helper. Taking a `Node` cloned from a server-rendered
-`<template>`, with values set through `textContent`, makes the safe path the
-only path.
+**Rejected: an HTML-string signature for `openDialog`.** The unknown-command
+dialog interpolates *what the user typed*, so a string API would make that
+caller a concatenation of user input — an escaping hazard designed into the
+helper. Taking a `Node` cloned from a `<template>`, with values set through
+`textContent`, makes the safe path the only path.
 
-**Rejected: sending an unknown `/word` to the model.** A typo would become a
-prompt, silently. Instead Enter on a leading `/word` that matches nothing
-opens a dialog naming the known commands, and the text stays in the composer
-to be fixed. The escape hatch is the space: anything containing whitespace is
-never read as a command, so `/usr/share/foo is broken` sends normally, and
-the dialog says so.
+**Rejected: sending an unknown `/word` to the model** — a typo would silently
+become a prompt. Enter on a leading `/word` matching nothing opens a dialog
+naming the known commands, and the text stays in the composer to be fixed. The
+escape hatch is the space: anything containing whitespace is never read as a
+command, so `/usr/share/foo is broken` sends normally.
 
 **Consequences.**
 
@@ -471,8 +395,8 @@ the dialog says so.
   a chat-only shell with no file tools (`D_chat_only_entry_point`), and the
   dialog names the fix.
 - **`/trifecta` costs no route.** The report is static for the life of the
-  process — one conversation factory, one tool set — so it ships pre-rendered
-  in a `<template>`. `App` must not touch a `Pikuri::Trifecta::Report`
+  process — one factory, one tool set — so it ships pre-rendered in a
+  `<template>`. `App` must not touch a `Pikuri::Trifecta::Report`
   (`D_pikuri_free_core`), hence `TrifectaView` and `AgentRunner#trifecta_html`.
 - **The theme picker's current marker is computed on open**, never
   server-rendered: the theme changes in the page after it was served.
@@ -495,7 +419,6 @@ the dialog says so.
   keyboard with no Shift+Enter, so a Return that sends makes a two-line
   message unwritable. On the phone ↑ is Enter's send, and tapping a palette
   row is Enter's run.
-- **`D_no_js_build_step` was amended to let this land** — see its entry.
 - **`Q_error_dialog_weight` stays open.** A modal for a typo is intrusive;
   the alternative that keeps the intent is a status-bar note, for which
   `app.js` has precedent (`'not sent'`). Shipped as the dialog because it can
@@ -789,30 +712,18 @@ graduated into this entry.
 owner thread, Tuile-style: every other thread posts a command, no locks,
 because one thread touches the state. The complaint driving it was real —
 `Transcript`, `Broadcaster` and `AgentRunner` each held their own lock, and
-cross-object consistency rested on a discipline nothing enforced. The idea
-file names three options: **(a)** one lock per object, today's shape;
+cross-object consistency rested on a discipline nothing enforced. Three
+options were on the table: **(a)** one lock per object, today's shape;
 **(b)** one coarse lock over the whole state graph, Vaadin minus the
 session axis; **(c)** one owner thread plus a queue, Tuile.
 
-By the time the question came back, `D_conversation_owns_agent` had
-shipped, and it had already answered most of it. The exhibits (b) and (c)
-existed to fix were audited one by one and had gone:
-
-- **The `SseListener` unguarded per-turn state.** It was safe only by an
-  argument spanning three classes, and `AgentRunner#load_conversation` held
-  it. That method no longer exists: a runner *is* its conversation, one
-  listener per runner, and `#restore!` runs inside the registry's monitor
-  before the runner is published. The argument is now "one conversation,
-  one writer".
-- **The `conversation_rows` tear.** `ConversationRegistry#rows` reads the
-  listing and the busy flags inside one monitor. One consistent answer.
-- **The refusal routes needing request/reply with a bounded wait.** The
-  audit assumed three. `select` is gone with the live pointer, `POST
-  /conversations` refuses nothing, and only `delete`'s 409 is left —
-  the queue's most expensive machinery, built for one route.
-- **The pool-1 precondition.** The file's closing claim was that an owner
-  thread is what unlocks more than one turn at a time. Checked and false;
-  see `D_serial_turn_executor`'s amendment.
+`D_conversation_owns_agent` shipped before the question came back, and
+answered most of it: every exhibit that motivated (b) or (c) was audited
+and found already fixed by the partition — the unguarded `SseListener`
+state (one listener per runner now), the `conversation_rows` tear (one
+monitor), two of the three refusal routes (gone), and the claim that an
+owner thread was the precondition for concurrent turns (false, see
+`D_serial_turn_executor`).
 
 **Decision.** Three parts, and the third is the one with a future in it.
 
@@ -846,88 +757,53 @@ sink, its lock guards the subscriber list that request threads and the
 subscribe behind a running turn and the shutdown path behind a wedged one
 — the exact parked-thread hazard `D_shutdown_on_state_stop` prevents.
 
-**Why there is no guidance to crib, and what the real precedents are.**
-Worth recording, because the absence is itself the finding. **Sinatra
-offers nothing**: it is a routing DSL over Rack with no concurrency model
-and no server-side state model — `session` is a signed cookie, so there is
-nothing to lock — and its only coarse lock is `Rack::Lock`, one mutex
-around the whole app, which exists to run non-thread-safe apps under
-threaded servers and is regarded as a throughput disaster. **Mainstream
-Rack/Rails practice is to not have this problem**: stateless processes,
-shared mutable state in Postgres or Redis, the database's transactions
-doing the locking. **So this app is the outlier**, which is why the
-folklore is missing: a live in-memory object graph plus a worker thread is
-structurally a desktop app that speaks HTTP, and its precedents are Tuile,
-Swing and Vaadin rather than Rails. That is also why "one global queue" and
-"one global lock" are the same decision wearing different clothes —
-Vaadin's `UI.access()` *is* this design, a background thread posting a
-command instead of touching the tree, with a lock as the enforcement
-mechanism where Tuile uses a dedicated thread. What does not transfer from
-Vaadin is the session axis; what does is the *coarseness*.
+**Why there is no guidance to crib.** The absence is itself the finding.
+Sinatra has no concurrency model and no server-side state model —
+`session` is a signed cookie, so there is nothing to lock — and mainstream
+Rack/Rails practice is to *not have this problem*: stateless processes,
+shared state in Postgres or Redis, the database doing the locking. A live
+in-memory object graph plus a worker thread is structurally a desktop app
+that speaks HTTP, so the precedents are Tuile, Swing and Vaadin rather
+than Rails. It is also why a global queue and a global lock are one
+decision in two costumes: Vaadin's `UI.access()` *is* this design, with a
+lock where Tuile uses a dedicated thread. The *coarseness* transfers; the
+session axis does not.
 
 **Rejected: build it anyway, because the current model is past
-comfortable.** The honest form of the pro-queue case: it was a good
-argument, and true when written. It loses to having each of its exhibits
-checked and found already fixed. Rebuild the case from *live* defects if it
-comes back — the old examples are spent.
+comfortable** — a good argument, and true when written, that loses to
+every one of its exhibits being fixed by the partition instead. Rebuild
+the case from *live* defects if it returns; the old examples are spent.
 
-**Rejected: option (b), one coarse lock, as a cheap step toward (c).** It
-was cheap, and mostly deletion. But it buys nothing once the state is
-partitioned — it would re-coarsen a graph that was just split, putting one
-conversation's kramdown pass behind another's — and its own file admits
-the lock must be released across the LLM call and across tool execution,
+**Rejected: option (b), one coarse lock, as a cheap step toward (c)** — it
+buys nothing once the state is partitioned, re-coarsening a graph just
+split so one conversation's kramdown pass waits behind another's, and it
+must be released across the LLM call and across tool execution anyway,
 which is the interleaving reasoning it was meant to remove.
 
-**Rejected: a per-session lock or a per-session queue, Vaadin-style.** See
-above; recorded as a rejection rather than an omission because it is what
-a reader who knows Vaadin will reach for first.
+**Rejected: a per-session lock or queue, Vaadin-style** — a session here
+owns nothing, so it would guard the empty set while adding the session
+concept this app refuses. Recorded as a rejection rather than an omission
+because it is what a reader who knows Vaadin reaches for first.
 
-**If one is ever built, these are the constraints** — the surviving half
-of the graduated idea file, kept because they were derived from this app's
-existing decisions and would otherwise be rediscovered by hitting them.
+**If one is ever built, these constraints come from decisions already
+made** and would otherwise be rediscovered by hitting them:
 
-- **The owner must never block.** Not on I/O, not on a socket, not on a
-  lock, and never on a reply from a thread that might be waiting on it.
-  Break this one and the design stops being "easy to reason about" and
-  becomes a deadlock hunt.
-- **The agent loop still gets its own thread** — it blocks on the LLM and
-  on tools for minutes, so running it on the owner freezes the server
-  (`D_worker_thread_agent_loop`). The change is the *direction*: it posts
-  events rather than calling the listener stack inline.
-- **Per-connection SSE queues stay.** The owner must never write to a
-  socket; one slow client would stall every tab. Owner → per-connection
-  queue → parked writer thread is already {Broadcaster}'s shape, and it is
-  already right.
-- **Every reply path gets a bounded wait and a 503.** A request thread
-  blocking forever on a wedged owner exhausts Puma's pool and takes the
-  whole server down instead of one route. Reads can escape this entirely
-  by publishing an immutable snapshot instead of replying — the trick
-  {Transcript} already uses.
-- **Backpressure has asymmetric answers.** Blocking a *request* thread on a
-  full queue is fine; blocking the *agent* thread stalls a turn; blocking
-  Puma's `:state, :stop` hook recreates the exact parked-thread bug
-  `D_shutdown_on_state_stop` exists to prevent. So: unbounded, or bounded
-  with a documented drop policy for the producers that cannot block.
-- **Shutdown is part of the design.** Close the owner from the same
-  `:state, :stop` hook that closes the broadcaster, before Puma's unbounded
-  graceful wait. Nothing in the exit path may rely on `at_exit`.
-- **Posted commands should be frozen** — an unfrozen object crossing the
-  boundary is shared mutable state smuggled past the model.
-- **Measure where rendering runs before committing.**
-  `D_rerender_and_replace` re-renders the whole accumulated message through
-  kramdown per delta at 15 fps; on the owner that competes with `POST
-  /cancel` for responsiveness, and a 50 KB message may not be free. The
-  escape hatch is that the owner owns *mutation*, not rendering: markdown →
-  HTML is a pure function of the accumulated source, so it can stay on the
-  agent thread and post the finished string.
-- **Build it on `concurrent-ruby`, or hand-roll on stdlib `Queue`** (~80
-  lines: `while (cmd = queue.pop)` plus a latch for replies). Tuile's API
-  is the right shape to crib — `post`, `submit(&block)`, `await_empty`,
-  `tick_fps`, `run`, `stop` — with one gap: nothing there returns a value
-  to the caller, which the refusing route needs. Do **not** take a
-  dependency on Tuile to get it; extracting its queue into a shared gem is
-  a pikuri-family conversation, logged in `../pikuri/DECISIONS.md`, not
-  decided here.
+- **The owner must never block** — not on I/O, a socket, a lock, or a
+  reply from a thread that might be waiting on it.
+- **The agent loop keeps its own thread** (`D_worker_thread_agent_loop`);
+  what changes is direction — it posts events instead of calling the
+  listener stack inline.
+- **Per-connection SSE queues stay.** One slow client must not stall every
+  tab; owner → queue → parked writer is already {Broadcaster}'s shape.
+- **Every reply path gets a bounded wait and a 503,** or escapes replying
+  altogether by publishing an immutable snapshot — {Transcript}'s trick.
+- **Backpressure is asymmetric:** blocking a request thread is fine,
+  blocking the agent thread stalls a turn, and blocking `:state, :stop`
+  recreates the bug `D_shutdown_on_state_stop` exists to prevent.
+- **Rendering need not move.** `D_rerender_and_replace` re-renders through
+  kramdown at 15 fps; the owner owns *mutation*, not rendering, so
+  markdown → HTML can stay on the agent thread and post the finished
+  string.
 
 **Consequences.**
 
