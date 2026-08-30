@@ -3,9 +3,14 @@
 # The seam public/*.js sits on, checked from the Ruby side.
 #
 # Nothing here runs JavaScript. There is no JS runtime in this suite and
-# +D_no_js_build_step+ keeps it that way, so this reads app.js as text and
-# asserts that every name it hard-codes still exists on the server's side of
+# +D_no_js_build_step+ keeps it that way, so this reads the scripts as text and
+# asserts that every name they hard-code still exists on the server's side of
 # the line: element ids, <template> ids, routes, CSS hooks, command names.
+#
+# The *protocol* is all this checks. How the client source is split across
+# files is the client's own business (+D_feature_owns_its_file+) and no
+# assertion here has an opinion on it — which is why the scan is over every
+# script that may name a server-side name, joined, rather than over app.js.
 #
 # That is the failure this covers, and the reason it is worth a spec of its
 # own. Renaming an id in index.erb, a route in app.rb or a command in
@@ -18,80 +23,65 @@
 # Only literals are visible to a reader like this, and that is by construction:
 # app.js's +getElementById(id)+ over a block id, and +fetch(e.target.action)+
 # over the delete form's own action, name nothing to check.
-RSpec.describe 'the app.js/server contract' do
+RSpec.describe 'the client/server contract' do
   root = Pathname(__dir__).join('../..').expand_path
-  app_js = (root / 'public/app.js').read
+  # dom.js is left out because it names nothing: it is handed every id and
+  # every node it touches.
+  client_js = %w[app.js composer.js].map { |name| (root / 'public' / name).read }.join("\n")
   index_erb = (root / 'views/index.erb').read
   sidebar_erb = (root / 'views/_sidebar.erb').read
 
-  # The other half of the admission rule +D_no_js_build_step+ draws: app.js is
-  # the file allowed to know this page, and its neighbours stay reusable only
-  # for as long as they do not. A hard-coded id or route creeping into one of
-  # them is exactly the drift nothing else would notice, because the page keeps
-  # working right up until the file is reused.
-  #
-  # A *literal* is what is banned, not the mechanism: +cloneTemplate(id)+ takes
-  # the id it looks up, which is how dom.js stays generic while doing the same
-  # call app.js does.
-  it 'keeps page knowledge out of the files that may not hold it' do
-    %w[dom.js composer.js].each do |name|
-      source = (root / 'public' / name).read.gsub(%r{^\s*//.*$}, '')
-      refute_match(/getElementById\(['"]/, source, "public/#{name} hard-codes an element id")
-      refute_match(/(?:fetch|new EventSource)\(\s*['"`]/, source, "public/#{name} names a route")
-    end
-  end
-
   it 'reaches only for element ids index.erb renders' do
-    ids = app_js.scan(/getElementById\(['"]([\w-]+)['"]\)/).flatten.uniq
-    refute_empty ids, 'the id scan found nothing — app.js changed shape, fix the pattern'
+    ids = client_js.scan(/getElementById\(['"]([\w-]+)['"]\)/).flatten.uniq
+    refute_empty ids, 'the id scan found nothing — the client changed shape, fix the pattern'
 
     missing = ids.reject { |id| index_erb.include?(%(id="#{id}")) }
-    assert_equal [], missing, "app.js reaches for #{missing.join(', ')}; index.erb renders no such id"
+    assert_equal [], missing, "the client reaches for #{missing.join(', ')}; index.erb renders no such id"
   end
 
   it 'clones only templates index.erb defines' do
-    names = app_js.scan(/cloneTemplate\(['"]([\w-]+)['"]\)/).flatten.uniq
-    refute_empty names, 'the template scan found nothing — app.js changed shape, fix the pattern'
+    names = client_js.scan(/cloneTemplate\(['"]([\w-]+)['"]\)/).flatten.uniq
+    refute_empty names, 'the template scan found nothing — the client changed shape, fix the pattern'
 
     missing = names.reject { |name| index_erb.include?(%(<template id="#{name}">)) }
-    assert_equal [], missing, "app.js clones #{missing.join(', ')}; index.erb defines no such <template>"
+    assert_equal [], missing, "the client clones #{missing.join(', ')}; index.erb defines no such <template>"
   end
 
   # Both the fetches and the EventSource: a route this shell no longer answers
   # is the same bug whichever verb reaches for it.
   it 'calls only routes the app answers' do
-    paths = app_js.scan(/(?:fetch|new EventSource)\(\s*['"`](\/[^'"`?${]*)/).flatten.uniq
-    refute_empty paths, 'the route scan found nothing — app.js changed shape, fix the pattern'
+    paths = client_js.scan(/(?:fetch|new EventSource)\(\s*['"`](\/[^'"`?${]*)/).flatten.uniq
+    refute_empty paths, 'the route scan found nothing — the client changed shape, fix the pattern'
 
     patterns = PikuriWeb::App.routes.values.flatten(1).map(&:first)
     missing = paths.reject { |path| patterns.any? { |pattern| pattern.match(path) } }
-    assert_equal [], missing, "app.js calls #{missing.join(', ')}; App has no route matching"
+    assert_equal [], missing, "the client calls #{missing.join(', ')}; App has no route matching"
   end
 
   it 'queries only classes the templates render' do
-    classes = app_js.scan(/querySelector(?:All)?\(['"]\.([\w-]+)['"]\)/).flatten.uniq
-    refute_empty classes, 'the class scan found nothing — app.js changed shape, fix the pattern'
+    classes = client_js.scan(/querySelector(?:All)?\(['"]\.([\w-]+)['"]\)/).flatten.uniq
+    refute_empty classes, 'the class scan found nothing — the client changed shape, fix the pattern'
 
     markup = index_erb + sidebar_erb
     missing = classes.reject { |name| markup.include?(name) }
-    assert_equal [], missing, "app.js queries .#{missing.join(', .')}; no template renders it"
+    assert_equal [], missing, "the client queries .#{missing.join(', .')}; no template renders it"
   end
 
   # The mark that decides whether deleting navigates: app.js reads it off the
   # row rather than off the URL, so the two spellings have to agree.
   it 'tests for the row mark _sidebar.erb writes' do
-    assert_includes app_js, "classList.contains('current')"
+    assert_includes client_js, "classList.contains('current')"
     assert_includes sidebar_erb, "' current' if c[:current]"
   end
 
   # A mistyped path here is not a subtle bug: the module never loads and the
   # page is inert, with nothing but a console error nobody is watching.
   it 'imports only sibling modules that exist' do
-    specifiers = app_js.scan(%r{^import .*? from '\./([\w.-]+)';}).flatten.uniq
-    refute_empty specifiers, 'the import scan found nothing — app.js changed shape, fix the pattern'
+    specifiers = client_js.scan(%r{^import .*? from '\./([\w.-]+)';}).flatten.uniq
+    refute_empty specifiers, 'the import scan found nothing — the client changed shape, fix the pattern'
 
     missing = specifiers.reject { |name| (root / 'public' / name).exist? }
-    assert_equal [], missing, "app.js imports ./#{missing.join(', ./')}; public/ has no such file"
+    assert_equal [], missing, "the client imports ./#{missing.join(', ./')}; public/ has no such file"
   end
 
   # Strings the server renders into the page *and* app.js rewrites over the top
@@ -104,7 +94,7 @@ RSpec.describe 'the app.js/server contract' do
       '☀ light',                  # the theme toggle, both directions
       '☾ dark'
     ].each do |label|
-      assert_includes app_js, label, "app.js no longer writes #{label.inspect}"
+      assert_includes client_js, label, "the client no longer writes #{label.inspect}"
       assert_includes index_erb, label, "index.erb no longer renders #{label.inspect}"
     end
   end
@@ -117,7 +107,7 @@ RSpec.describe 'the app.js/server contract' do
   # single-connection config, which drops /model from the palette but leaves
   # the map app.js hands the composer exactly as it is.
   it 'arms every catalogued command in the composer it configures, and none besides' do
-    arms = app_js.scan(/^\s*'(\/[\w-]+)':/).flatten
+    arms = client_js.scan(/^\s*'(\/[\w-]+)':/).flatten
     assert_equal PikuriWeb::SlashCommand::CATALOG.map(&:name).sort, arms.sort
   end
 end

@@ -84,6 +84,88 @@ design or the invariant.
 
 ---
 
+## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them (2026-08-30)
+
+**Status:** Accepted, shipped 2026-08-30 with `public/composer.js`, the
+first one. `app.js` is not being split further on principle — the next
+feature moves out when it earns it.
+
+**Context.** `public/app.js` had no organizing principle beyond
+"client-side". The composer's auto-grow sat three functions from the
+palette's filter, both sat beside the sidebar's delete confirm, and the
+only rule about where a function went was `D_no_js_build_step`'s "may name
+elements and routes", which every function satisfied. Nothing in it was
+wrong; it was a drawer, and a drawer is what a file becomes when the only
+alternative is another drawer.
+
+**Decision.** A feature that owns a slice of the page may own a file, and
+then it owns that slice *whole*:
+
+- **The file is paired with `views/index.erb`, and says so.** It looks its
+  elements up by id, because those ids are the contract the template
+  renders and there is no honest way to be loosely coupled to markup you
+  are hand-in-glove with. `composer.js` owns `#composer` and everything in
+  it — the buffer, the auto-grow, the palette, the keyboard — and owns
+  `POST /messages` too, because what happens when you press send is the
+  whole reason the feature exists.
+- **`app.js` is the composition root.** What stays there is the page's
+  spine — one `EventSource` demultiplexed to several features — plus the
+  wiring *between* features. The slash `commands` map is the worked
+  example: `/theme` is the theme's, `/new` the conversation list's, and
+  only the root knows both, so a table of them is wiring rather than a
+  leftover.
+- **What crosses a boundary goes through the root**, never through the
+  DOM: the composer is handed the conversation id (page state, from the
+  URL) and hands back an `onsendfailed`, because `#status-state` is not
+  its element to write.
+- **`dom.js` is unchanged** — the one file that knows no markup at all.
+- **Extraction is earned, not routine.** A file is justified when the
+  outcome is clearly better code, which means a slice with enough
+  behaviour to deserve a header of its own. A fifteen-line `theme.js`
+  would be ceremony; the composer at ~230 lines and four concerns is not.
+
+**Rejected: components decoupled from their markup.** The first cut of
+`composer.js` was a `Composer` class handed its root element, finding its
+parts by ARIA role (`[role="listbox"]`, the form's one `textarea`) so it
+named no id — justified as reusability. Nothing will ever mount a second
+composer, and paying indirection for an instance that will not exist buys
+a *weaker* statement: `querySelector('textarea')` is true by accident
+where `#prompt` is true by contract. Reverted the same day, before the
+pattern could be copied into a second file.
+
+**Rejected: enforcing the partition from the Ruby suite.** A spec can
+slice `index.erb` and assert every id `composer.js` names sits inside
+`#composer`. But these specs pin the *protocol* — what the server renders
+against what the client names — and how the client source is split is not
+protocol. A test with an opinion on file layout would make every future
+split a spec change, and would be the sole enforcement of a rule whose
+value is that it is a judgment call. `client_contract_spec.rb` therefore
+scans the scripts jointly and says nothing about which one holds what.
+
+**Rejected: prefixing every id with its feature** (`composer-prompt`,
+`composer-menu`). The markup is already half-converted by accident —
+`drawer-*` and `status-*` — and it would make ownership visible in the
+HTML and in `style.css`. It churns a dozen CSS selectors for a rule
+nothing enforces, and the bare ids read better in the stylesheet, which is
+the other consumer. Revisit if two features ever want the same short name.
+
+**Consequences.**
+
+- `app.js` no longer names `#prompt`, `#slash-menu` or `/messages`.
+- **`Q_composer_edges` stays open.** Two things inside `#composer` are
+  still `app.js`'s: the stop button (`#cancel` sits in the form but is
+  driven by the status frame and posts `/cancel`) and the unknown-command
+  dialog (arguably the palette's own feedback, but its `<template>` lives
+  outside the form with the others). Both are the same question — where
+  the status bar's own state ends up — and are deliberately parked until
+  the second feature file makes the answer obvious.
+- A moved function stops being covered by anything that scanned only
+  `app.js`. `client_contract_spec.rb` reads every script that may name a
+  server-side name, joined, so a split cannot quietly shrink the protocol
+  check.
+
+---
+
 ## D_icon_plate — Every rasterized app icon carries an opaque plate; only the master SVG is transparent (2026-08-29)
 
 **Status:** Accepted, shipped 2026-08-29 in `public/` (`kuri.svg`,
@@ -1834,10 +1916,10 @@ would look like multi-user support while delivering none of it.
 
 ## D_no_js_build_step — No bundler and no dependencies; JS is mechanics, never a renderer (2026-06-04)
 
-**Status:** Accepted, shipped 2026-06-04; amended 2026-08-29 — the size
-targets are gone, and the test that replaces them is sharper; amended
-2026-08-30 — the admission rule now names three tiers, `public/composer.js`
-being the middle one.
+**Status:** Accepted, shipped 2026-06-04; amended 2026-08-29 (the size
+budget is gone, and the test that replaces it is sharper) and 2026-08-30
+(how the client source is partitioned moved to
+`D_feature_owns_its_file`).
 
 **Context.** The page needs an `EventSource`, form wiring, and a way to
 place incoming fragments. That is the entire client-side job, because
@@ -1857,24 +1939,10 @@ server could have produced is the server's, always. That clause is not new
 — it is what `D_server_authoritative_transcript` and `D_replay_from_history`
 have been resting on all along.
 
-**The admission rule, in three tiers.** What decides which file a function
-belongs in is how much of *this page* it has to know:
-
-- `public/app.js` — may name element ids, routes and the conversation. It is
-  this page's wiring, and is reusable nowhere by construction.
-- `public/composer.js` — knows a *shape* of markup (a form holding a
-  `role="listbox"` of `role="option"` rows above a textarea) and nothing
-  else: no id, no route, no conversation. A component, handed its root
-  element and its behaviour by app.js.
-- `public/dom.js` — knows no markup at all. `cloneTemplate(id)` looks an id
-  up without naming one, which is the difference the rule turns on.
-
-The middle tier is what a component needs and dom.js could never hold: the
-composer's palette, keyboard and auto-grow are one cohesive box, but the box
-has to find its own parts. Naming the parts by their ARIA roles rather than by
-id is what buys that — those are the names the palette maintains anyway, so
-the contract is one the markup already had to keep. `client_contract_spec.rb`
-pins the two lower tiers by scanning them for a hard-coded id or route.
+**Which file a function belongs in is not this entry's business** —
+`D_feature_owns_its_file` owns that. The one clause of it this decision
+cares about is `public/dom.js`'s: it knows no markup at all, because a
+renderer is exactly what that file must never quietly become.
 
 **The qualifier: rendering and state, not latency.** Read absolutely, "if the
 server can do it, the server must" argues for fetching the slash palette's

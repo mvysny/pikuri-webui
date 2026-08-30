@@ -125,19 +125,29 @@ the alternatives that were rejected, live one entry per slug in
   (`showModal`, `inert`, `scrollTop`, textarea measurement, `matchMedia`),
   and per-browser state that must never reach the server. Markup or
   conversation content the server could have produced is the server's,
-  always. Three tiers of page knowledge, and a function lives in the
-  highest one it needs: `public/app.js` may name elements and routes;
-  `public/composer.js` knows only a shape of markup (roles, not ids);
-  `public/dom.js` knows no markup at all. The rule is about rendering and
-  state, *not* latency — the palette filter stays local.
+  always, and `public/dom.js` knows no markup at all. The rule is about
+  rendering and state, *not* latency — the palette filter stays local.
   See `D_no_js_build_step`.
+
+- **A feature that owns a slice of the page owns a script file, and is
+  paired with the markup it renders from.** `public/composer.js` owns
+  `#composer` whole — the buffer, the auto-grow, the palette, the
+  keyboard, `POST /messages` — and looks its elements up by id, because
+  those ids are index.erb's contract with it. `public/app.js` is the
+  composition root: the page's spine (one `EventSource` fanned out to
+  several features) plus the wiring *between* them, which is what the
+  slash `commands` map is. Anything crossing a boundary goes through the
+  root, never through another feature's DOM. Extraction is earned — a
+  fifteen-line `theme.js` would be ceremony. The Ruby suite pins the
+  protocol and has no opinion on the split.
+  See `D_feature_owns_its_file`.
 
 - **Slash commands: the catalog is the server's, the palette is the
   browser's, and a command never writes to the transcript.**
   {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and
   `composer.js` filters it in place, while what each name *does* is the
-  `commands` map `app.js` hands that component — the palette is mechanics,
-  the arms are page knowledge. A command's own effect — a dialog, a
+  `commands` map `app.js` hands it at mount — the palette is the
+  composer's, the arms are wiring between features. A command's own effect — a dialog, a
   navigation, a color change — is its only feedback. It runs however it
   was sent — Enter,
   or the ↑ button, which is the phone's Enter — and is never posted as a
@@ -336,10 +346,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
   and served alone by `GET /conversations` for in-place refresh. The
   drawer's chrome sits *outside* it, so this stays only the list.
-- `public/app.js` — the app's JavaScript: SSE, sidebar, drawer, theme, the
-  composer's transport and command arms; may name elements and routes.
-- `public/composer.js` — `Composer`, the input + slash palette as one
-  component over the form; fires message / command, names no id.
+- `public/app.js` — the composition root: SSE, transcript, status bar,
+  sidebar, drawer, theme, and the mount + command arms of the composer.
+- `public/composer.js` — `initComposer`, everything `#composer` does:
+  buffer, auto-grow, slash palette, keyboard, `POST /messages`.
 - `public/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one

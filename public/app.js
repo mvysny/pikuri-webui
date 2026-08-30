@@ -1,16 +1,20 @@
-// The app: one EventSource consuming the server's SSE feed, the sidebar, the
-// drawer, the theme, and the composer wired to this page. All rendering
-// happens server-side (kramdown) — this file only places ready-made HTML
-// fragments into the page by block id and keeps the status bar in sync.
+// The app: one EventSource consuming the server's SSE feed, the transcript,
+// the status bar, the sidebar, the drawer and the theme — plus the wiring that
+// mounts the composer. All rendering happens server-side (kramdown), so this
+// file only places ready-made HTML fragments into the page by block id and
+// keeps the status bar in sync.
 //
-// Generic DOM mechanics live next door in dom.js, and the composer — input,
-// palette, keyboard — is a component in composer.js; anything here may name an
-// element, a route or a conversation, and that is the difference between this
-// file and those. What the composer cannot hold is therefore here: where a
-// message is posted, and what each slash command does. A module, so none of
-// them leaks a global (and modules are already strict, hence no 'use strict').
+// A feature that owns a slice of the page can own a file (composer.js is the
+// first); what stays here is the page's spine — the one EventSource feeding
+// several of them — and the wiring between features, which is why the slash
+// commands' arms live here: `/theme` is the theme's, `/new` the conversation
+// list's, and only this file knows both. Generic DOM mechanics with no markup
+// knowledge at all are next door in dom.js.
+//
+// A module, so none of them leaks a global (and modules are already strict,
+// hence no 'use strict').
 import { cloneTemplate, openDialog } from './dom.js';
-import { Composer } from './composer.js';
+import { initComposer } from './composer.js';
 
 // The conversation this tab has open, fixed for the life of the page: it came
 // from the URL, and it is what the EventSource subscribes to. Everything this
@@ -23,7 +27,6 @@ const chat = document.getElementById('chat');
 const sidebar = document.getElementById('sidebar');
 const drawerOpenBtn = document.getElementById('drawer-open');
 const drawerCloseBtn = document.getElementById('drawer-close');
-const composerEl = document.getElementById('composer');
 const cancelBtn = document.getElementById('cancel');
 const newBtn = document.getElementById('new-conversation');
 const statusState = document.getElementById('status-state');
@@ -101,21 +104,6 @@ es.addEventListener('conversations', refreshSidebar);
 // On EventSource auto-reconnect the page may have missed frames; reload
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
-
-// The composer's transport half. It answers whether the message went out, and
-// a `false` is what hands the text back to the box it was cleared from.
-//
-// Sending is never refused for being busy — a turn queues — so a failure here
-// is the conversation having gone away underneath this tab.
-const sendMessage = (text) => {
-  const body = new FormData();
-  body.set('conversation', viewing);
-  body.set('prompt', text);
-  return fetch('/messages', { method: 'POST', body }).then((r) => {
-    if (!r.ok) statusState.textContent = 'not sent';
-    return r.ok;
-  });
-};
 
 cancelBtn.addEventListener('click', () => {
   const body = new FormData();
@@ -251,13 +239,18 @@ const reportUnknownCommand = (name) => {
   openDialog('No such command', body);
 };
 
-// The composer, wired to this page. The arms below are the other half of the
-// contract PikuriWeb::SlashCommand describes: every name in the server's
-// catalog needs one here, and a name the config gated out of the catalog keeps
-// its arm — it is simply never rendered a row to reach it by.
-new Composer(composerEl, {
-  onmessage: sendMessage,
+// The composer, mounted. The arms are the other half of the contract
+// PikuriWeb::SlashCommand describes: every name in the server's catalog needs
+// one here, and a name the config gated out of the catalog keeps its arm — it
+// is simply never rendered a row to reach it by.
+//
+// `viewing` goes in because the conversation is the page's, not the
+// composer's; the failure note comes back out because the status bar is this
+// file's to write.
+initComposer({
+  conversation: viewing,
   onunknown: reportUnknownCommand,
+  onsendfailed: () => { statusState.textContent = 'not sent'; },
   commands: {
     '/new': startConversation,
     '/model': openModelPicker,

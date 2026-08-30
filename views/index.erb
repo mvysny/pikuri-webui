@@ -93,12 +93,15 @@
 
          The composer precedes the status bar, as on the desktop it always has;
          the phone layout swaps them with `order` rather than a DOM reshuffle. -->
-    <!-- The whole form is public/composer.js's component: the textarea, the
-         palette and the keyboard that drives both. It finds its parts by role
-         rather than by id, so the three below are a contract — see that file's
-         header. It posts nothing itself, which is why there is no hidden
-         `conversation` field: app.js names the conversation on the fetch, as
-         it does on every other route. -->
+    <!-- This whole form is public/composer.js's: the textarea, the palette,
+         the keyboard that drives both, and the send. That file names the ids
+         below directly, so they are a contract between these two files —
+         renaming one here means editing it there (D_feature_owns_its_file).
+         There is no hidden `conversation` field because the composer is told
+         which conversation it posts to at mount.
+
+         The exception is #cancel, which sits here but is still app.js's: it
+         is driven by the status frame, not by anything the composer knows. -->
     <form id="composer">
       <!-- The slash-command palette, server-rendered whole and filtered in
            place: the composer only toggles `hidden` per row. It anchors itself
