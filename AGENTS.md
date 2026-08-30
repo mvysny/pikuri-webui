@@ -125,15 +125,15 @@ the alternatives that were rejected, live one entry per slug in
   (`showModal`, `inert`, `scrollTop`, textarea measurement, `matchMedia`),
   and per-browser state that must never reach the server. Markup or
   conversation content the server could have produced is the server's,
-  always, and `public/dom.js` knows no markup at all. The rule is about
+  always, and `public/js/dom.js` knows no markup at all. The rule is about
   rendering and state, *not* latency — the palette filter stays local.
   See `D_no_js_build_step`.
 
 - **A feature that owns a slice of the page owns a script file, and is
-  paired with the markup it renders from.** `public/composer.js` owns
+  paired with the markup it renders from.** `public/js/composer.js` owns
   `#composer` whole — the buffer, the auto-grow, the palette, the
   keyboard, `POST /messages` — and looks its elements up by id, because
-  those ids are index.erb's contract with it. `public/app.js` is the
+  those ids are index.erb's contract with it. `public/js/app.js` is the
   composition root: the page's spine (one `EventSource` fanned out to
   several features) plus the wiring *between* them, which is what the
   slash `commands` map is. Anything crossing a boundary goes through the
@@ -207,7 +207,7 @@ the alternatives that were rejected, live one entry per slug in
 
 - **The mascot is the library's; the plate is ours.** Kuri the pika in
   the Talus coat is decided in `../pikuri` (`D_kuri_mascot`), and
-  `public/kuri.svg` is a vendored copy of `../pikuri/assets/kuri.svg` —
+  `public/images/kuri.svg` is a vendored copy of `../pikuri/assets/kuri.svg` —
   upstream is the source of truth, re-copy rather than redraw. What this
   repo owns is that **every rasterized icon is that drawing on an opaque
   plate**, because Talus is a mid grey and no ground can be assumed. The
@@ -346,21 +346,24 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
   and served alone by `GET /conversations` for in-place refresh. The
   drawer's chrome sits *outside* it, so this stays only the list.
-- `public/app.js` — the composition root: SSE, transcript, status bar,
+- `public/` — the static root, served at the URL root: scripts under
+  `js/`, the mascot and every icon under `images/`. `style.css` and the
+  manifest stay at the top because each is the only file of its kind.
+- `public/js/app.js` — the composition root: SSE, transcript, status bar,
   sidebar, drawer, theme, and the mount + command arms of the composer.
-- `public/composer.js` — `initComposer`, everything `#composer` does:
+- `public/js/composer.js` — `initComposer`, everything `#composer` does:
   buffer, auto-grow, slash palette, keyboard, `POST /messages`.
-- `public/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
+- `public/js/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
   thinking, cyan tool lines).
-- `public/kuri.svg` — the mascot, transparent and unplated; master
+- `public/images/kuri.svg` — the mascot, transparent and unplated; master
   artwork every icon beside it is rendered from.
-- `public/favicon.svg` — the tab icon: Kuri on a plate; the one
+- `public/images/favicon.svg` — the tab icon: Kuri on a plate; the one
   sanctioned copy of the master's geometry.
-- `public/icon-{32,192,512}.png`, `public/icon-maskable-512.png`,
-  `public/apple-touch-icon.png` — the plated raster set; generated, see
+- `public/images/icon-{32,192,512}.png`, `public/images/icon-maskable-512.png`,
+  `public/images/apple-touch-icon.png` — the plated raster set; generated, see
   `D_icon_plate` for the sizes.
 - `public/manifest.webmanifest` — the PWA manifest: name, standalone
   display, the three manifest icons.
@@ -387,7 +390,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   all three.
 - Slash commands are the same shape of contract, in three places:
   {SlashCommand}`::CATALOG` (the palette cannot list what it does not
-  hold), the `commands` map `public/app.js` hands `composer.js` (the
+  hold), the `commands` map `public/js/app.js` hands `composer.js` (the
   catalog cannot run it), and
   a `<template>` in `views/index.erb` for one that opens a dialog. A
   command the config can make pointless is dropped in

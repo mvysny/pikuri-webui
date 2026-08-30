@@ -224,8 +224,8 @@ RSpec.describe PikuriWeb::App do
 
     it 'links the icons and the manifest the install path needs' do
       get_live
-      assert_includes last_response.body, '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
-      assert_includes last_response.body, '<link rel="apple-touch-icon" href="/apple-touch-icon.png">'
+      assert_includes last_response.body, '<link rel="icon" href="/images/favicon.svg" type="image/svg+xml">'
+      assert_includes last_response.body, '<link rel="apple-touch-icon" href="/images/apple-touch-icon.png">'
       assert_includes last_response.body, '<link rel="manifest" href="/manifest.webmanifest">'
     end
 

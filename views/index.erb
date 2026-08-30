@@ -6,7 +6,7 @@
      is media queries in style.css, so resizing a window crosses it live.
      See DECISIONS.md D_one_shell_two_layouts.
 
-     Server-rendered snapshot of the transcript and status bar; public/app.js
+     Server-rendered snapshot of the transcript and status bar; public/js/app.js
      then connects an EventSource and applies deltas. Block divs are addressed
      by their transcript id — the SSE `block` event upserts by id, `remove`
      deletes by id.
@@ -36,9 +36,9 @@
        `theme-color` is rendered per theme rather than left to the manifest, so
        iOS's status bar matches the palette the cookie actually resolved to;
        the manifest's own value can only ever be the dark default. -->
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="/icon-32.png" sizes="32x32" type="image/png">
-  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/images/icon-32.png" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
   <meta name="theme-color" content="<%= theme == 'light' ? '#fbfbfa' : '#1e1f22' %>">
   <meta name="apple-mobile-web-app-title" content="pikuri">
@@ -93,7 +93,7 @@
 
          The composer precedes the status bar, as on the desktop it always has;
          the phone layout swaps them with `order` rather than a DOM reshuffle. -->
-    <!-- This whole form is public/composer.js's: the textarea, the palette,
+    <!-- This whole form is public/js/composer.js's: the textarea, the palette,
          the keyboard that drives both, and the send. That file names the ids
          below directly, so they are a contract between these two files —
          renaming one here means editing it there (D_feature_owns_its_file).
@@ -204,6 +204,6 @@
   <!-- A module, so app.js, composer.js and dom.js each get their own scope and
        no neighbour can quietly become a bag of globals. No build step is
        involved: the browser resolves the imports itself. -->
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>

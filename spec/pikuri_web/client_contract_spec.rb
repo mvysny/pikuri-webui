@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# The seam public/*.js sits on, checked from the Ruby side.
+# The seam public/js/*.js sits on, checked from the Ruby side.
 #
 # Nothing here runs JavaScript. There is no JS runtime in this suite and
 # +D_no_js_build_step+ keeps it that way, so this reads the scripts as text and
@@ -27,7 +27,7 @@ RSpec.describe 'the client/server contract' do
   root = Pathname(__dir__).join('../..').expand_path
   # dom.js is left out because it names nothing: it is handed every id and
   # every node it touches.
-  client_js = %w[app.js composer.js].map { |name| (root / 'public' / name).read }.join("\n")
+  client_js = %w[app.js composer.js].map { |name| (root / 'public/js' / name).read }.join("\n")
   index_erb = (root / 'views/index.erb').read
   sidebar_erb = (root / 'views/_sidebar.erb').read
 
@@ -80,8 +80,8 @@ RSpec.describe 'the client/server contract' do
     specifiers = client_js.scan(%r{^import .*? from '\./([\w.-]+)';}).flatten.uniq
     refute_empty specifiers, 'the import scan found nothing — the client changed shape, fix the pattern'
 
-    missing = specifiers.reject { |name| (root / 'public' / name).exist? }
-    assert_equal [], missing, "the client imports ./#{missing.join(', ./')}; public/ has no such file"
+    missing = specifiers.reject { |name| (root / 'public/js' / name).exist? }
+    assert_equal [], missing, "the client imports ./#{missing.join(', ./')}; public/js/ has no such file"
   end
 
   # Strings the server renders into the page *and* app.js rewrites over the top

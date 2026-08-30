@@ -234,7 +234,7 @@ bin/pikuri-web-chat --dev
 
 `--dev` runs Sinatra in development mode: `views/*.erb` is re-read per
 request, and an exception renders in the browser instead of only on
-stderr. `public/*.js` and `public/style.css` are read off disk on every
+stderr. `public/js/*.js` and `public/style.css` are read off disk on every
 request in either mode — a browser reload picks them up.
 
 Ruby under `lib/` is the exception: nothing reloads it, in either mode.

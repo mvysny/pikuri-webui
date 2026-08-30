@@ -86,11 +86,11 @@ design or the invariant.
 
 ## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them (2026-08-30)
 
-**Status:** Accepted, shipped 2026-08-30 with `public/composer.js`, the
+**Status:** Accepted, shipped 2026-08-30 with `public/js/composer.js`, the
 first one. `app.js` is not being split further on principle — the next
 feature moves out when it earns it.
 
-**Context.** `public/app.js` had no organizing principle beyond
+**Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
 palette's filter, both sat beside the sidebar's delete confirm, and the
 only rule about where a function went was `D_no_js_build_step`'s "may name
@@ -221,7 +221,7 @@ install prompt is the wrong place to discover it. The PNGs are generated
 artifacts committed to the repo, the same bargain as any other
 checked-in asset.
 
-**Consequences.** `public/kuri.svg` is a **copy of the library's master**
+**Consequences.** `public/images/kuri.svg` is a **copy of the library's master**
 (`../pikuri/assets/kuri.svg`), vendored rather than referenced because
 this project ships its own `public/` and has no build step to sync one.
 The upstream drawing is the source of truth: if it changes there, it is
@@ -413,7 +413,7 @@ renderer; revisit if the lag grates against a slow first token.
 (`D_per_conversation_model`) and is the first command gated on the config —
 `SlashCommand.catalog(connections:)` drops it when there is nothing to pick
 between. Amended 2026-08-30: the palette's mechanics moved into
-`public/composer.js` and the dispatch became a map app.js hands it, replacing
+`public/js/composer.js` and the dispatch became a map app.js hands it, replacing
 `runCommand`'s switch.
 
 **Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
@@ -437,7 +437,7 @@ them.
 
 *The palette is the composer's; the arms are the app's.* The mechanics — the
 filter, the highlight, resolving a buffer to a name — moved into
-`public/composer.js` when the composer became a component
+`public/js/composer.js` when the composer became a component
 (`D_no_js_build_step`'s three tiers). What each name *does* could not follow
 it: `/new` posts a route, `/model` opens a dialog over this tab's
 conversation, `/theme` writes a cookie — all of it page knowledge the
@@ -1417,7 +1417,7 @@ in its YARD header.
 it can't: the agent, its listener stack and the runner thread are
 long-lived instances wired once at boot, so Ruby under `lib/` reloads in
 neither mode and re-reading it would leave a live conversation bound to
-the old objects. `public/*.js` and `.css` were always read per request
+the old objects. `public/js/*.js` and `.css` were always read per request
 and never needed a flag.
 
 **Decision.** `--dev` flips Sinatra into `:development` and turns on
@@ -1434,7 +1434,7 @@ guarantee it cannot keep.
 ## D_theme_cookie — Theme is a browser cookie, resolved server-side at `GET /` (2026-08-27)
 
 **Status:** Accepted, shipped 2026-08-27 in `public/style.css`,
-`views/index.erb` and `public/app.js`.
+`views/index.erb` and `public/js/app.js`.
 
 **Context.** Adding a light theme raised where the preference lives. The
 transcript is server-authoritative (`D_server_authoritative_transcript`),
@@ -1941,7 +1941,7 @@ have been resting on all along.
 
 **Which file a function belongs in is not this entry's business** —
 `D_feature_owns_its_file` owns that. The one clause of it this decision
-cares about is `public/dom.js`'s: it knows no markup at all, because a
+cares about is `public/js/dom.js`'s: it knows no markup at all, because a
 renderer is exactly what that file must never quietly become.
 
 **The qualifier: rendering and state, not latency.** Read absolutely, "if the

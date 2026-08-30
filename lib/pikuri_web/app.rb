@@ -70,7 +70,7 @@ module PikuriWeb
     # The theme is resolved here — rendering `data-theme` into the markup is
     # what keeps a light-theme user from a dark first paint; a JS-applied class
     # would flash. There is no matching route: the toggle writes the cookie
-    # client-side (see public/app.js), because a POST + reload would cost an
+    # client-side (see public/js/app.js), because a POST + reload would cost an
     # SSE reconnect for a color change.
     get '/c/:id' do
       runner = open_conversation(params['id'])
