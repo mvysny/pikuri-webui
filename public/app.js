@@ -1,13 +1,16 @@
-// The app: one EventSource consuming the server's SSE feed, plus form,
-// keyboard and command wiring. All rendering happens server-side (kramdown) —
-// this file only places ready-made HTML fragments into the page by block id
-// and keeps the status bar in sync.
+// The app: one EventSource consuming the server's SSE feed, the sidebar, the
+// drawer, the theme, and the composer wired to this page. All rendering
+// happens server-side (kramdown) — this file only places ready-made HTML
+// fragments into the page by block id and keeps the status bar in sync.
 //
-// Generic DOM mechanics live next door in dom.js; anything here may name an
-// element, a route or a conversation, and that is the difference between the
-// two files. A module, so neither leaks a global (and modules are already
-// strict, hence no 'use strict').
+// Generic DOM mechanics live next door in dom.js, and the composer — input,
+// palette, keyboard — is a component in composer.js; anything here may name an
+// element, a route or a conversation, and that is the difference between this
+// file and those. What the composer cannot hold is therefore here: where a
+// message is posted, and what each slash command does. A module, so none of
+// them leaks a global (and modules are already strict, hence no 'use strict').
 import { cloneTemplate, openDialog } from './dom.js';
+import { Composer } from './composer.js';
 
 // The conversation this tab has open, fixed for the life of the page: it came
 // from the URL, and it is what the EventSource subscribes to. Everything this
@@ -20,8 +23,7 @@ const chat = document.getElementById('chat');
 const sidebar = document.getElementById('sidebar');
 const drawerOpenBtn = document.getElementById('drawer-open');
 const drawerCloseBtn = document.getElementById('drawer-close');
-const composer = document.getElementById('composer');
-const promptEl = document.getElementById('prompt');
+const composerEl = document.getElementById('composer');
 const cancelBtn = document.getElementById('cancel');
 const newBtn = document.getElementById('new-conversation');
 const statusState = document.getElementById('status-state');
@@ -100,50 +102,20 @@ es.addEventListener('conversations', refreshSidebar);
 // to re-snapshot from the server-authoritative transcript.
 es.onopen = () => { if (es.reconnected) location.reload(); es.reconnected = true; };
 
-// One growing row rather than a fixed three, so the phone's composer costs the
-// transcript only the lines actually typed. `height: 0` first, or scrollHeight
-// reports the current height instead of the content's; the offset/client delta
-// adds back the border a `box-sizing: border-box` height has to include. CSS
-// caps the growth (`max-height`) and takes over scrolling from there.
-const autogrow = () => {
-  promptEl.style.height = '0';
-  promptEl.style.height =
-    `${promptEl.scrollHeight + promptEl.offsetHeight - promptEl.clientHeight}px`;
-};
-promptEl.addEventListener('input', autogrow);
-autogrow();
-
-// Every way of sending funnels through the form's own submit event — Enter and
-// the send button both end up here — so the one decision about what the buffer
-// *means* is made in one place. A slash
-// command runs and is never posted: a `/trifecta` that runs on Enter but
-// arrives as a message when tapped would be two different composers.
+// The composer's transport half. It answers whether the message went out, and
+// a `false` is what hands the text back to the box it was cleared from.
 //
-// Submit stays enabled while the agent is busy: the server routes
-// mid-turn sends through pikuri's Interloper (delivered at the next
-// tool boundary), so "type while it works" is a feature, not an error.
-composer.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const text = promptEl.value;
-  if (!text.trim()) return;
-  if (runIfCommand(text)) return;
-  const body = new FormData(composer); // before clearing: it reads the textarea
-  promptEl.value = '';
-  autogrow();
-  promptEl.focus();
-  fetch('/messages', { method: 'POST', body }).then((r) => {
-    if (r.ok) return;
-    // Sending is never refused for being busy — a turn queues. So a failure
-    // here is the conversation having gone away underneath this tab; hand the
-    // text back rather than swallowing it.
-    promptEl.value = text;
-    autogrow();
-    statusState.textContent = 'not sent';
+// Sending is never refused for being busy — a turn queues — so a failure here
+// is the conversation having gone away underneath this tab.
+const sendMessage = (text) => {
+  const body = new FormData();
+  body.set('conversation', viewing);
+  body.set('prompt', text);
+  return fetch('/messages', { method: 'POST', body }).then((r) => {
+    if (!r.ok) statusState.textContent = 'not sent';
+    return r.ok;
   });
-});
-
-// Enter is claimed further down, beside the palette it has to consult; it
-// comes back here as a submit.
+};
 
 cancelBtn.addEventListener('click', () => {
   const body = new FormData();
@@ -227,59 +199,12 @@ const applyTheme = (theme) => {
 themeToggle.addEventListener('click', () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 
-// — the slash-command palette —
+// — the slash commands —
 //
-// The catalog is server-rendered into #slash-menu (see PikuriWeb::SlashCommand);
-// this filters it, tracks the highlighted row, and runs what was picked. A
-// command never writes to the transcript — its own effect is the feedback.
-
-const menu = document.getElementById('slash-menu');
-const rows = [...menu.querySelectorAll('li')];
-let matches = [];
-let selected = -1;
-
-const highlight = () => {
-  rows.forEach((row) => {
-    const on = row === matches[selected];
-    row.classList.toggle('selected', on);
-    row.setAttribute('aria-selected', String(on));
-  });
-  promptEl.setAttribute('aria-activedescendant', matches[selected]?.id ?? '');
-  promptEl.setAttribute('aria-expanded', String(!menu.hidden));
-};
-
-// The buffer is a command being *picked*: a leading slash with no space yet. A
-// space means the user has moved on to writing a message, so the palette gets
-// out of the way and stays out — and `/usr/bin/foo is missing` still sends.
-const picking = (text) => text.startsWith('/') && !/\s/.test(text);
-
-// Open while the buffer is still being picked at.
-const syncMenu = () => {
-  const text = promptEl.value;
-  matches = picking(text) ? rows.filter((row) => row.dataset.command.startsWith(text)) : [];
-  rows.forEach((row) => { row.hidden = !matches.includes(row); });
-  menu.hidden = matches.length === 0;
-  // A bare `/` is a menu to read, not an armed trigger: nothing is highlighted
-  // until it is narrowed or arrowed into, so Enter on `/` alone sends rather
-  // than running whichever command happens to sort first.
-  selected = menu.hidden || text === '/' ? -1 : 0;
-  highlight();
-};
-
-const closeMenu = () => {
-  matches = [];
-  selected = -1;
-  menu.hidden = true;
-  highlight();
-};
-
-const move = (delta) => {
-  if (matches.length === 0) return;
-  selected = selected < 0
-    ? (delta > 0 ? 0 : matches.length - 1)
-    : (selected + delta + matches.length) % matches.length;
-  highlight();
-};
+// The palette itself is the composer's (see composer.js): it filters the
+// server-rendered rows, tracks the highlight, and resolves what was picked.
+// What lives here is what each name *does*, because that is the half that
+// names dialogs, routes and this tab's conversation.
 
 const openThemePicker = () => {
   const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
@@ -326,76 +251,17 @@ const reportUnknownCommand = (name) => {
   openDialog('No such command', body);
 };
 
-// The other half of the contract PikuriWeb::SlashCommand describes: every name
-// in the server's catalog needs an arm here.
-const runCommand = (name) => {
-  promptEl.value = '';
-  autogrow();
-  closeMenu();
-  switch (name) {
-    case '/new': startConversation(); break;
-    case '/model': openModelPicker(); break;
-    case '/theme': openThemePicker(); break;
-    case '/trifecta': openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')); break;
-  }
-};
-
-// What a sent buffer means, for the composer's submit handler: the highlighted
-// row if the palette has one, else the first command the text is a prefix of —
-// because the send button blurs the textarea, which closes the palette out from
-// under the very tap being resolved, and the text is what survives that. A bare
-// `/` is excluded for the same reason nothing is highlighted under it: it is a
-// menu to read, not an armed trigger.
-//
-// A `/word` that resolves to nothing is a typo, and quietly sending it to the
-// model is the one outcome that helps nobody — so this consumes it too, and
-// answers true for it: true means "dealt with; do not post this".
-const runIfCommand = (text) => {
-  if (!picking(text) || text === '/') return false;
-  const command = matches[selected]?.dataset.command
-    ?? rows.find((row) => row.dataset.command.startsWith(text))?.dataset.command;
-  if (command) runCommand(command);
-  else reportUnknownCommand(text);
-  return true;
-};
-
-promptEl.addEventListener('input', syncMenu);
-// Clicking away leaves an open palette floating over the transcript.
-promptEl.addEventListener('blur', closeMenu);
-
-// Enter sends only from a real keyboard. The phone's on-screen Return is left
-// alone deliberately — it inserts its newline, as it does in the Claude iPhone
-// app, because a Return that sends makes a multi-line message unwritable on the
-// one keyboard that has no Shift+Enter. The send button is the phone's send,
-// and the palette's rows are its Enter.
-promptEl.addEventListener('keydown', (e) => {
-  if (!menu.hidden) {
-    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); return; }
-    if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); return; }
-    if (e.key === 'Escape') { e.preventDefault(); closeMenu(); return; }
-  }
-  if (e.key !== 'Enter' || e.shiftKey) return;
-  e.preventDefault();
-  composer.requestSubmit();
-});
-
-// Picking a row by pointer. Preventing the pointerdown's default keeps the
-// caret in the textarea — the blur would close the palette out from under the
-// tap before it could land — and the cost of that on iOS is that no `click`
-// follows at all: a prevented pointerdown suppresses the compatibility mouse
-// events a non-interactive `<li>` depends on. So the run hangs off `pointerup`,
-// which a tap and a mouse release both deliver. This is what makes the phone
-// work — type `/t`, tap the row.
-//
-// Both halves must be the same row, so a press that slides off one and lifts on
-// another runs neither; a scroll of the palette cancels the pointer outright.
-let pressed = null;
-rows.forEach((row) => {
-  row.addEventListener('pointerdown', (e) => { e.preventDefault(); pressed = row; });
-  row.addEventListener('pointercancel', () => { pressed = null; });
-  row.addEventListener('pointerup', () => {
-    const hit = pressed === row;
-    pressed = null;
-    if (hit) runCommand(row.dataset.command);
-  });
+// The composer, wired to this page. The arms below are the other half of the
+// contract PikuriWeb::SlashCommand describes: every name in the server's
+// catalog needs one here, and a name the config gated out of the catalog keeps
+// its arm — it is simply never rendered a row to reach it by.
+new Composer(composerEl, {
+  onmessage: sendMessage,
+  onunknown: reportUnknownCommand,
+  commands: {
+    '/new': startConversation,
+    '/model': openModelPicker,
+    '/theme': openThemePicker,
+    '/trifecta': () => openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')),
+  },
 });

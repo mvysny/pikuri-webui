@@ -125,16 +125,21 @@ the alternatives that were rejected, live one entry per slug in
   (`showModal`, `inert`, `scrollTop`, textarea measurement, `matchMedia`),
   and per-browser state that must never reach the server. Markup or
   conversation content the server could have produced is the server's,
-  always. `public/app.js` may name elements and routes; `public/dom.js`
-  may not — a function that knows an element id belongs next door. The
-  rule is about rendering and state, *not* latency — the palette filter
-  stays local. See `D_no_js_build_step`.
+  always. Three tiers of page knowledge, and a function lives in the
+  highest one it needs: `public/app.js` may name elements and routes;
+  `public/composer.js` knows only a shape of markup (roles, not ids);
+  `public/dom.js` knows no markup at all. The rule is about rendering and
+  state, *not* latency — the palette filter stays local.
+  See `D_no_js_build_step`.
 
 - **Slash commands: the catalog is the server's, the palette is the
   browser's, and a command never writes to the transcript.**
-  {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and `app.js`
-  filters it in place. A command's own effect — a dialog, a navigation, a
-  color change — is its only feedback. It runs however it was sent — Enter,
+  {SlashCommand}`::CATALOG` renders whole into `#slash-menu` and
+  `composer.js` filters it in place, while what each name *does* is the
+  `commands` map `app.js` hands that component — the palette is mechanics,
+  the arms are page knowledge. A command's own effect — a dialog, a
+  navigation, a color change — is its only feedback. It runs however it
+  was sent — Enter,
   or the ↑ button, which is the phone's Enter — and is never posted as a
   message; the palette's rows activate on `pointerup`, because a tap on iOS
   never becomes a `click`. Dialogs are real `<dialog>`s opened
@@ -331,8 +336,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `views/_sidebar.erb` — the conversation list; embedded by `index.erb`
   and served alone by `GET /conversations` for in-place refresh. The
   drawer's chrome sits *outside* it, so this stays only the list.
-- `public/app.js` — the app's JavaScript: SSE, composer, sidebar, drawer,
-  slash-command dispatch; may name elements and routes.
+- `public/app.js` — the app's JavaScript: SSE, sidebar, drawer, theme, the
+  composer's transport and command arms; may name elements and routes.
+- `public/composer.js` — `Composer`, the input + slash palette as one
+  component over the form; fires message / command, names no id.
 - `public/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one
@@ -370,7 +377,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   all three.
 - Slash commands are the same shape of contract, in three places:
   {SlashCommand}`::CATALOG` (the palette cannot list what it does not
-  hold), `runCommand` in `public/app.js` (the catalog cannot run it), and
+  hold), the `commands` map `public/app.js` hands `composer.js` (the
+  catalog cannot run it), and
   a `<template>` in `views/index.erb` for one that opens a dialog. A
   command the config can make pointless is dropped in
   {SlashCommand}`.catalog`, never by a fourth place.

@@ -177,10 +177,12 @@ RSpec.describe PikuriWeb::App do
       assert_includes last_response.body, '<span id="status-tokens-detail">msg #2  Δ+1.6k  ↑1.0k  ↓0.6k</span>'
     end
 
+    # One place, on the root element: app.js reads it once and names the
+    # conversation on every fetch and on the EventSource itself, so no form in
+    # the page carries a second copy of it.
     it 'names the conversation for app.js to subscribe to' do
       get_live
       assert_includes last_response.body, %(data-conversation="#{live.id}")
-      assert_includes last_response.body, %(<input type="hidden" name="conversation" value="#{live.id}">)
     end
 
     it 'refuses an id that is not a listed conversation' do

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# The seam public/app.js sits on, checked from the Ruby side.
+# The seam public/*.js sits on, checked from the Ruby side.
 #
 # Nothing here runs JavaScript. There is no JS runtime in this suite and
 # +D_no_js_build_step+ keeps it that way, so this reads app.js as text and
@@ -23,6 +23,23 @@ RSpec.describe 'the app.js/server contract' do
   app_js = (root / 'public/app.js').read
   index_erb = (root / 'views/index.erb').read
   sidebar_erb = (root / 'views/_sidebar.erb').read
+
+  # The other half of the admission rule +D_no_js_build_step+ draws: app.js is
+  # the file allowed to know this page, and its neighbours stay reusable only
+  # for as long as they do not. A hard-coded id or route creeping into one of
+  # them is exactly the drift nothing else would notice, because the page keeps
+  # working right up until the file is reused.
+  #
+  # A *literal* is what is banned, not the mechanism: +cloneTemplate(id)+ takes
+  # the id it looks up, which is how dom.js stays generic while doing the same
+  # call app.js does.
+  it 'keeps page knowledge out of the files that may not hold it' do
+    %w[dom.js composer.js].each do |name|
+      source = (root / 'public' / name).read.gsub(%r{^\s*//.*$}, '')
+      refute_match(/getElementById\(['"]/, source, "public/#{name} hard-codes an element id")
+      refute_match(/(?:fetch|new EventSource)\(\s*['"`]/, source, "public/#{name} names a route")
+    end
+  end
 
   it 'reaches only for element ids index.erb renders' do
     ids = app_js.scan(/getElementById\(['"]([\w-]+)['"]\)/).flatten.uniq
@@ -98,9 +115,9 @@ RSpec.describe 'the app.js/server contract' do
   #
   # Against CATALOG rather than .catalog: the arm has to exist even in a
   # single-connection config, which drops /model from the palette but leaves
-  # runCommand's switch exactly as it is.
-  it 'arms every catalogued command in runCommand, and none besides' do
-    arms = app_js.scan(/case '(\/[\w-]+)':/).flatten
+  # the map app.js hands the composer exactly as it is.
+  it 'arms every catalogued command in the composer it configures, and none besides' do
+    arms = app_js.scan(/^\s*'(\/[\w-]+)':/).flatten
     assert_equal PikuriWeb::SlashCommand::CATALOG.map(&:name).sort, arms.sort
   end
 end

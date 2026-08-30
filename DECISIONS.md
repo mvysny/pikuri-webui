@@ -330,7 +330,9 @@ renderer; revisit if the lag grates against a slow first token.
 `/trifecta`; `/model` joined them later the same day
 (`D_per_conversation_model`) and is the first command gated on the config —
 `SlashCommand.catalog(connections:)` drops it when there is nothing to pick
-between.
+between. Amended 2026-08-30: the palette's mechanics moved into
+`public/composer.js` and the dispatch became a map app.js hands it, replacing
+`runCommand`'s switch.
 
 **Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
 is the obvious thing to port: a list above the input, filtered as you type,
@@ -342,13 +344,26 @@ already is.
 **Decision, in three parts.**
 
 *The catalog is server-rendered; the dispatch is not.* `PikuriWeb::SlashCommand::CATALOG`
-renders whole into `#slash-menu`, and `app.js` filters it by toggling
-`hidden` per row. A command *runs* in `runCommand`, because most of them
+renders whole into `#slash-menu`, and the browser filters it by toggling
+`hidden` per row. A command *runs* in the browser, because most of them
 are browser-side anyway (a navigation, a cookie, a dialog); the one that is
 not, `/model`, still opens its dialog there and posts a name.
-That makes adding a command a three-place contract — catalog, `runCommand`,
-and a `<template>` for a command with a dialog — which is the same shape the
-block kinds already have, and is written down in `AGENTS.md` beside them.
+That makes adding a command a three-place contract — catalog, an arm in the
+browser, and a `<template>` for a command with a dialog — which is the same
+shape the block kinds already have, and is written down in `AGENTS.md` beside
+them.
+
+*The palette is the composer's; the arms are the app's.* The mechanics — the
+filter, the highlight, resolving a buffer to a name — moved into
+`public/composer.js` when the composer became a component
+(`D_no_js_build_step`'s three tiers). What each name *does* could not follow
+it: `/new` posts a route, `/model` opens a dialog over this tab's
+conversation, `/theme` writes a cookie — all of it page knowledge the
+component is not allowed to hold. So app.js hands the component a `commands`
+map, one arm per name, and the component dispatches into it. That map is the
+"arm in the browser" the contract above means, and a name it holds that the
+config gated out of the catalog is simply never rendered a row to reach it by
+— which is how `/model` stays gated in the one place that decides it.
 
 *A command never writes to the transcript.* This is where the TUI's design
 stops porting: its `SlashCommand#callback` returns a String that gets echoed
@@ -1820,7 +1835,9 @@ would look like multi-user support while delivering none of it.
 ## D_no_js_build_step — No bundler and no dependencies; JS is mechanics, never a renderer (2026-06-04)
 
 **Status:** Accepted, shipped 2026-06-04; amended 2026-08-29 — the size
-targets are gone, and the test that replaces them is sharper.
+targets are gone, and the test that replaces them is sharper; amended
+2026-08-30 — the admission rule now names three tiers, `public/composer.js`
+being the middle one.
 
 **Context.** The page needs an `EventSource`, form wiring, and a way to
 place incoming fragments. That is the entire client-side job, because
@@ -1852,6 +1869,25 @@ protected, and `public/dom.js` splitting generic DOM mechanics away from the
 app is a clarity win the old clause would have forbidden on a technicality.
 Neither count is coming back — any successor would rot the same way as the
 app grows.
+
+**The admission rule, in three tiers.** What decides which file a function
+belongs in is how much of *this page* it has to know:
+
+- `public/app.js` — may name element ids, routes and the conversation. It is
+  this page's wiring, and is reusable nowhere by construction.
+- `public/composer.js` — knows a *shape* of markup (a form holding a
+  `role="listbox"` of `role="option"` rows above a textarea) and nothing
+  else: no id, no route, no conversation. A component, handed its root
+  element and its behaviour by app.js.
+- `public/dom.js` — knows no markup at all. `cloneTemplate(id)` looks an id
+  up without naming one, which is the difference the rule turns on.
+
+The middle tier is what a component needs and dom.js could never hold: the
+composer's palette, keyboard and auto-grow are one cohesive box, but the box
+has to find its own parts. Naming the parts by their ARIA roles rather than by
+id is what buys that — those are the names the palette maintains anyway, so
+the contract is one the markup already had to keep. `client_contract_spec.rb`
+pins the two lower tiers by scanning them for a hard-coded id or route.
 
 **The qualifier: rendering and state, not latency.** Read absolutely, "if the
 server can do it, the server must" argues for fetching the slash palette's

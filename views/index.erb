@@ -93,15 +93,19 @@
 
          The composer precedes the status bar, as on the desktop it always has;
          the phone layout swaps them with `order` rather than a DOM reshuffle. -->
+    <!-- The whole form is public/composer.js's component: the textarea, the
+         palette and the keyboard that drives both. It finds its parts by role
+         rather than by id, so the three below are a contract — see that file's
+         header. It posts nothing itself, which is why there is no hidden
+         `conversation` field: app.js names the conversation on the fetch, as
+         it does on every other route. -->
     <form id="composer">
-      <input type="hidden" name="conversation" value="<%= conversation %>">
-
       <!-- The slash-command palette, server-rendered whole and filtered in
-           place: app.js only toggles `hidden` per row. It anchors itself —
-           absolutely positioned against the composer, so it floats above the
+           place: the composer only toggles `hidden` per row. It anchors itself
+           — absolutely positioned against the composer, so it floats above the
            textarea and tracks its auto-grow with no geometry in JS.
 
-           Every name here needs an arm in app.js's `runCommand`; see
+           Every name here needs an arm in app.js's `commands` map; see
            PikuriWeb::SlashCommand. -->
       <ul id="slash-menu" role="listbox" aria-label="Commands" hidden>
         <% commands.each do |command| %>
@@ -115,8 +119,9 @@
 
       <!-- The hint is a title, not the placeholder: a paragraph of placeholder
            wraps to three lines in a phone-width composer, and Chrome sizes an
-           empty textarea to its wrapped placeholder, so app.js's auto-grow
-           opens the box at three lines before a character is typed. -->
+           empty textarea to its wrapped placeholder, so the composer's
+           auto-grow opens the box at three lines before a character is
+           typed. -->
       <textarea name="prompt" id="prompt" rows="1" autofocus placeholder="Message…"
                 role="combobox" aria-expanded="false" aria-controls="slash-menu"
                 title="Enter to send, Shift+Enter for newline; sending mid-turn injects; / for commands"></textarea>
@@ -193,9 +198,9 @@
       anything with a space in it is never read as a command.</p>
   </template>
 
-  <!-- A module, so app.js and dom.js each get their own scope and dom.js
-       cannot quietly become a bag of globals. No build step is involved: the
-       browser resolves the import itself. -->
+  <!-- A module, so app.js, composer.js and dom.js each get their own scope and
+       no neighbour can quietly become a bag of globals. No build step is
+       involved: the browser resolves the imports itself. -->
   <script type="module" src="/app.js"></script>
 </body>
 </html>

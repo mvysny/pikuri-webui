@@ -14,9 +14,9 @@ module PikuriWeb
   #
   # The palette runs in the browser, so this side carries only what the page
   # displays — there is no callback. Adding a command is a three-place contract,
-  # the same shape as the block kinds: an entry in {CATALOG}, an arm in
-  # +runCommand+ (public/app.js), and a +<template>+ in views/index.erb for one
-  # that opens a dialog.
+  # the same shape as the block kinds: an entry in {CATALOG}, an arm in the
+  # +commands+ map public/app.js hands the composer, and a +<template>+ in
+  # views/index.erb for one that opens a dialog.
   #
   # A command must never write to the transcript. Client-side that is
   # conversation state the server does not hold (+D_server_authoritative_transcript+);
