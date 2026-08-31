@@ -20,37 +20,31 @@ module PikuriWeb
   # Pikuri-free: the agent-shaped work lives entirely behind +factory+, so this
   # class only ever holds and hands out {AgentRunner}s.
   #
-  # == Thread-safety
+  # == Threading
   #
-  # Thread-safe, and the last thing here that needs to be. Per-conversation
+  # Guarded by {AppMonitor}: every call must run inside a task. Per-conversation
   # state is single-writer by construction — one agent, one transcript, and a
-  # conversation that admits one turn at a time — so this registry is what is
-  # left that several threads genuinely share. That holds at any +--turns+
-  # setting; it comes from the partition, not from the executor's pool size
-  # (`D_serial_turn_executor`). The monitor covers the resident map;
-  # {ConversationStore}'s own doc covers the folder.
+  # conversation that admits one turn at a time — and that holds at any
+  # +--turns+ setting; it comes from the partition, not from the executor's
+  # pool size (`D_serial_turn_executor`). {ConversationStore}'s own doc covers
+  # the folder. This class still never reaches inside a runner — hence
+  # {AgentRunner#discard!} for the one place that must.
   #
-  # +Monitor+ rather than +Mutex+ because it is re-entrant: {#rows} and
-  # {#delete} both consult the resident map through helpers that lock, and a
-  # plain mutex would deadlock on itself. It does not, however, reach inside a
-  # runner — hence {AgentRunner#discard!} for the one place that must.
-  #
-  # The monitor is held across more than map mutation: a mint runs the factory
-  # *and* the whole restore replay under it (which is what keeps a second open
-  # of the same conversation from observing a half-restored runner), and
-  # {#find} / {#rows} / {#delete} hold it across the store's disk I/O. Every
-  # registry caller therefore waits behind a slow mint — accepted while
-  # histories stay small.
+  # A mint's task runs the factory *and* the whole restore replay (which is
+  # what keeps a second open of the same conversation from observing a
+  # half-restored runner), and {#find} / {#rows} / {#delete} run the store's
+  # disk I/O — the sanctioned rare-and-bounded stalls (`D_global_monitor`).
   class ConversationRegistry
     # @param store [ConversationStore] the folder: mints ids, lists what is
     #   saved, removes a folder
     # @param factory [#call] +conversation → AgentRunner+, built once in
     #   bin/pikuri-web-chat so that every agent gets the same tool set and the
     #   boot-time trifecta report stays true of all of them
-    def initialize(store:, factory:)
+    # @param monitor [AppMonitor] the domain every call must be inside
+    def initialize(store:, factory:, monitor:)
       @store = store
       @factory = factory
-      @monitor = Monitor.new
+      @monitor = monitor
       @runners = {}
     end
 
@@ -60,36 +54,37 @@ module PikuriWeb
     # @param conversation [ConversationStore::Conversation]
     # @return [AgentRunner]
     def open(conversation)
-      @monitor.synchronize do
-        @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
-      end
+      @monitor.assert!
+      @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
     end
 
     # @param id [String]
     # @return [AgentRunner, nil] without minting one
-    def resident(id) = @monitor.synchronize { @runners[id] }
+    def resident(id)
+      @monitor.assert!
+      @runners[id]
+    end
 
     # Resolve an id and open it as one step.
     #
     #   runner = registry.open_id(params['conversation'])
     #
-    # {#find} then {#open} as two calls leaves a window for {#delete}: the
-    # folder goes, and the open that follows mints a live runner for it
-    # anyway — back in the sidebar as an unsaved resident, and written to disk
-    # again at its next turn end. {AgentRunner#discard!} cannot help, because
-    # it retires the runner that is *already* resident and this one does not
-    # exist yet. Holding the monitor across both is what forces the two into an
-    # order: either the delete finds a runner to refuse or retire, or this
-    # finds nothing to resolve.
+    # {#find} then {#open} as two caller-side calls would leave a window for
+    # {#delete}: the folder goes, and the open that follows mints a live
+    # runner for it anyway — back in the sidebar as an unsaved resident, and
+    # written to disk again at its next turn end. {AgentRunner#discard!}
+    # cannot help, because it retires the runner that is *already* resident
+    # and this one does not exist yet. One method means one task: either the
+    # delete finds a runner to refuse or retire, or this finds nothing to
+    # resolve.
     #
     # @param id [String]
     # @return [AgentRunner, nil] nil for an id that is neither resident nor
     #   saved — including one deleted a moment ago
     def open_id(id)
-      @monitor.synchronize do
-        conversation = find(id)
-        conversation && open(conversation)
-      end
+      @monitor.assert!
+      conversation = find(id)
+      conversation && open(conversation)
     end
 
     # Mint a brand-new conversation and open it.
@@ -105,6 +100,7 @@ module PikuriWeb
     #   or one not resident, starts on the catalog's first connection
     # @return [AgentRunner]
     def create(from: nil)
+      @monitor.assert!
       model, server = from && resident(from)&.model
       open(@store.create(model: model, server: server))
     end
@@ -117,23 +113,23 @@ module PikuriWeb
     #
     # {AgentRunner#discard!} rather than a {AgentRunner#busy?} read, because
     # dropping the runner from the map does not reach the copy a request
-    # thread resolved a moment ago — that one would resurrect the conversation
-    # at its next turn end, and this monitor cannot serialize against the
-    # runner's own +#submit+. Retire it, then remove the folder: a removal
+    # resolved in an *earlier* task — a submit through that stale reference
+    # lands in a later task, after this one, and would resurrect the
+    # conversation at its next turn end; only a flag on the runner itself
+    # travels with the reference. Retire it, then remove the folder: a removal
     # that raises leaves an inert runner rather than a live one pointing at a
     # half-deleted conversation.
     #
     # @param conversation [ConversationStore::Conversation]
     # @return [:deleted, :busy, :failed]
     def delete(conversation)
-      @monitor.synchronize do
-        runner = @runners[conversation.id]
-        return :busy if runner && !runner.discard!
+      @monitor.assert!
+      runner = @runners[conversation.id]
+      return :busy if runner && !runner.discard!
 
-        @runners.delete(conversation.id)
-        @store.delete(conversation)
-        :deleted
-      end
+      @runners.delete(conversation.id)
+      @store.delete(conversation)
+      :deleted
     rescue StandardError => e
       PikuriWeb.logger.error("deleting conversation #{conversation.id} failed (#{e.class}: #{e.message})")
       :failed
@@ -147,7 +143,8 @@ module PikuriWeb
     # @param id [String]
     # @return [ConversationStore::Conversation, nil]
     def find(id)
-      @monitor.synchronize { @runners[id]&.conversation } || @store.find(id)
+      @monitor.assert!
+      @runners[id]&.conversation || @store.find(id)
     end
 
     # The sidebar's model: everything saved, newest first, plus anything
@@ -156,11 +153,10 @@ module PikuriWeb
     #
     # @return [Array<Hash>] +{conversation:, busy:}+ per row
     def rows
-      @monitor.synchronize do
-        saved = @store.list
-        extra = @runners.values.map(&:conversation).reject { |c| saved.any? { |s| s.id == c.id } }
-        (extra + saved).map { |c| { conversation: c, busy: @runners[c.id]&.busy? || false } }
-      end
+      @monitor.assert!
+      saved = @store.list
+      extra = @runners.values.map(&:conversation).reject { |c| saved.any? { |s| s.id == c.id } }
+      (extra + saved).map { |c| { conversation: c, busy: @runners[c.id]&.busy? || false } }
     end
 
     # The conversation a bare +GET /+ should land on: the newest thing there
@@ -168,14 +164,16 @@ module PikuriWeb
     #
     # @return [ConversationStore::Conversation]
     def default
-      @monitor.synchronize do
-        rows.first&.fetch(:conversation) || create.conversation
-      end
+      @monitor.assert!
+      rows.first&.fetch(:conversation) || create.conversation
     end
 
     # Every resident runner, for the shutdown sweep.
     #
     # @return [Array<AgentRunner>]
-    def runners = @monitor.synchronize { @runners.values }
+    def runners
+      @monitor.assert!
+      @runners.values
+    end
   end
 end

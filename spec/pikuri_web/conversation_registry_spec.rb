@@ -40,7 +40,8 @@ RSpec.describe PikuriWeb::ConversationRegistry do
   end
   let(:built) { [] }
   let(:factory) { ->(c) { StubRunner.new(c).tap { |r| built << r } } }
-  let(:registry) { described_class.new(store: store, factory: factory) }
+  let(:monitor) { PikuriWeb::AppMonitor.new }
+  let(:registry) { guard(described_class.new(store: store, factory: factory, monitor: monitor), monitor) }
 
   context '#open' do
     it 'mints a runner on first open and restores it once' do

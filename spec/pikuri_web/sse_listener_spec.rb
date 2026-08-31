@@ -4,9 +4,15 @@
 # against a real Transcript + Broadcaster — the same surface the agent's
 # worker thread drives in production.
 RSpec.describe PikuriWeb::SseListener do
-  let(:transcript) { PikuriWeb::Transcript.new }
+  let(:monitor) { PikuriWeb::AppMonitor.new }
+  # Guarded proxy on both sides: the listener's own tasks re-enter it, and the
+  # spec's direct assertions read through it.
+  let(:transcript) { guard(PikuriWeb::Transcript.new(monitor: monitor), monitor) }
   let(:broadcaster) { PikuriWeb::Broadcaster.new }
-  let(:listener) { described_class.new(transcript: transcript, broadcaster: broadcaster, conversation: 'c-1') }
+  let(:listener) do
+    described_class.new(transcript: transcript, broadcaster: broadcaster, conversation: 'c-1',
+                        monitor: monitor)
+  end
   let(:queue) { broadcaster.subscribe('c-1') }
 
   def event_types(frames)

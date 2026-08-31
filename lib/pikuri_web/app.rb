@@ -7,9 +7,15 @@ module PikuriWeb
   # {Broadcaster} pair, which the host injects via class-level settings before
   # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
   #
+  #   PikuriWeb::App.set :app_monitor, monitor
   #   PikuriWeb::App.set :registry,    registry
   #   PikuriWeb::App.set :broadcaster, broadcaster
   #   PikuriWeb::App.set :models,      catalog.rows   # what /model lists
+  #
+  # Every route body that touches server state is one {AppMonitor} task, so
+  # what a route reads or mutates together cannot tear — the page snapshot is
+  # one consistent picture, and resolve + act is one step. Template rendering
+  # and the SSE drain loop stay outside the domain.
   #
   # Every route names the conversation it acts on, and none of them refuse
   # because *another* conversation is working: each has its own agent, and the
@@ -56,7 +62,7 @@ module PikuriWeb
     # one a tab has open, so a bare +/+ picks the newest and hands over a real
     # URL to sit on.
     get '/' do
-      redirect to("/c/#{settings.registry.default.id}"), 303
+      redirect to("/c/#{settings.app_monitor.run { settings.registry.default.id }}"), 303
     end
 
     # The page shell for one conversation: its transcript and status bar
@@ -73,22 +79,30 @@ module PikuriWeb
     # client-side (see public/js/app.js), because a POST + reload would cost an
     # SSE reconnect for a color change.
     get '/c/:id' do
-      runner = open_conversation(params['id'])
       cookie = request.cookies['theme']
-      erb :index, locals: {
-        blocks: runner.transcript.to_a,
-        status: runner.status_data,
-        conversations: conversation_rows(viewing: runner.conversation.id),
-        conversation: runner.conversation.id,
-        title: runner.conversation.title,
+      # One task, so the page is an untorn read: the blocks, the status bar
+      # and the sidebar rows come from the same instant, never straddling a
+      # transition. The blocks are immutable and the rest plain data, so the
+      # erb render needs no task of its own.
+      snapshot = settings.app_monitor.run do
+        runner = open_conversation(params['id'])
+        {
+          blocks: runner.transcript.to_a,
+          status: runner.status_data,
+          conversations: conversation_rows(viewing: runner.conversation.id),
+          conversation: runner.conversation.id,
+          title: runner.conversation.title,
+          # Static for the life of the process — one conversation factory, one
+          # tool set — so the /trifecta dialog ships in the page rather than
+          # costing a route of its own.
+          trifecta: runner.trifecta_html
+        }
+      end
+      erb :index, locals: snapshot.merge(
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
         commands: SlashCommand.catalog(connections: settings.models.size),
-        models: settings.models,
-        # Static for the life of the process — one conversation factory, one
-        # tool set — so the /trifecta dialog ships in the page rather than
-        # costing a route of its own.
-        trifecta: runner.trifecta_html
-      }
+        models: settings.models
+      )
     end
 
     # The sidebar's list on its own, for app.js to drop back into the page when
@@ -96,7 +110,8 @@ module PikuriWeb
     # +GET /c/:id+ embeds, so no conversation state is ever assembled in the
     # browser.
     get '/conversations' do
-      erb :_sidebar, locals: { conversations: conversation_rows(viewing: params['viewing'].to_s) }
+      rows = settings.app_monitor.run { conversation_rows(viewing: params['viewing'].to_s) }
+      erb :_sidebar, locals: { conversations: rows }
     end
 
     # SSE feed for the one conversation this tab is showing: transcript deltas
@@ -109,16 +124,21 @@ module PikuriWeb
     #
     # Opens with the transcript as it stands, because this connection and the
     # +GET /c/:id+ that rendered the page are two separate requests: anything
-    # the agent finished in between belongs to neither. See {#catch_up_frames}
-    # for why subscribing *first* is what makes that safe.
+    # the agent finished in between belongs to neither. Subscribe + catch-up
+    # is one task, so nothing can land between them server-side; the
+    # subscribe-first order and the duplicate tolerance stay for the
+    # page-render-to-connect gap, which no server mechanism reaches
+    # (`D_subscribe_then_snapshot`).
     get '/events' do
       content_type 'text/event-stream'
       headers 'Cache-Control' => 'no-cache'
       conversation = params['conversation'].to_s
       stream do |out|
-        queue = settings.broadcaster.subscribe(conversation)
+        queue, catch_up = settings.app_monitor.run do
+          [settings.broadcaster.subscribe(conversation), catch_up_frames(conversation)]
+        end
         begin
-          catch_up_frames(conversation).each { |frame| out << frame }
+          catch_up.each { |frame| out << frame }
           while (frame = queue.pop)
             out << frame
           end
@@ -144,10 +164,11 @@ module PikuriWeb
       prompt = params['prompt'].to_s
       halt 422, 'prompt must not be blank' if prompt.strip.empty?
 
-      runner = open_conversation(params['conversation'])
-      # A delete can land between resolving the runner and submitting to it,
-      # so this is open_conversation's own 404, one step late.
-      halt 404, 'no such conversation' if runner.submit(prompt) == :discarded
+      # Resolve + submit is one task, so no delete can land between them.
+      # +:discarded+ stays answered: it is the runner's own contract, reachable
+      # through a stale reference held from an earlier request.
+      outcome = settings.app_monitor.run { open_conversation(params['conversation']).submit(prompt) }
+      halt 404, 'no such conversation' if outcome == :discarded
 
       status 204
     end
@@ -156,7 +177,10 @@ module PikuriWeb
     # the top of its next turn, never on the spot — so this is accepted while a
     # turn is running, exactly as a mid-turn send is.
     post '/model' do
-      case open_conversation(params['conversation']).select_model(params['name'].to_s)
+      outcome = settings.app_monitor.run do
+        open_conversation(params['conversation']).select_model(params['name'].to_s)
+      end
+      case outcome
       when :unknown then halt 422, 'no such connection'
       when :discarded then halt 404, 'no such conversation'
       end
@@ -167,7 +191,7 @@ module PikuriWeb
     # is still queued, stopped at the next tool boundary if it is running.
     # Idempotent; no-op when idle.
     post '/cancel' do
-      open_conversation(params['conversation']).cancel
+      settings.app_monitor.run { open_conversation(params['conversation']).cancel }
       status 204
     end
 
@@ -178,8 +202,10 @@ module PikuriWeb
     # server cannot know which conversation the asking tab has open, the same
     # reason +GET /conversations+ is told.
     post '/conversations' do
-      conversation = settings.registry.create(from: params['viewing'].to_s).conversation
-      settings.broadcaster.broadcast(event: :conversations, data: {})
+      conversation = settings.app_monitor.run do
+        settings.registry.create(from: params['viewing'].to_s).conversation
+                .tap { settings.broadcaster.broadcast(event: :conversations, data: {}) }
+      end
       content_type 'text/plain'
       conversation.id
     end
@@ -192,14 +218,18 @@ module PikuriWeb
     # sidebar, while the +conversations+ frame is what un-lists the row in
     # every other tab.
     post '/conversations/:id/delete' do
-      conversation = settings.registry.find(params['id'])
-      halt 404, 'no such conversation' if conversation.nil?
+      outcome = settings.app_monitor.run do
+        conversation = settings.registry.find(params['id'])
+        next :missing if conversation.nil?
 
-      case settings.registry.delete(conversation)
+        settings.registry.delete(conversation)
+                .tap { |o| settings.broadcaster.broadcast(event: :conversations, data: {}) if o == :deleted }
+      end
+      case outcome
+      when :missing then halt 404, 'no such conversation'
       when :busy then halt 409, 'a turn is in flight in that conversation'
       when :failed then halt 500, 'that conversation could not be deleted'
       end
-      settings.broadcaster.broadcast(event: :conversations, data: {})
       redirect to('/'), 303
     end
 
@@ -224,12 +254,11 @@ module PikuriWeb
     # What a just-connected tab needs to be level with the server: the whole
     # transcript, as +reset+ plus one +block+ each.
     #
-    # Taken *after* {Broadcaster#subscribe}, and that order is the whole
-    # mechanism. Snapshot-then-subscribe loses whatever lands between the two;
-    # subscribe-then-snapshot delivers it twice instead, and a duplicate is
-    # free — the browser upserts blocks by id, and {Transcript#clear} keeps its
-    # id counter so no id is ever reused. A miss is permanent, a repeat is a
-    # no-op, so the seam is closed by ordering rather than by a lock.
+    # Runs in the same task as {Broadcaster#subscribe}, so no server-side gap
+    # remains between the two. The duplicate tolerance survives regardless —
+    # the browser upserts blocks by id, and {Transcript#clear} keeps its id
+    # counter so no id is ever reused — because the page render and this
+    # connection are still two HTTP requests (`D_subscribe_then_snapshot`).
     #
     # +reset+ leads because the window may have swallowed one: without it a tab
     # that rendered its page just before a +/clear+ would keep showing blocks

@@ -18,14 +18,18 @@ module PikuriWeb
   # streamed text on cancel" is "just drop the {StreamingMessage} handle."
   #
   # Threading is where this diverges most from the TUI: there is no UI
-  # thread to marshal onto. The streaming handles (+@assistant+ /
-  # +@thinking+) are unguarded, so this class is confined to one event
-  # producer at a time — the minting thread during {AgentRunner#restore!}'s
-  # replay, the turn worker thereafter. Those never overlap: the registry
-  # publishes the runner only after the replay, and a conversation admits
-  # one turn at a time. {Transcript} and {Broadcaster} are themselves
-  # thread-safe, so dispatch needs no submit/queue hop; per-browser event
-  # order comes from each connection's one FIFO queue.
+  # thread to marshal onto. Rendering (kramdown, escaping, the
+  # {StreamingMessage} accumulation) runs off-domain, on whichever thread
+  # delivers the event; each finished block then enters an {AppMonitor}
+  # task that stores it and broadcasts it as one unit, so a tab's snapshot
+  # and its SSE stream can never disagree about a block. The streaming
+  # handles (+@assistant+ / +@thinking+) stay off-domain and unguarded:
+  # this class is confined to one event producer at a time — the minting
+  # task during {AgentRunner#restore!}'s replay, the turn worker
+  # thereafter, which never overlap because the registry publishes the
+  # runner only after the replay and a conversation admits one turn at a
+  # time. Per-browser event order comes from each connection's one FIFO
+  # queue.
   #
   # Variant coverage mirrors TuileListener:
   #
@@ -65,10 +69,12 @@ module PikuriWeb
     #   reaches only the tabs showing this conversation. +nil+ broadcasts to
     #   everyone, which is what a throwaway listener rendering a snapshot
     #   wants — it has no subscribers at all
-    def initialize(transcript:, broadcaster:, conversation: nil)
+    # @param monitor [AppMonitor] the domain each store-and-broadcast enters
+    def initialize(transcript:, broadcaster:, monitor:, conversation: nil)
       super()
       @transcript = transcript
       @broadcaster = broadcaster
+      @monitor = monitor
       @conversation = conversation
       @assistant = nil
       @thinking = nil
@@ -184,8 +190,10 @@ module PikuriWeb
       @assistant = nil
       @thinking = nil
       @thinking_streamed = false
-      @transcript.clear
-      @broadcaster.broadcast(event: :reset, data: {}, conversation: @conversation)
+      @monitor.run do
+        @transcript.clear
+        @broadcaster.broadcast(event: :reset, data: {}, conversation: @conversation)
+      end
     end
 
     # Append one finished block: store it and announce it.
@@ -194,9 +202,11 @@ module PikuriWeb
     # @param html [String] rendered/escaped HTML
     # @return [void]
     def add_block(kind, html)
-      block = @transcript.add(kind: kind, html: html)
-      @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html },
-                             conversation: @conversation)
+      @monitor.run do
+        block = @transcript.add(kind: kind, html: html)
+        @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html },
+                               conversation: @conversation)
+      end
     end
 
     # Open a streamed block: an empty transcript block claims the id and
@@ -206,7 +216,7 @@ module PikuriWeb
     # @param kind [Symbol] +:assistant+ or +:thinking+
     # @return [StreamingMessage]
     def open_stream(kind)
-      block = @transcript.add(kind: kind, html: '')
+      block = @monitor.run { @transcript.add(kind: kind, html: '') }
       StreamingMessage.new(id: block.id, render: MarkdownRenderer.method(:render))
     end
 
@@ -219,9 +229,11 @@ module PikuriWeb
     #   no-op append path can't race)
     # @return [void]
     def push_stream(kind, message, html)
-      @transcript.update(message.id, html)
-      @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },
-                             conversation: @conversation)
+      @monitor.run do
+        @transcript.update(message.id, html)
+        @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },
+                               conversation: @conversation)
+      end
     end
 
     # Close out the assistant streaming message.
@@ -238,8 +250,10 @@ module PikuriWeb
 
       case mode
       when :wipe
-        @transcript.remove(@assistant.id)
-        @broadcaster.broadcast(event: :remove, data: { id: @assistant.id }, conversation: @conversation)
+        @monitor.run do
+          @transcript.remove(@assistant.id)
+          @broadcaster.broadcast(event: :remove, data: { id: @assistant.id }, conversation: @conversation)
+        end
       when :preserve
         # Block keeps its content; drop the handle below.
       else

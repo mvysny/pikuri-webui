@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 module PikuriWeb
-  # Server-authoritative conversation transcript: an ordered, mutex-guarded
-  # list of rendered HTML blocks. The single source of truth for what the
-  # browser shows — +GET /+ renders a snapshot into the page, and the SSE
-  # stream carries only deltas against it. So page reload, a second tab,
-  # and EventSource auto-reconnect all converge on the same state with no
-  # client-side bookkeeping.
+  # Server-authoritative conversation transcript: an ordered list of rendered
+  # HTML blocks. The single source of truth for what the browser shows —
+  # +GET /+ renders a snapshot into the page, and the SSE stream carries only
+  # deltas against it. So page reload, a second tab, and EventSource
+  # auto-reconnect all converge on the same state with no client-side
+  # bookkeeping.
   #
   # One block per logical unit, mirroring the TUI's region-per-block model:
   # user turn, streamed thinking, streamed assistant answer, tool call,
@@ -15,9 +15,8 @@ module PikuriWeb
   # becomes {#remove}.
   #
   # Pikuri-free by design (see the seam rule in AGENTS.md): this class
-  # speaks only ids, kinds and HTML strings. Thread-safe — written through
-  # {SseListener} (from the minting thread during the restore replay, from
-  # the turn worker thereafter), read from Sinatra request threads.
+  # speaks only ids, kinds and HTML strings. Guarded by {AppMonitor}: every
+  # call must run inside a task — {#to_a}'s snapshot is what a task hands out.
   class Transcript
     # One rendered block. +kind+ is the CSS hook (+:user+, +:assistant+,
     # +:thinking+, +:tool_call+, +:tool_result+, +:notice+, +:error+);
@@ -30,8 +29,9 @@ module PikuriWeb
     # left a request thread rendering the page able to read a block mid-delta.
     Block = Data.define(:id, :kind, :html)
 
-    def initialize
-      @mutex = Mutex.new
+    # @param monitor [AppMonitor] the domain every call must be inside
+    def initialize(monitor:)
+      @monitor = monitor
       @blocks = []
       @next_id = 0
     end
@@ -43,12 +43,11 @@ module PikuriWeb
     # @return [Block] the stored block (read its +id+ for later
     #   {#update} / {#remove} calls)
     def add(kind:, html:)
-      @mutex.synchronize do
-        @next_id += 1
-        block = Block.new(id: "b#{@next_id}", kind: kind, html: html)
-        @blocks << block
-        block
-      end
+      @monitor.assert!
+      @next_id += 1
+      block = Block.new(id: "b#{@next_id}", kind: kind, html: html)
+      @blocks << block
+      block
     end
 
     # Replace an existing block's content, keeping its id and position (the
@@ -59,10 +58,9 @@ module PikuriWeb
     # @param html [String]
     # @return [void]
     def update(id, html)
-      @mutex.synchronize do
-        index = @blocks.index { |b| b.id == id }
-        @blocks[index] = @blocks[index].with(html: html) if index
-      end
+      @monitor.assert!
+      index = @blocks.index { |b| b.id == id }
+      @blocks[index] = @blocks[index].with(html: html) if index
       nil
     end
 
@@ -72,7 +70,8 @@ module PikuriWeb
     # @param id [String]
     # @return [void]
     def remove(id)
-      @mutex.synchronize { @blocks.reject! { |b| b.id == id } }
+      @monitor.assert!
+      @blocks.reject! { |b| b.id == id }
       nil
     end
 
@@ -84,15 +83,17 @@ module PikuriWeb
     #
     # @return [void]
     def clear
-      @mutex.synchronize { @blocks.clear }
+      @monitor.assert!
+      @blocks.clear
       nil
     end
 
     # @return [Array<Block>] snapshot, in order — a consistent one: the list is
-    #   copied and the blocks in it are immutable, so a caller can render it
-    #   while a turn streams into the transcript behind them
+    #   copied and the blocks in it are immutable, so the caller's task can end
+    #   and the snapshot stays good while a turn streams in behind it
     def to_a
-      @mutex.synchronize { @blocks.dup }
+      @monitor.assert!
+      @blocks.dup
     end
   end
 end

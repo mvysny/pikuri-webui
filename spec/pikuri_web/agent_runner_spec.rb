@@ -107,18 +107,20 @@ RSpec.describe PikuriWeb::AgentRunner do
   # Absent for most examples, as it is for a runner nobody metered; the
   # context-readout context overrides it with a real one.
   let(:token_log) { nil }
-  let(:transcript) { PikuriWeb::Transcript.new }
+  let(:monitor) { PikuriWeb::AppMonitor.new }
+  let(:transcript) { PikuriWeb::Transcript.new(monitor: monitor) }
   let(:conversation) { conversations.create }
+  # Guarded proxy: the spec drives the runner the way a route task does.
   let(:runner) do
-    described_class.new(
-      conversation: conversation,
-      agent: agent, interloper: interloper, cancellable: cancellable,
-      broadcaster: broadcaster, conversations: conversations, listener: listener,
-      transcript: transcript, catalog: catalog, token_log: token_log,
-      # A real thread, not ImmediateExecutor: these examples are *about* the
-      # busy state, which needs the turn still running when #submit returns.
-      executor: Concurrent::SingleThreadExecutor.new
-    )
+    guard(described_class.new(
+            conversation: conversation,
+            agent: agent, interloper: interloper, cancellable: cancellable,
+            broadcaster: broadcaster, conversations: conversations, listener: listener,
+            transcript: transcript, catalog: catalog, token_log: token_log, monitor: monitor,
+            # A real thread, not ImmediateExecutor: these examples are *about* the
+            # busy state, which needs the turn still running when #submit returns.
+            executor: Concurrent::SingleThreadExecutor.new
+          ), monitor)
   end
 
   # Spin until +condition+ holds, failing the spec on timeout — the
@@ -252,11 +254,12 @@ RSpec.describe PikuriWeb::AgentRunner do
       blocker = Concurrent::SingleThreadExecutor.new
       gate = Thread::Queue.new
       blocker.post { gate.pop }
-      queued = described_class.new(
-        conversation: conversation, agent: agent, interloper: interloper,
-        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
-        listener: listener, transcript: transcript, catalog: catalog, executor: blocker
-      )
+      queued = guard(described_class.new(
+                       conversation: conversation, agent: agent, interloper: interloper,
+                       cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+                       listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
+                       monitor: monitor
+                     ), monitor)
       subscription = broadcaster.subscribe(conversation.id)
 
       queued.submit('hello')
@@ -294,6 +297,67 @@ RSpec.describe PikuriWeb::AgentRunner do
       types = drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
       assert_includes types, 'status'
       refute_includes types, 'conversations'
+    end
+  end
+
+  # The compose-then-publish seam (the atomicity audit's seam 2), closed
+  # structurally: composing a status payload and pushing it happen inside one
+  # task, so composed order *is* push order and a browser can never be left
+  # holding an older state over a newer one. Flipped from the seam audit's
+  # PROBE 6, which forced the tear deterministically before the domain landed.
+  context 'status frame ordering' do
+    # A broadcaster that can park one caller between composing a frame and
+    # pushing it — the window the tear needed. Under the domain that park
+    # happens inside the task, so the racer waits at the domain door instead
+    # of overtaking.
+    class HoldingBroadcaster < PikuriWeb::Broadcaster
+      attr_accessor :hold
+
+      def broadcast(event:, data:, conversation: nil)
+        @hold&.call(data)
+        super
+      end
+    end
+
+    let(:broadcaster) { HoldingBroadcaster.new }
+
+    it 'an older status frame can no longer land after a newer one' do
+      blocker = Concurrent::SingleThreadExecutor.new
+      gate = Thread::Queue.new
+      blocker.post { gate.pop } # keep the submitted turn :queued throughout
+      queued = guard(described_class.new(
+                       conversation: conversation, agent: agent, interloper: interloper,
+                       cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+                       listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
+                       monitor: monitor
+                     ), monitor)
+      subscription = broadcaster.subscribe(conversation.id)
+
+      held = Thread::Queue.new
+      released = Thread::Queue.new
+      broadcaster.hold = lambda do |data|
+        next unless data.key?(:state)
+
+        broadcaster.hold = nil
+        held.push(data[:state])
+        released.pop
+      end
+
+      stale = Thread.new { queued.select_model('remote') } # composes :idle, parks pre-push
+      assert_equal :idle, held.pop
+      racer = Thread.new { queued.submit('hello') } # would overtake; now waits at the door
+      sleep 0.02
+      released.push(:go)
+      stale.join
+      racer.join
+
+      states = drain_frames(subscription).filter_map { |f| f[/"state":"(\w+)"/, 1] }
+      assert_equal %w[idle queued], states, 'composed order is push order'
+      assert_equal :queued, queued.state, 'and the last frame shown is the truth'
+
+      queued.cancel
+      gate.push(:go)
+      wait_until { queued.state == :idle }
     end
   end
 
@@ -446,13 +510,13 @@ RSpec.describe PikuriWeb::AgentRunner do
 
   context 'a saved connection that has left the config file' do
     let(:orphaned) do
-      described_class.new(
-        conversation: conversation, agent: agent, interloper: interloper,
-        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
-        listener: listener, transcript: transcript, catalog: catalog,
-        executor: Concurrent::ImmediateExecutor.new,
-        missing_connection: 'qwen2 @ http://retired:8080/v1'
-      )
+      guard(described_class.new(
+              conversation: conversation, agent: agent, interloper: interloper,
+              cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+              listener: listener, transcript: transcript, catalog: catalog,
+              executor: Concurrent::ImmediateExecutor.new, monitor: monitor,
+              missing_connection: 'qwen2 @ http://retired:8080/v1'
+            ), monitor)
     end
 
     it 'carries the note until something makes it untrue' do
@@ -497,11 +561,12 @@ RSpec.describe PikuriWeb::AgentRunner do
       blocker = Concurrent::SingleThreadExecutor.new
       gate = Thread::Queue.new
       blocker.post { gate.pop }
-      queued = described_class.new(
-        conversation: conversation, agent: agent, interloper: interloper,
-        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
-        listener: listener, transcript: transcript, catalog: catalog, executor: blocker
-      )
+      queued = guard(described_class.new(
+                       conversation: conversation, agent: agent, interloper: interloper,
+                       cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+                       listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
+                       monitor: monitor
+                     ), monitor)
 
       queued.submit('hello')
       assert_equal :queued, queued.state
@@ -568,11 +633,12 @@ RSpec.describe PikuriWeb::AgentRunner do
       blocker = Concurrent::SingleThreadExecutor.new
       gate = Thread::Queue.new
       blocker.post { gate.pop }
-      queued = described_class.new(
-        conversation: conversation, agent: agent, interloper: interloper,
-        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
-        listener: listener, transcript: transcript, catalog: catalog, executor: blocker
-      )
+      queued = guard(described_class.new(
+                       conversation: conversation, agent: agent, interloper: interloper,
+                       cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
+                       listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
+                       monitor: monitor
+                     ), monitor)
 
       queued.submit('hello')
       assert_equal :queued, queued.state

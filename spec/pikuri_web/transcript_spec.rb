@@ -1,7 +1,14 @@
 # frozen_string_literal: true
 
 RSpec.describe PikuriWeb::Transcript do
-  let(:transcript) { described_class.new }
+  let(:monitor) { PikuriWeb::AppMonitor.new }
+  let(:transcript) { guard(described_class.new(monitor: monitor), monitor) }
+
+  it 'raises on any call outside a task' do
+    bare = described_class.new(monitor: monitor)
+    assert_raises(PikuriWeb::AppMonitor::OutsideTask) { bare.add(kind: :user, html: 'hi') }
+    assert_raises(PikuriWeb::AppMonitor::OutsideTask) { bare.to_a }
+  end
 
   context '#add' do
     it 'assigns sequential ids' do

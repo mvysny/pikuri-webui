@@ -82,24 +82,19 @@ module PikuriWeb
   #
   # == Threading
   #
-  # Thread-safe: +@mutex+ guards the state machine. Three kinds of thread
-  # enter — Sinatra request threads (the public surface), the turn job on the
-  # shared executor ({#run_turn}'s brackets), and the Interloper's +on_change+
-  # callback, which runs synchronously on whichever of those caused the
-  # change. Two ordering rules keep that sound, and both must survive any edit:
+  # Guarded by {AppMonitor}: every public method must run inside a task. Who
+  # enters — route tasks ({App}), the turn job's bookkeeping brackets
+  # (+run_turn+ opens its own tasks around +run_loop+, which itself runs
+  # off-domain), and the Interloper's +on_change+ callback, which opens a task
+  # from whichever thread caused the change. Composing a status payload and
+  # publishing it happen inside one task, so a frame can never overtake a
+  # newer one.
   #
-  # - +@mutex+ is the *outermost* lock: it may be held while calling into
-  #   pikuri (+Interloper#pending?+, +Cancellable#cancel!+), and pikuri never
-  #   holds its own lock when calling back — +on_change+ fires outside the
-  #   Interloper's. Consistent order, so no ABBA deadlock.
-  # - {#broadcast_status} re-takes the non-reentrant +@mutex+ (via
-  #   +announce_busy_change+), so it is only ever called with the mutex
-  #   released.
-  #
-  # Unlocked reads ({#state}, {#busy?}, parts of {#status_data}) are single
-  # ivar reads, atomic under the GVL; a *combination* of them can still
-  # straddle a transition — known and accepted (a status frame is advisory,
-  # the next one corrects it).
+  # One ordering rule must survive any edit: the domain is the *outermost*
+  # lock. A task may call into pikuri (+Interloper#pending?+,
+  # +Cancellable#cancel!+), and pikuri never holds its own lock when calling
+  # back — +on_change+ fires outside the Interloper's. Consistent order, so
+  # no ABBA deadlock.
   class AgentRunner
     # @param conversation [ConversationStore::Conversation] the one this runner
     #   is for, fixed for its lifetime
@@ -130,9 +125,10 @@ module PikuriWeb
     #   conversation was minted on {ModelCatalog#primary} because the
     #   connection it had saved has left the config file. Reported until a
     #   save or a pick makes it untrue, after which it describes nothing
+    # @param monitor [AppMonitor] the domain every call must be inside
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
                    conversations:, transcript:, listener:, executor:, catalog:,
-                   token_log: nil, missing_connection: nil)
+                   monitor:, token_log: nil, missing_connection: nil)
       @conversation = conversation
       @agent = agent
       @interloper = interloper
@@ -145,7 +141,7 @@ module PikuriWeb
       @catalog = catalog
       @token_log = token_log
       @missing_connection = missing_connection
-      @mutex = Mutex.new
+      @monitor = monitor
       @state = :idle
       @abandon = false
       @discarded = false
@@ -155,8 +151,10 @@ module PikuriWeb
       # Claims the interloper's single on_change slot. Without it the
       # queued-count badge only moves when a request happens to hit {#submit}
       # or a turn ends — the agent's own mid-loop drain would leave the browser
-      # showing a stale "2 queued" for the rest of the turn.
-      @interloper.on_change = ->(_count) { broadcast_status }
+      # showing a stale "2 queued" for the rest of the turn. Opens a task
+      # because the drain fires it on the worker, mid-+run_loop+, off-domain;
+      # fired from inside {#submit}'s own task it just re-enters.
+      @interloper.on_change = ->(_count) { @monitor.run { broadcast_status } }
     end
 
     # @return [ConversationStore::Conversation]
@@ -173,6 +171,7 @@ module PikuriWeb
     #
     # @return [Boolean] whether a stored history was found and loaded
     def restore!
+      @monitor.assert!
       history = stored_history
       return false if history.nil?
 
@@ -192,32 +191,22 @@ module PikuriWeb
     #   calling; Interloper/run_loop double-check)
     # @return [:started, :injected, :discarded]
     def submit(message)
-      claim = @mutex.synchronize do
-        if @discarded then :discarded
-        elsif busy? then :inject
-        else
-          @abandon = false
-          @state = :queued
-          :start
-        end
-      end
-      return :discarded if claim == :discarded
+      @monitor.assert!
+      return :discarded if @discarded
 
-      # Both of these run outside the mutex, for the same reason from two
-      # directions: they re-enter. An ImmediateExecutor runs the job on this
-      # thread, and run_turn's ensure re-takes this non-reentrant mutex;
-      # inject_user_message fires the Interloper's on_change synchronously,
-      # which broadcasts status and reads back through here. Claiming the
-      # state above is what makes the gap safe — and an injection landing in
-      # it after the turn ended is delivered by the restart {#finish_turn}
-      # claims, not stranded.
-      if claim == :start
-        @executor.post { run_turn(message) }
-      else
+      if busy?
+        # An injection landing after the turn ended is delivered by the
+        # restart {#finish_turn} claims, not stranded.
         @interloper.inject_user_message(message)
+        broadcast_status
+        :injected
+      else
+        @abandon = false
+        @state = :queued
+        @executor.post { run_turn(message) }
+        broadcast_status
+        :started
       end
-      broadcast_status
-      claim == :start ? :started : :injected
     end
 
     # Put this conversation on another connection, from the top of its next
@@ -234,19 +223,16 @@ module PikuriWeb
     # @return [:selected, :unknown, :discarded] +:unknown+ for a name this
     #   config does not have; +:discarded+ once the conversation is deleted
     def select_model(name)
+      @monitor.assert!
       choice = @catalog.find(name)
       return :unknown if choice.nil?
+      return :discarded if @discarded
 
-      outcome = @mutex.synchronize do
-        next :discarded if @discarded
-
-        @pending = choice.transport == @agent.transport ? nil : choice.transport
-        # Choosing supersedes being told what was lost.
-        @missing_connection = nil
-        :selected
-      end
-      broadcast_status if outcome == :selected
-      outcome
+      @pending = choice.transport == @agent.transport ? nil : choice.transport
+      # Choosing supersedes being told what was lost.
+      @missing_connection = nil
+      broadcast_status
+      :selected
     end
 
     # The connection this conversation will talk to *next* — the pick if one
@@ -261,6 +247,7 @@ module PikuriWeb
     # @return [Array(String, String)] the +[model, server]+ pair, in the form
     #   {ConversationStore} stores and {ModelCatalog#resolve} matches
     def model
+      @monitor.assert!
       transport = @pending || @agent.transport
       [transport.model, transport.api_base]
     end
@@ -271,11 +258,11 @@ module PikuriWeb
     #
     #   return :busy if runner && !runner.discard!   # then remove the folder
     #
-    # Deliberately a *claim*, not a {#busy?} read followed by a flag: the
-    # busy check and the retirement are one step under this runner's mutex, so
-    # either {#submit} claims the turn first and this refuses, or this wins
-    # and {#submit} answers +:discarded+. No interleaving lets both proceed —
-    # which is why {#persist} carries no check of its own.
+    # Deliberately a *claim*, not a {#busy?} read followed by a caller-side
+    # flag: the busy check and the retirement are one method, so they share a
+    # task — either {#submit} claims the turn first and this refuses, or this
+    # wins and {#submit} answers +:discarded+. No interleaving lets both
+    # proceed — which is why {#persist} carries no check of its own.
     #
     # Not +@abandon+, which drops one *queued turn* and is reset by the next
     # {#submit}. This is about the conversation, and permanent.
@@ -283,16 +270,18 @@ module PikuriWeb
     # @return [Boolean] false when a turn is queued or running, and the caller
     #   must refuse the delete; true once nothing will ever run here again
     def discard!
-      @mutex.synchronize do
-        return false if busy?
+      @monitor.assert!
+      return false if busy?
 
-        @discarded = true
-      end
+      @discarded = true
       true
     end
 
     # @return [Boolean] whether a delete has retired this runner
-    def discarded? = @discarded
+    def discarded?
+      @monitor.assert!
+      @discarded
+    end
 
     # Stop this conversation's turn: drop it before it starts if it is still
     # waiting for the executor, or ask the agent to stop at the next tool
@@ -300,24 +289,23 @@ module PikuriWeb
     #
     # @return [void]
     def cancel
-      @mutex.synchronize do
-        @abandon = true if @state == :queued
-        @cancellable.cancel! if @state == :running
-      end
+      @monitor.assert!
+      @abandon = true if @state == :queued
+      @cancellable.cancel! if @state == :running
       broadcast_status
       nil
     end
 
-    # Deliberately unlocked, like {#busy?}: a single ivar read is atomic under
-    # the GVL, and locking here would deadlock the status broadcast that the
-    # Interloper's on_change fires from inside pikuri's own enqueue.
-    #
     # @return [:idle, :queued, :running] +:queued+ means the job is posted but
     #   the executor's slots are all taken by other conversations
-    def state = @state
+    def state
+      @monitor.assert!
+      @state
+    end
 
     # @return [Boolean] whether a turn is posted and not yet finished
     def busy?
+      @monitor.assert!
       @state != :idle
     end
 
@@ -334,8 +322,9 @@ module PikuriWeb
     #   +model_pending+ and +model_missing+ are nil in the ordinary case (see
     #   {#select_model} and the +missing_connection:+ constructor argument)
     def status_data
+      @monitor.assert!
       {
-        state: state,
+        state: @state,
         busy: busy?,
         pending: @interloper.size,
         tokens: token_headline,
@@ -354,16 +343,11 @@ module PikuriWeb
     #   +GET /c/:id+ renders into the page — {App} never touches the report
     def trifecta_html = TrifectaView.render(@agent.trifecta)
 
-    # Only sound while no turn is in flight: it reads the agent off its turn
-    # thread, and pikuri's chat is single-thread-confined.
-    #
-    # @return [Boolean] whether this conversation holds no messages, so nothing
-    #   would be saved and its folder need not survive
-    def empty? = @agent.export_history.messages.empty?
-
     private
 
-    # The executor job's body: one turn, then the save.
+    # The executor job's body: one turn, then the save. The bookkeeping
+    # brackets are tasks; +run_loop+ itself — the LLM round-trips, the tools —
+    # runs off-domain.
     #
     # A StandardError out of +run_loop+ (transport hiccup, tool bug) is logged
     # rather than re-raised — an executor swallows a job's exception into a
@@ -377,17 +361,17 @@ module PikuriWeb
       # Named for Puma's backtrace-signal dump (`D_puma_thread_dump`): a turn
       # wedged in run_loop then says which conversation it is.
       Thread.current.name = "turn #{@conversation.id}"
-      return if claim_running == :abandoned
+      return if @monitor.run { claim_running } == :abandoned
 
       # Both ways into a turn come through here — a submit and the restart
       # {#finish_turn} claims — so one drain covers both; a second entry point
       # into +run_loop+ would silently run the old model.
-      @agent.run_loop(user_message: message, transport: take_pending)
+      @agent.run_loop(user_message: message, transport: @monitor.run { take_pending })
       completed = true
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      finish_turn(restart: completed)
+      @monitor.run { finish_turn(restart: completed) }
       Thread.current.name = 'turn-idle'
     end
 
@@ -405,20 +389,12 @@ module PikuriWeb
     # queue emptying is likewise +run_loop+'s job — a restart against an agent
     # that does not drain would post turns forever.
     #
-    # Reading the Interloper under this mutex is safe because its +on_change+ —
-    # which broadcasts status and re-enters here — fires outside its own lock.
-    #
     # @param restart [Boolean, nil] whether the turn ran to completion
     # @return [void]
     def finish_turn(restart:)
-      resume = @mutex.synchronize do
-        persist
-        @state = :idle
-        next false unless restart && @interloper.pending?
-
-        @state = :queued
-        true
-      end
+      persist
+      resume = restart && @interloper.pending?
+      @state = resume ? :queued : :idle
       broadcast_status
       @executor.post { run_turn(nil) } if resume
       nil
@@ -434,18 +410,14 @@ module PikuriWeb
     #
     # @return [:running, :abandoned]
     def claim_running
-      abandoned = @mutex.synchronize do
-        @state = :running unless @abandon
-        @abandon
-      end
-      @mutex.synchronize { @state = :idle } if abandoned
+      @state = @abandon ? :idle : :running
       broadcast_status
-      abandoned ? :abandoned : :running
+      @abandon ? :abandoned : :running
     end
 
     # @return [Pikuri::Agent::ChatTransport, nil] the parked selection, taken;
     #   nil — +run_loop+'s "keep the current model" — when there is none
-    def take_pending = @mutex.synchronize { @pending.tap { @pending = nil } }
+    def take_pending = @pending.tap { @pending = nil }
 
     # @return [Pikuri::Agent::History, nil] nil when this conversation has
     #   nothing stored, or when what is stored cannot be read — a file someone
@@ -501,11 +473,9 @@ module PikuriWeb
     #
     # @return [void]
     def announce_busy_change
-      changed = @mutex.synchronize do
-        was = @announced_busy
-        @announced_busy = busy?
-        was != @announced_busy
-      end
+      now_busy = @state != :idle
+      changed = @announced_busy != now_busy
+      @announced_busy = now_busy
       @broadcaster.broadcast(event: :conversations, data: {}) if changed
       nil
     end
