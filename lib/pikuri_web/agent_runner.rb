@@ -85,16 +85,17 @@ module PikuriWeb
   # Guarded by {BigAppLock}: every public method must run inside a task. Who
   # enters — route tasks ({App}), the turn job's bookkeeping brackets
   # (+run_turn+ opens its own tasks around +run_loop+, which itself runs
-  # off-domain), and the Interloper's +on_change+ callback, which opens a task
-  # from whichever thread caused the change. Composing a status payload and
+  # off-domain), and pikuri's two callbacks — the Interloper's +on_change+ and
+  # TokenLog's +on_status_line+ — which open a task from whichever thread fired
+  # them, the loop thread included. Composing a status payload and
   # publishing it happen inside one task, so a frame can never overtake a
   # newer one.
   #
   # One ordering rule must survive any edit: the domain is the *outermost*
   # lock. A task may call into pikuri (+Interloper#pending?+,
   # +Cancellable#cancel!+), and pikuri never holds its own lock when calling
-  # back — +on_change+ fires outside the Interloper's. Consistent order, so
-  # no ABBA deadlock.
+  # back — +on_change+ fires outside the Interloper's, and TokenLog holds no
+  # lock at all. Consistent order, so no ABBA deadlock.
   class AgentRunner
     # @param conversation [ConversationStore::Conversation] the one this runner
     #   is for, fixed for its lifetime
@@ -117,8 +118,10 @@ module PikuriWeb
     #   nothing else — this runner is single-writer over its own conversation
     #   at any size, because {#submit} injects rather than starting a second
     #   turn
-    # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when present,
-    #   its +status_line+ rides along in every status event
+    # @param token_log [Pikuri::Agent::Listener::TokenLog, nil] when present, its
+    #   +status_line+ rides along in every status event and a freshly measured
+    #   one pushes an event of its own — the constructor claims the log's
+    #   +on_status_line+ slot
     # @param catalog [ModelCatalog] the connections {#select_model} may pick
     #   from, and what turns the agent's transport into a display name
     # @param missing_connection [String, nil] +"model @ server"+ when this
@@ -155,6 +158,12 @@ module PikuriWeb
       # because the drain fires it on the worker, mid-+run_loop+, off-domain;
       # fired from inside {#submit}'s own task it just re-enters.
       @interloper.on_change = ->(_count) { @lock.run { broadcast_status } }
+
+      # The same claim on TokenLog's +on_status_line+ slot, task and all: the
+      # readout is composed when a frame goes out, and between a turn's start and
+      # its end nothing sends one — so a multi-step loop's numbers would
+      # otherwise all land at the end, at once.
+      @token_log&.on_status_line = ->(_id, _line) { @lock.run { broadcast_status } }
     end
 
     # @return [ConversationStore::Conversation]

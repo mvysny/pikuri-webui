@@ -420,6 +420,23 @@ RSpec.describe PikuriWeb::AgentRunner do
       assert_equal 'ctx 1.6k/64k (2%)', runner.status_data[:tokens]
       assert_equal 'restored', runner.status_data[:tokens_detail]
     end
+
+    # The push, not the poll: nothing else broadcasts between a turn's start and
+    # its end, so without the on_status_line claim the whole loop's numbers would
+    # land at once, at the end.
+    it 'broadcasts a status frame when a turn is measured mid-loop' do
+      queue = broadcaster.subscribe(conversation.id)
+      runner.submit('hello')
+      wait_until { runner.state == :running }
+      drain_frames(queue)
+
+      meter(cap: 32_768) # as the loop thread would, one round-trip in
+
+      frames = drain_frames(queue)
+      assert_equal %w[status], frames.map { |f| f[/event: (\w+)/, 1] }
+      assert_includes frames.fetch(0), 'ctx 8.2k/32k (26%)'
+      assert_includes frames.fetch(0), '"state":"running"', 'measured mid-turn, not at the end'
+    end
   end
 
   context '#select_model' do
