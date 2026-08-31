@@ -77,8 +77,10 @@ the alternatives that were rejected, live one entry per slug in
   EventSource are two requests, and a block finalized between them must
   not fall down the gap. Subscribing first makes the overlap a duplicate
   instead of a miss, and duplicates are free because blocks upsert by id
-  and {Transcript#clear} never reuses one. Don't reorder those two lines,
-  and don't reach for a lock. See `D_subscribe_then_snapshot`.
+  and {Transcript#clear} never reuses one. The pair now also shares one
+  {AppMonitor} task, but the duplicate tolerance is what covers the
+  page-render-to-connect gap, which no server mechanism reaches — keep
+  it. See `D_subscribe_then_snapshot`.
 
 - **A saved conversation is `history.json` plus our `meta.json`, and
   nothing else.** Blocks are re-derived by replaying synthesized events
@@ -87,20 +89,24 @@ the alternatives that were rejected, live one entry per slug in
   See `D_replay_from_history`.
 
 - **The threading rule.** The agent loop runs as a job on the shared
-  executor — never on a Sinatra request thread. Thread-safety lives in
-  the sinks ({Transcript}, {Broadcaster}) and in {ConversationRegistry};
-  no UI thread, no marshaling.
-  See `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
+  executor — never on a Sinatra request thread — and everything shared
+  is touched only inside {AppMonitor} tasks: route bodies, the turn
+  job's bookkeeping brackets, {SseListener}'s store-and-broadcast per
+  block. Tasks are rapid-fire (no network, no waiting on another thread,
+  no post-and-wait; disk only where rare and deployment-bounded), the
+  domain is the outermost lock against pikuri's, and guarded classes
+  enforce with `assert!`. Rendering, `run_loop` and the SSE drain loops
+  stay off-domain. See `D_global_monitor`,
+  `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
-- **No session concept, and anything genuinely shared gets *one global*
-  mechanism** — a queue or a lock, **never a Vaadin-style per-session
-  one**. Server state is partitioned per conversation and single-writer;
-  each browser owns its own view state. {Broadcaster} stays outside
-  either, as a sink. **The "no owner thread" half is reopened**: the
-  partition buys isolation but not atomicity across a seam — two objects
-  mutated or read as one unit — and a mechanism for that is being chosen.
-  Until it is, a new seam is a thing to raise, not to add quietly.
-  See `D_no_event_queue`.
+- **No session concept; the one global mechanism is {AppMonitor}** —
+  never a Vaadin-style per-session one. Server state is partitioned per
+  conversation and single-writer; each browser owns its own view state;
+  atomicity across a seam — two objects mutated or read as one unit —
+  comes from the domain's run-to-completion tasks. New shared state
+  joins the domain (guarded + `assert!`), or states the reason for its
+  own lock the way {Broadcaster} does.
+  See `D_global_monitor`, `D_no_event_queue`.
 
 - **Nothing in the exit path may rely on `at_exit` or on Sinatra's INT
   trap** — both run on the far side of Puma's unbounded graceful wait.
@@ -242,8 +248,11 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `GET /events?conversation=` (SSE, per conversation), `POST /messages`,
   `POST /cancel`, `POST /model`, `GET`/`POST /conversations`,
   `POST /conversations/:id/delete`. Every route names the conversation it
-  acts on. Registry, broadcaster and the connection rows injected via
-  class-level settings.
+  acts on, and every route body is one task. Monitor, registry,
+  broadcaster and the connection rows injected via class-level settings.
+- `lib/pikuri_web/app_monitor.rb` — `PikuriWeb::AppMonitor`, the
+  serialization domain: run-to-completion tasks over one re-entrant
+  monitor, `assert!` enforcement.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
@@ -320,8 +329,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `bin/pikuri-web-chat` — boot script: config load, the model catalog, the
   conversation factory (agent + tools + Interloper + the connection this
   conversation is minted on, one wiring for every conversation), the
-  shared turn executor, the trifecta report, Puma start (server settings and
-  the shutdown hook). Flags are only what the config file has no home for
+  shared turn executor, the serialization domain, the trifecta report,
+  Puma start (server settings and the shutdown hook). Flags are only what
+  the config file has no home for
   — `--port` / `--bind` / `--turns` / `--dev`.
 - `bin/regen-icons` — re-renders every plated icon from `kuri.svg`; holds
   the sizes, the plate colour and the maskable bound. Maintainer tool, run
@@ -339,6 +349,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   degrade to escaped text, `run_loop` failures log and return the UI
   to idle; but contract violations (double finalize, bad flush mode)
   raise.
+- rack-test arrives as host `example.org`; without `set :environment,
+  :test` Sinatra 403s it, and a spec asserting *absence* passes vacuously
+  against "Host not permitted" — confirm a new probe's no-fix failure by
+  stashing the fix.
 - Every thread we spawn names itself (`Thread.current.name`), and a
   per-job borrow like the turn executor's names the thread for the job's
   duration — Puma's `SIGPWR` dump is the debugger of last resort and

@@ -53,13 +53,15 @@ RSpec.describe 'seam audit' do
     )
   end
   let(:agents) { [] }
+  let(:monitor) { PikuriWeb::AppMonitor.new }
   let(:factory) do
     lambda do |conversation|
       interloper = Pikuri::Agent::Control::Interloper.new
       cancellable = Pikuri::Agent::Control::Cancellable.new
-      transcript = PikuriWeb::Transcript.new
+      transcript = PikuriWeb::Transcript.new(monitor: monitor)
       listener = PikuriWeb::SseListener.new(
-        transcript: transcript, broadcaster: broadcaster, conversation: conversation.id
+        transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
+        monitor: monitor
       )
       agent = Pikuri::Agent.new(
         transport: Pikuri::Testing.fake_transport { |llm| llm.reply('hi') },
@@ -71,19 +73,22 @@ RSpec.describe 'seam audit' do
         conversation: conversation, agent: agent, interloper: interloper,
         cancellable: cancellable, broadcaster: broadcaster, conversations: store,
         transcript: transcript, listener: listener, catalog: catalog,
-        executor: @executor_override || executor
+        executor: @executor_override || executor, monitor: monitor
       )
     end
   end
   let(:listeners) { {} }
   let(:executor) { Concurrent::ImmediateExecutor.new }
-  let(:registry) { PikuriWeb::ConversationRegistry.new(store: store, factory: factory) }
+  let(:registry) do
+    guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor), monitor)
+  end
 
   let(:app) do
     # rack-test arrives as host "example.org"; without this Sinatra's host
     # authorization 403s every request — and a probe asserting absence passes
     # vacuously against a rejection.
     PikuriWeb::App.set :environment, :test
+    PikuriWeb::App.set :app_monitor, monitor
     PikuriWeb::App.set :registry, registry
     PikuriWeb::App.set :broadcaster, broadcaster
     PikuriWeb::App.set :models, []
@@ -110,7 +115,7 @@ RSpec.describe 'seam audit' do
   # neither: too late for the snapshot, too early for the subscription.
   it 'PROBE 1: recovers a block finalized between the page render and the subscription' do
     conversation = store.create
-    runner = registry.open(conversation)
+    runner = guard(registry.open(conversation), monitor)
     listener = listeners.fetch(conversation.id)
 
     get "/c/#{conversation.id}"
@@ -120,7 +125,8 @@ RSpec.describe 'seam audit' do
     listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'calculator', arguments: { expression: '2 + 2' }))
 
     refute_includes page, 'calculator', 'the page snapshot predates the block'
-    assert(runner.transcript.to_a.any? { |b| b.html.include?('calculator') }, 'the server has it')
+    assert(monitor.run { runner.transcript.to_a }.any? { |b| b.html.include?('calculator') },
+           'the server has it')
 
     broadcaster.sentinel_on_subscribe = true
     get "/events?conversation=#{conversation.id}" # the EventSource finally connects
@@ -181,54 +187,15 @@ RSpec.describe 'seam audit' do
 
     conversation = store.create
     runner = nil
-    with_executor(blocker) { runner = registry.open(conversation) }
+    with_executor(blocker) { runner = guard(registry.open(conversation), monitor) }
     subscription = broadcaster.subscribe(conversation.id)
 
     assert_equal :started, runner.submit('where did my message go?')
     assert_equal :queued, runner.state
 
-    assert_empty runner.transcript.to_a, 'nothing rendered'
+    assert_empty monitor.run { runner.transcript.to_a }, 'nothing rendered'
     types = drain_frames(subscription).map { |f| f[/event: (\w+)/, 1] }
     refute_includes types, 'block', 'and no block frame either — the box is empty and so is the page'
-
-    gate.push(:go)
-    wait_for { !runner.busy? }
-  end
-
-  # PROBE 6 — the known compose-then-publish seam, forced. Two threads compose
-  # a status payload and push it; nothing ties the order they composed in to
-  # the order they push in, so the browser can be left holding the older state.
-  it 'PROBE 6: an older status frame can land after a newer one' do
-    blocker = Concurrent::SingleThreadExecutor.new
-    gate = Thread::Queue.new
-    blocker.post { gate.pop }
-
-    conversation = store.create
-    runner = nil
-    with_executor(blocker) { runner = registry.open(conversation) }
-    subscription = broadcaster.subscribe(conversation.id)
-
-    # Hold the first status broadcast between composing its payload and pushing.
-    held = Thread::Queue.new
-    released = Thread::Queue.new
-    broadcaster.before_push = lambda do |data|
-      next unless data.key?(:state)
-
-      broadcaster.before_push = nil
-      held.push(data[:state])
-      released.pop
-    end
-
-    stale = Thread.new { runner.select_model('fake') } # composes :idle, then blocks
-    assert_equal :idle, held.pop
-
-    runner.submit('hello') # composes and pushes :queued, overtaking it
-    released.push(:go)
-    stale.join
-
-    states = drain_frames(subscription).filter_map { |f| f[/"state":"(\w+)"/, 1] }
-    assert_equal %w[queued idle], states, 'the browser is left showing idle over a queued turn'
-    assert_equal :queued, runner.state, 'while the server knows better'
 
     gate.push(:go)
     wait_for { !runner.busy? }

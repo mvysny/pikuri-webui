@@ -826,10 +826,12 @@ default than a warning in the README.
 
 ## D_no_event_queue — No owner thread: state is partitioned per conversation, browser state stays in the browser, and anything genuinely shared gets *one global* mechanism
 
-**Status:** **Reopened.** What follows was accepted, and its audit still
-holds — but it answered "do we need an owner thread?" when the question
-was "what provides atomicity?". See *Reopened* at the foot of the entry;
-the mechanism chosen lands as its own entry.
+**Status:** Superseded in part (2026-08-31) by `D_global_monitor`, which
+answers the *Reopened* question at the foot of this entry: one global
+re-entrant monitor, work as run-to-completion tasks. The accepted core
+below stands — the partition, browser-owned view state, the Broadcaster
+as an independent sink — but the per-object locks this entry kept have
+since been folded into that domain.
 
 **Context.** The standing plan was to give all mutable state a single
 owner thread, Tuile-style: every other thread posts a command, no locks,
@@ -2107,3 +2109,139 @@ on-demand is the tool.
   browser-vs-terminal, and both streams reach the terminal.
 - README's "When it looks stuck" documents the signal; it is the
   operator-facing half of this entry.
+
+## D_global_monitor — One serialization domain: a global re-entrant monitor, work as run-to-completion tasks
+
+**Status:** Accepted, shipped (2026-08-31). Answers the *Reopened* tail of
+`D_no_event_queue`; that entry's accepted core — the partition,
+browser-owned view state, the Broadcaster as an independent sink — stands.
+
+**Context.** The reopening named the hole: the partition supplies
+isolation (one writer per conversation) but not **atomicity across a
+seam** — two objects mutated or read as one unit — so the seams held by
+timing, and this architecture cannot *report* a seam that fails (a race
+consumes its evidence). The atomicity audit closed what it could; seam 2
+(compose a status payload + publish it) stayed open, and every future
+seam was a thing to find by reading. The owner called it: one mechanism
+internal logic can rely on, instead of an audit per seam.
+
+**Decision.** {AppMonitor}: one process-wide re-entrant `Monitor`; work
+enters as **tasks** (`monitor.run { }`) that run to completion, so the
+system is only ever observed *between* tasks, never inside one. The
+reachable state space shrinks from arbitrary interleavings of statements
+to orderings of tasks. It does **not** buy determinism — whether a submit
+lands before or after a turn ends is genuine external concurrency, and
+both orders must stay correct — and it does not replace the executor:
+`D_serial_turn_executor`'s pool stays the admission gate, two
+conversations still stream concurrently, interleaving at task granularity.
+
+The task inventory:
+
+- **Every route body that touches server state is one task** ({App}): the
+  page snapshot is an untorn read (blocks + status + rows from one
+  instant), resolve + act is one step, and `/events`' subscribe +
+  catch-up share a task.
+- **The turn job's bookkeeping brackets are tasks** (claim, take-pending,
+  finish including the save); `run_loop` itself — LLM round-trips, tool
+  execution — runs off-domain.
+- **{SseListener} renders off-domain** (kramdown, escaping, the
+  {StreamingMessage} accumulation — the domain owns *mutation*, not
+  rendering) **and enters a task per finished block**: store + broadcast
+  as one unit, ~15 tiny tasks/s per streaming conversation.
+- **The Interloper's `on_change` opens a task** from whichever thread
+  caused the change; fired from inside a task it just re-enters.
+
+Guarded classes — {AgentRunner}, {ConversationRegistry}, {Transcript} —
+lost their own locks and gained a *caller obligation*: every public
+method opens with {AppMonitor#assert!}, so a call from outside a task
+raises instead of racing. `OutsideTask` is an `Exception`, not a
+`StandardError`, so blanket recovery (`rescue StandardError` around the
+turn job and the registry's delete) cannot mask a guarding bug as an
+operational failure. That assertion is the enforcement Node gets from its
+language and Ruby otherwise lacks; specs drive guarded classes through a
+`guard` proxy — the spec-side stand-in for the App's route wrapping.
+
+Outside the domain, deliberately: {Broadcaster} (its own small mutex —
+`#close` fires from the stop hook, which must never wait on a wedged
+domain, so nothing in that hook enters the monitor); the `/events` drain
+loops (parked request threads doing the network); all rendering; the
+immutable and stateless classes; pikuri's internals.
+
+The rules a change must keep:
+
+- **Tasks are rapid-fire; a stall is eligible only when rare and
+  bounded.** Never network, never a wait on another thread, never
+  anything unbounded. *Rare* means once-per-conversation-per-process
+  class; *bounded* means a ceiling the deployment guarantees, never
+  "usually small". The two sanctioned stalls: the turn-end save (two
+  small files, temp-and-rename) and the restore replay — measured at
+  ~1.6 ms per markdown-heavy turn (≈100 ms at 50 turns; about half a
+  second for a 256k-token history, the practical cap of sensible local
+  LLMs, on the hardware local llama already mandates). If the replay ever
+  bites, the named fallback: replay off-domain into a *detached*
+  transcript on the opener's own request thread, a promise in the
+  registry map installed by one task and fulfilled by another; a second
+  opener waits on the promise on its own thread, outside the domain.
+- **No post-and-wait.** A task never blocks on a Future or a worker's
+  result; results return as the worker's own follow-up task —
+  `monitor.run` from its thread, no API needed. The code already lives in
+  this continuation style (`claim_running` / `finish_turn` are the
+  worker's re-entry brackets).
+- **The domain is the outermost lock.** A task may call into pikuri
+  (`Interloper#pending?`, `Cancellable#cancel!`); pikuri never holds its
+  own lock when calling back (`on_change` fires outside the Interloper's).
+  Consistent order, no ABBA — re-enumerate when a new pikuri callback
+  appears.
+
+**Rejected: costume B, the event loop** (the Active Object pattern — a
+`Concurrent::SingleThreadExecutor` owner thread draining a mailbox;
+precedents Swing's EDT, Node, Tuile). Same atomicity, same enforcement
+(thread identity instead of `mon_owned?`), same dumpability — but every
+reading route needs `ask` + timeout + a 503 arm where a monitor task
+composes the response inline; a task that posts-and-waits on a task
+self-deadlocks, so the `on_change` knot (fires synchronously from inside
+submit's inject and re-enters the status broadcast) needs restructuring
+where a re-entrant monitor dissolves it, and `ImmediateExecutor` specs
+deadlock. Its one real advantage — FIFO across threads — solves a problem
+we don't have: per-source order comes from each source being one thread,
+and cross-source order is the genuine concurrency neither costume
+removes. On deadlock the costumes differ in *shape*, not exposure: B
+trades ABBA for self-deadlock; A's ABBA exposure collapses to the one
+outermost-lock rule above, against exactly one foreign lock family.
+
+**Rejected: per-seam atomic helpers** — and the audit's own finding cut
+that way, which this entry must answer: its five seams wanted four
+different tools (ordering, broadcast-at-the-transition, a monitor the
+registry already had, an immutable snapshot), none of them global, and
+two fixes needed no lock at all. The answer: per-seam fixes are
+patch-after-reading — each seam must first be *found*, and this
+architecture hides exactly the defects that argue against it, so the
+per-seam discipline amounts to "hope the next audit reads the right
+function". One run-to-completion domain is something internal logic can
+rely on without an audit per seam. Two audit fixes survive regardless:
+`D_subscribe_then_snapshot`'s duplicate tolerance (the page render and
+the EventSource are still two HTTP requests, which no server mechanism
+reaches, though the server-side half now also sits in one task), and
+`Transcript::Block` staying a `Data`.
+
+**Consequences.**
+
+- Seam 2 closed structurally: composing a status frame and pushing it
+  share a task, so composed order *is* push order. The audit's PROBE 6
+  flipped into `agent_runner_spec` as the acceptance test that the tear
+  can no longer be produced; the monotonic-sequence-number fallback died
+  unimplemented.
+- Blast radius, priced: a stall inside a task pauses every conversation
+  and every request, not one. Compensations: the rapid-fire rule, and
+  `D_puma_thread_dump` — the SIGPWR dump shows the stalled task *with its
+  caller's stack*.
+- Request threads wait on the monitor with no timeout (Ruby's `Monitor`
+  has no timed `enter`). Accepted: Puma's pool absorbs, the dump
+  diagnoses; a bounded wait is the thing to add if this ever hurts.
+- The stop hook's independence is an invariant: `broadcaster.close` +
+  `turn_executor.shutdown` and nothing else — nothing in it may enter the
+  domain.
+- New shared state joins the domain (guarded + `assert!`) or states the
+  reason for its own lock the way {Broadcaster}'s header does.
+- The registry's `#open` footgun (audit PROBE 7) is untouched by the
+  mechanism — it still wants making private, at the cost of a spec sweep.
