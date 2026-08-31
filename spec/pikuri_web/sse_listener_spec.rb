@@ -44,6 +44,19 @@ RSpec.describe PikuriWeb::SseListener do
       assert_includes blocks.fetch(0).html, '<strong>world</strong>'
     end
 
+    # Promoted from the seam audit (PROBE 2): deltas re-send the whole
+    # accumulated source under one id (`D_rerender_and_replace`), so a tab
+    # that missed deltas 1..n is correct again on n+1.
+    it 'lets a late subscriber catch up from the next delta alone' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'Hel'))
+      late = broadcaster.subscribe('c-1')
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'lo'))
+
+      frames = drain_frames(late)
+      assert_equal 1, frames.size
+      assert_includes frames.first, 'Hello'
+    end
+
     it 'finalizes with the authoritative bookend content' do
       listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'Helo wrold'))
       listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'Hello world'))

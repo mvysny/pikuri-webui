@@ -245,7 +245,7 @@ registry = PikuriWeb::ConversationRegistry.new(store: conversations, factory: co
 #
 # Read off the conversation a fresh visitor would land on, which also warms it:
 # one factory means this report describes every agent, not just this one.
-puts app_monitor.run { registry.open(registry.default) }.trifecta.render
+puts app_monitor.run { registry.open_id(registry.default.id) }.trifecta.render
 
 # SSE heartbeat: a comment frame every 15 s. A write attempt is the only
 # way to notice a silently vanished browser, whose /events drain loop

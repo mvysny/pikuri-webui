@@ -971,8 +971,8 @@ is {AgentRunner#status_data}: composed off unlocked state and handed to a
 {Broadcaster} that snapshots subscribers under its lock and pushes
 *outside* it, so two threads can compose in one order and push in the
 other, leaving the browser holding the older frame. One remaining site is
-a site to fix, not an architecture — see `ideas/atomicity-across-seams.md`
-for the standing tally.
+a site to fix, not an architecture — the audit's tally has since been
+resolved and folded into `D_global_monitor`'s consequences.
 
 **If one is ever built, these constraints come from decisions already
 made** and would otherwise be rediscovered by hitting them:
@@ -2243,5 +2243,17 @@ reaches, though the server-side half now also sits in one task), and
   domain.
 - New shared state joins the domain (guarded + `assert!`) or states the
   reason for its own lock the way {Broadcaster}'s header does.
-- The registry's `#open` footgun (audit PROBE 7) is untouched by the
-  mechanism — it still wants making private, at the cost of a spec sweep.
+- The registry's `#open` footgun (audit PROBE 7) was untouched by the
+  mechanism — the stale `Conversation` is held *across* tasks — and was
+  closed right after it by structure instead: `#open` is private, so every
+  caller goes through `#open_id` (re-resolves in its own task) or
+  `#create` (opens what it just minted), and PROBE 7's premise is gone.
+- The request-to-request seams, which no server-side mechanism reaches,
+  stay accepted (they were the audit's known-and-accepted list): a queued
+  turn shows the user nothing they sent until the listener runs — the
+  in-flight window wants a pending state, distinct from busy;
+  double-submit has no server-side guard — the answer is an idempotency
+  key on `POST /messages`, and composer.js's optimistic clear covers the
+  single-tab mash today; a tab watching a conversation someone else
+  deletes keeps showing it, cosmetically; and no SSE frame carries an
+  `id:`, so a reconnect replays nothing — app.js reloads on reconnect.

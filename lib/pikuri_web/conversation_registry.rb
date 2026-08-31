@@ -5,7 +5,7 @@ module PikuriWeb
   # agent, one history, one transcript — per conversation anyone has opened
   # this run.
   #
-  #   runner = registry.open(conversation)   # mint or return the resident one
+  #   runner = registry.open_id(id)           # mint or return the resident one
   #   registry.create(from: viewed_id)       # a brand-new conversation, minted and open
   #   registry.delete(conversation)          # => :deleted | :busy
   #   registry.rows                          # what the sidebar lists
@@ -46,16 +46,6 @@ module PikuriWeb
       @factory = factory
       @monitor = monitor
       @runners = {}
-    end
-
-    # The resident runner for +conversation+, minting and restoring one if this
-    # is the first time it has been opened.
-    #
-    # @param conversation [ConversationStore::Conversation]
-    # @return [AgentRunner]
-    def open(conversation)
-      @monitor.assert!
-      @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
     end
 
     # @param id [String]
@@ -174,6 +164,25 @@ module PikuriWeb
     def runners
       @monitor.assert!
       @runners.values
+    end
+
+    private
+
+    # The resident runner for +conversation+, minting and restoring one if this
+    # is the first time it has been opened.
+    #
+    # Private because a +Conversation+ held from an earlier task can be stale —
+    # deleted since it was resolved — and this would mint a live runner over
+    # the missing folder, resurrecting it at its next save
+    # (`D_delete_no_undo`). {#open_id} re-resolves in its own task and
+    # {#create} opens what it just minted, so neither can be handed a stale
+    # one; nothing else may reach this.
+    #
+    # @param conversation [ConversationStore::Conversation]
+    # @return [AgentRunner]
+    def open(conversation)
+      @monitor.assert!
+      @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
     end
   end
 end

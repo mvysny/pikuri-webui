@@ -43,21 +43,32 @@ RSpec.describe PikuriWeb::ConversationRegistry do
   let(:monitor) { PikuriWeb::AppMonitor.new }
   let(:registry) { guard(described_class.new(store: store, factory: factory, monitor: monitor), monitor) }
 
-  context '#open' do
-    it 'mints a runner on first open and restores it once' do
-      conversation = store.create
-      runner = registry.open(conversation)
+  # #open itself is private (a caller-held Conversation can be stale — see its
+  # doc), so minting is exercised through the two public doors: #create for a
+  # brand-new conversation, #open_id for one that is resident or saved.
+  context 'minting' do
+    it 'mints a runner and restores it once' do
+      runner = registry.create
 
       assert_equal 1, built.size
       assert_equal 1, runner.restores
+    end
+
+    it 'mints on first open of a saved conversation' do
+      conversation = store.create
+      store.save(conversation, Pikuri::Agent::History.new(messages: []),
+                 model: 'qwen3.6', server: 'http://localhost:8080/v1')
+
+      runner = registry.open_id(conversation.id)
+
       assert_equal conversation.id, runner.conversation.id
+      assert_equal 1, runner.restores
     end
 
     it 'hands back the same runner on every later open' do
-      conversation = store.create
-      first = registry.open(conversation)
+      first = registry.create
 
-      assert_same first, registry.open(conversation)
+      assert_same first, registry.open_id(first.conversation.id)
       assert_equal 1, built.size
       assert_equal 1, first.restores
     end
@@ -65,8 +76,8 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     # The property that makes a turn survive being navigated away from: two
     # conversations are two runners, each with its own agent.
     it 'keeps one runner per conversation' do
-      a = registry.open(store.create)
-      b = registry.open(store.create)
+      a = registry.create
+      b = registry.create
 
       refute_same a, b
       assert_equal 2, built.size
@@ -75,16 +86,15 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
   context '#resident' do
     it 'answers nil rather than minting' do
-      conversation = store.create
-      assert_nil registry.resident(conversation.id)
-      registry.open(conversation)
+      assert_nil registry.resident('never-opened')
+      conversation = registry.create.conversation
       refute_nil registry.resident(conversation.id)
     end
   end
 
   context '#find' do
     it 'resolves a resident conversation, and a saved one, and nothing else' do
-      resident = registry.open(store.create).conversation
+      resident = registry.create.conversation
 
       assert_equal resident.id, registry.find(resident.id).id
       assert_nil registry.find('../../etc')
@@ -93,7 +103,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
   context '#delete' do
     it 'drops the runner and removes the folder' do
-      runner = registry.open(store.create)
+      runner = registry.create
       runner.conversation.dir.mkpath
 
       assert_equal :deleted, registry.delete(runner.conversation)
@@ -102,7 +112,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     end
 
     it 'refuses a conversation whose turn is in flight, which would save it back' do
-      runner = registry.open(store.create)
+      runner = registry.create
       runner.conversation.dir.mkpath
       runner.busy = true
 
@@ -116,7 +126,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     # moment earlier still holds it, and would write the folder back at the
     # next turn end. Retiring the runner is what closes that.
     it 'retires the runner it drops, so a stale reference cannot resurrect it' do
-      runner = registry.open(store.create)
+      runner = registry.create
       runner.conversation.dir.mkpath
 
       assert_equal :deleted, registry.delete(runner.conversation)
@@ -126,9 +136,9 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     # Busy is per conversation now: a turn running elsewhere is no reason to
     # refuse this one.
     it 'allows a delete while a different conversation is working' do
-      busy = registry.open(store.create)
+      busy = registry.create
       busy.busy = true
-      idle = registry.open(store.create)
+      idle = registry.create
       idle.conversation.dir.mkpath
 
       assert_equal :deleted, registry.delete(idle.conversation)
@@ -137,7 +147,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
   context '#rows' do
     it 'lists a resident conversation that has never been saved' do
-      conversation = registry.open(store.create).conversation
+      conversation = registry.create.conversation
       rows = registry.rows
 
       assert_equal [conversation.id], rows.map { |r| r[:conversation].id }
@@ -145,13 +155,13 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     end
 
     it 'reports which rows are working' do
-      runner = registry.open(store.create)
+      runner = registry.create
       runner.busy = true
       assert registry.rows.fetch(0).fetch(:busy)
     end
 
     it 'does not list a resident conversation twice once it is saved' do
-      conversation = registry.open(store.create).conversation
+      conversation = registry.create.conversation
       store.save(conversation, Pikuri::Agent::History.new(messages: []),
                  model: 'qwen3.6', server: 'http://localhost:8080/v1')
 
@@ -161,7 +171,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
 
   context '#create' do
     it 'starts a conversation on the connection the tab was reading' do
-      viewed = registry.open(store.create).conversation
+      viewed = registry.create.conversation
 
       minted = registry.create(from: viewed.id).conversation
 
@@ -198,6 +208,22 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     end
   end
 
+  # Promoted from the seam audit (PROBE 3): two tabs delete one conversation
+  # at once; the domain serializes them and both learn it is gone.
+  context 'concurrent deletes' do
+    it 'answers :deleted to both' do
+      conversation = registry.create.conversation
+      conversation.dir.mkpath
+
+      results = Array.new(2)
+      2.times.map { |i| Thread.new { results[i] = registry.delete(conversation) } }.each(&:join)
+
+      assert_equal %i[deleted deleted], results
+      assert_nil registry.resident(conversation.id)
+      refute conversation.dir.exist?
+    end
+  end
+
   context '#default' do
     it 'mints a conversation when there is nothing at all' do
       assert_empty registry.rows
@@ -209,7 +235,7 @@ RSpec.describe PikuriWeb::ConversationRegistry do
     end
 
     it 'returns the newest existing one rather than minting' do
-      existing = registry.open(store.create).conversation
+      existing = registry.create.conversation
       assert_equal existing.id, registry.default.id
       assert_equal 1, built.size
     end

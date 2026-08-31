@@ -83,7 +83,7 @@ RSpec.describe 'conversations end to end' do
   let(:registry) do
     guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor), monitor)
   end
-  let(:runner) { guard(registry.open(store.create), monitor) }
+  let(:runner) { guard(registry.create, monitor) }
   let(:transcript) { guard(runner.transcript, monitor) }
 
   after { agents.each(&:close) }
@@ -112,8 +112,8 @@ RSpec.describe 'conversations end to end' do
   # the second is never sent the first one's frames.
   context 'two conversations at once' do
     it 'keeps transcripts, histories and SSE frames apart' do
-      first = guard(registry.open(store.create), monitor)
-      second = guard(registry.open(store.create), monitor)
+      first = guard(registry.create, monitor)
+      second = guard(registry.create, monitor)
       watching_second = broadcaster.subscribe(second.conversation.id)
 
       first.submit('What is 2 + 2?')
@@ -128,7 +128,7 @@ RSpec.describe 'conversations end to end' do
     end
 
     it 'sends a turn frames only to the tabs reading that conversation' do
-      first = guard(registry.open(store.create), monitor)
+      first = guard(registry.create, monitor)
       watching_first = broadcaster.subscribe(first.conversation.id)
 
       first.submit('What is 2 + 2?')
@@ -137,8 +137,8 @@ RSpec.describe 'conversations end to end' do
     end
 
     it 'leaves each conversation with its own turn state' do
-      first = guard(registry.open(store.create), monitor)
-      second = guard(registry.open(store.create), monitor)
+      first = guard(registry.create, monitor)
+      second = guard(registry.create, monitor)
 
       first.submit('What is 2 + 2?')
 
@@ -161,7 +161,7 @@ RSpec.describe 'conversations end to end' do
 
       # A second registry over the same folder: what a restarted process sees.
       reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor),
-                       monitor).open(store.find(conversation.id))
+                       monitor).open_id(conversation.id)
 
       assert_equal produced, rendered(reopened.transcript)
     end
@@ -175,7 +175,7 @@ RSpec.describe 'conversations end to end' do
         produced = rendered(transcript)
 
         reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor),
-                         monitor).open(store.find(conversation.id))
+                         monitor).open_id(conversation.id)
 
         assert_includes produced.map(&:last).join, 'loaded skill: writing-rdoc'
         assert_equal produced, rendered(reopened.transcript)
@@ -191,14 +191,14 @@ RSpec.describe 'conversations end to end' do
       before = (dir / 'history.json').read
 
       guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor), monitor)
-        .open(store.find(runner.conversation.id))
+        .open_id(runner.conversation.id)
       agents.last.export_history.save(dir)
 
       assert_equal before, (dir / 'history.json').read
     end
 
     it 'restores nothing, quietly, for a conversation never saved' do
-      fresh = registry.open(store.create)
+      fresh = registry.create
       assert_empty monitor.run { fresh.transcript.to_a }
     end
   end
@@ -221,7 +221,7 @@ RSpec.describe 'conversations end to end' do
 
       # The old runner still exists in this spec's hand, but the registry has
       # dropped it: reopening mints a fresh one over an empty folder.
-      reopened = guard(registry.open(store.create), monitor)
+      reopened = guard(registry.create, monitor)
       reopened.submit('and again?')
 
       refute conversation.dir.exist?
