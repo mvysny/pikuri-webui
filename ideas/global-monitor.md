@@ -27,9 +27,13 @@ framing the task *is* the transaction. The marking discipline is JCiP vocabulary
   is already non-blocking, see below) nor on long-running processing (the agent loop). It *may*
   touch disk — but only because our disk work is small and bounded (two little JSON files,
   temp-and-rename). The web server must never stall for an extended period; the client stays
-  snappy. So "may block on disk" is a *bounded-latency budget*, not a licence: anything
-  unbounded or proportional-to-history (kramdown over a whole replay) is off-domain by the
-  same rule as the agent loop.
+  snappy. *Amended (owner, 2026-08-31):* the eligibility test is **rare and bounded** — never
+  network, never a wait on something another thread can hold for long, never anything unbounded
+  (the agent loop); *bounded* means bounded by a ceiling the deployment guarantees (two small
+  JSON files; a replay capped by context-window economics — ~256k tokens is the practical limit
+  of sensible local LLMs, and local llama already mandates strong hardware), never "usually
+  small"; *rare* means once-per-conversation-per-process class, never per-frame. This is what
+  sanctions the restore replay (Q2) and the turn-end save (Q3) staying in-task.
 - **No post-and-wait.** A task never blocks on a Future / a worker's result — under A that
   holds the monitor across the wait, under B it wedges the loop; same ban either way. Results
   flow the other way: the worker enters the domain with a follow-up task. Under A that "API"
@@ -230,16 +234,24 @@ What writing the caller-side headers surfaced:
 
 1. **Costume A vs B** — leaning A (global monitor); see table. Decide before implementation,
    but the classification and rdoc sweep don't wait on it.
-2. **`restore!`'s replay is the one long task in hand**: kramdown over a whole saved history,
-   inside the mint (registry task). Under the rapid-fire rule it must move off-domain —
-   e.g. replay into a detached transcript on the minting thread *outside* the task, then
-   attach runner+transcript atomically — but that reopens "a second tab opening the same
-   conversation mid-replay sees what?". Cheapest correct answer might be: keep replay in the
-   task but measure it first (a big history on a slow machine — how bad, actually?).
-3. **Turn-end save inside the task**: keeps "idle means saved" (`AgentRunner` Persistence
-   header) and is the sanctioned disk-in-task case, but it's also the biggest one — is
-   `export_history` + two-file write always inside the latency budget, or does the export
-   happen in-task and the write on the worker with the state flip on completion?
+2. **`restore!`'s replay — RESOLVED (owner, 2026-08-31): stays in the mint task**, sanctioned
+   by the amended rare-and-bounded rule above. *Measured (dev machine, synthetic
+   markdown-heavy turns): ~1.6 ms/turn, all kramdown — 10 turns ≈ 24 ms, 50 turns ≈ 100 ms,
+   200 turns (720 KB source) ≈ 320 ms; a 256k-token history lands around half a second, once
+   per conversation per process. Event synthesis itself is ~1–4 ms.* The stall is rare and
+   deployment-bounded, and keeping it in-task keeps the mint atomic for free — a second opener
+   of the same conversation waits and sees a whole runner, no mid-replay visibility rules.
+   Revisit only if it bites; the named fallback (so it isn't re-derived): replay off-domain
+   into a *detached* transcript on the opener's own request thread — off-domain writes to
+   unshared state are legal — with a promise in the registry map that task 1 installs and
+   task 2 fulfils when it publishes the finished runner; a second opener waits on the promise
+   on its own request thread, outside the domain. The rejected-for-now third option, replay
+   chunked through the domain like a live stream, pays a `:restoring` runner state and
+   submit-sequencing for a once-per-process event.
+3. **Turn-end save inside the task — RESOLVED by the same amended rule as Q2**: rare (once
+   per turn) and bounded (a context-capped history, two files, temp-and-rename). Stays
+   in-task, keeping "idle means saved" (`AgentRunner` Persistence header); revisit if it
+   bites.
 4. **Shutdown vs the domain**: `:state, :stop` must never wait on a wedged monitor/loop.
    Broadcaster is already independent; audit what else the stop hook touches (the registry
    sweep via `#runners`?) and either keep that path lock-free/best-effort or give it a timed
@@ -266,8 +278,8 @@ What writing the caller-side headers surfaced:
 ## Graduation targets (when acted on)
 
 - New `DECISIONS.md` entry (`D_global_monitor` / `D_event_loop`, per costume): the costume
-  chosen, the task inventory, the never-block + bounded-disk budget, the rejected costume's
-  rationale.
+  chosen, the task inventory, the rare-and-bounded stall rule (with the replay measurement
+  and the named fallback design from Q2), the rejected costume's rationale.
 - `D_no_event_queue`: Reopened → superseded-by note pointing at the new entry.
 - AGENTS.md scope bullet: replace the "reopened" paragraph in *No session concept…* with the
   landed mechanism; update the threading-rule bullet.
