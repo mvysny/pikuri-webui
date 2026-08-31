@@ -81,6 +81,10 @@ gem 'concurrent-ruby', '~> 1.3'
 gem 'erubi', '~> 1.13'
 
 group :test do
+  # Runs the Rakefile's `check` task — the cross-repo standard entry
+  # point (`bundle exec rake check`; also the default task).
+  gem 'rake', '~> 13.3'
+
   # Test runner. We use the rspec-core describe/it harness but write
   # assertions in minitest style — see AGENTS.md. Matches pikuri's
   # convention so the codebases read side-by-side.

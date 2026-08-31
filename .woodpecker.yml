@@ -29,9 +29,11 @@ steps:
           echo "no cache credentials - skipping cache"
         fi
 
-      # --- install + test ---
+      # --- install + check ---
+      # `rake check` is the cross-repo standard full-verification command —
+      # the same one a contributor runs locally, so CI cannot drift from it.
       - bundle install --jobs 4 --retry 3
-      - bundle exec rspec
+      - bundle exec rake check
 
       # --- repopulate the cache on a miss (bundle.tgz only exists on a hit) ---
       - |
