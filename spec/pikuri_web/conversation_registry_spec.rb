@@ -40,8 +40,8 @@ RSpec.describe PikuriWeb::ConversationRegistry do
   end
   let(:built) { [] }
   let(:factory) { ->(c) { StubRunner.new(c).tap { |r| built << r } } }
-  let(:monitor) { PikuriWeb::AppMonitor.new }
-  let(:registry) { guard(described_class.new(store: store, factory: factory, monitor: monitor), monitor) }
+  let(:lock) { PikuriWeb::BigAppLock.new }
+  let(:registry) { guard(described_class.new(store: store, factory: factory, lock: lock), lock) }
 
   # #open itself is private (a caller-held Conversation can be stale — see its
   # doc), so minting is exercised through the two public doors: #create for a

@@ -78,7 +78,7 @@ the alternatives that were rejected, live one entry per slug in
   not fall down the gap. Subscribing first makes the overlap a duplicate
   instead of a miss, and duplicates are free because blocks upsert by id
   and {Transcript#clear} never reuses one. The pair now also shares one
-  {AppMonitor} task, but the duplicate tolerance is what covers the
+  {BigAppLock} task, but the duplicate tolerance is what covers the
   page-render-to-connect gap, which no server mechanism reaches — keep
   it. See `D_subscribe_then_snapshot`.
 
@@ -90,7 +90,7 @@ the alternatives that were rejected, live one entry per slug in
 
 - **The threading rule.** The agent loop runs as a job on the shared
   executor — never on a Sinatra request thread — and everything shared
-  is touched only inside {AppMonitor} tasks: route bodies, the turn
+  is touched only inside {BigAppLock} tasks: route bodies, the turn
   job's bookkeeping brackets, {SseListener}'s store-and-broadcast per
   block. Tasks are rapid-fire (no network, no waiting on another thread,
   no post-and-wait; disk only where rare and deployment-bounded), the
@@ -99,7 +99,7 @@ the alternatives that were rejected, live one entry per slug in
   stay off-domain. See `D_global_monitor`,
   `D_worker_thread_agent_loop`, `D_serial_turn_executor`.
 
-- **No session concept; the one global mechanism is {AppMonitor}** —
+- **No session concept; the one global mechanism is {BigAppLock}** —
   never a Vaadin-style per-session one. Server state is partitioned per
   conversation and single-writer; each browser owns its own view state;
   atomicity across a seam — two objects mutated or read as one unit —
@@ -248,9 +248,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `GET /events?conversation=` (SSE, per conversation), `POST /messages`,
   `POST /cancel`, `POST /model`, `GET`/`POST /conversations`,
   `POST /conversations/:id/delete`. Every route names the conversation it
-  acts on, and every route body is one task. Monitor, registry,
+  acts on, and every route body is one task. Lock, registry,
   broadcaster and the connection rows injected via class-level settings.
-- `lib/pikuri_web/app_monitor.rb` — `PikuriWeb::AppMonitor`, the
+- `lib/pikuri_web/big_app_lock.rb` — `PikuriWeb::BigAppLock`, the
   serialization domain: run-to-completion tasks over one re-entrant
   monitor, `assert!` enforcement.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the

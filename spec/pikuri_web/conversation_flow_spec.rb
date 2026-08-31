@@ -43,15 +43,15 @@ RSpec.describe 'conversations end to end' do
   # Everything a conversation owns, wired exactly as bin/pikuri-web-chat wires
   # it — one stack per conversation, sharing only the broadcaster, the store
   # and the executor.
-  let(:monitor) { PikuriWeb::AppMonitor.new }
+  let(:lock) { PikuriWeb::BigAppLock.new }
   let(:factory) do
     lambda do |conversation|
       interloper = Pikuri::Agent::Control::Interloper.new
       cancellable = Pikuri::Agent::Control::Cancellable.new
-      transcript = PikuriWeb::Transcript.new(monitor: monitor)
+      transcript = PikuriWeb::Transcript.new(lock: lock)
       listener = PikuriWeb::SseListener.new(
         transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
-        monitor: monitor
+        lock: lock
       )
       transport = Pikuri::Testing.fake_transport do |llm|
         llm.tool_call('calculator', expression: '2 + 2')
@@ -74,17 +74,17 @@ RSpec.describe 'conversations end to end' do
         conversation: conversation, agent: agent, interloper: interloper,
         cancellable: cancellable, broadcaster: broadcaster, conversations: store,
         transcript: transcript, listener: listener, executor: executor, catalog: catalog,
-        monitor: monitor
+        lock: lock
       )
     end
   end
 
   let(:agents) { [] }
   let(:registry) do
-    guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor), monitor)
+    guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock), lock)
   end
-  let(:runner) { guard(registry.create, monitor) }
-  let(:transcript) { guard(runner.transcript, monitor) }
+  let(:runner) { guard(registry.create, lock) }
+  let(:transcript) { guard(runner.transcript, lock) }
 
   after { agents.each(&:close) }
 
@@ -112,14 +112,14 @@ RSpec.describe 'conversations end to end' do
   # the second is never sent the first one's frames.
   context 'two conversations at once' do
     it 'keeps transcripts, histories and SSE frames apart' do
-      first = guard(registry.create, monitor)
-      second = guard(registry.create, monitor)
+      first = guard(registry.create, lock)
+      second = guard(registry.create, lock)
       watching_second = broadcaster.subscribe(second.conversation.id)
 
       first.submit('What is 2 + 2?')
 
-      refute_empty monitor.run { first.transcript.to_a }
-      assert_empty monitor.run { second.transcript.to_a }
+      refute_empty lock.run { first.transcript.to_a }
+      assert_empty lock.run { second.transcript.to_a }
       # Not silence: the sidebar signal is addressed to every tab on purpose,
       # because the first conversation's row now has a dot. What must never
       # arrive is a frame carrying the first conversation's content or status.
@@ -128,7 +128,7 @@ RSpec.describe 'conversations end to end' do
     end
 
     it 'sends a turn frames only to the tabs reading that conversation' do
-      first = guard(registry.create, monitor)
+      first = guard(registry.create, lock)
       watching_first = broadcaster.subscribe(first.conversation.id)
 
       first.submit('What is 2 + 2?')
@@ -137,8 +137,8 @@ RSpec.describe 'conversations end to end' do
     end
 
     it 'leaves each conversation with its own turn state' do
-      first = guard(registry.create, monitor)
-      second = guard(registry.create, monitor)
+      first = guard(registry.create, lock)
+      second = guard(registry.create, lock)
 
       first.submit('What is 2 + 2?')
 
@@ -152,7 +152,7 @@ RSpec.describe 'conversations end to end' do
   # blocks are re-derived. Reopening is the path a browser takes when it comes
   # back to a conversation after a restart.
   context 'reopening a saved conversation' do
-    def rendered(store) = monitor.run { store.to_a.map { |b| [b.kind, b.html] } }
+    def rendered(store) = lock.run { store.to_a.map { |b| [b.kind, b.html] } }
 
     it 'rebuilds the transcript the live turn produced, block for block' do
       conversation = runner.conversation
@@ -160,8 +160,8 @@ RSpec.describe 'conversations end to end' do
       produced = rendered(transcript)
 
       # A second registry over the same folder: what a restarted process sees.
-      reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor),
-                       monitor).open_id(conversation.id)
+      reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock),
+                       lock).open_id(conversation.id)
 
       assert_equal produced, rendered(reopened.transcript)
     end
@@ -174,8 +174,8 @@ RSpec.describe 'conversations end to end' do
         runner.submit('What is 2 + 2?')
         produced = rendered(transcript)
 
-        reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor),
-                         monitor).open_id(conversation.id)
+        reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock),
+                         lock).open_id(conversation.id)
 
         assert_includes produced.map(&:last).join, 'loaded skill: writing-rdoc'
         assert_equal produced, rendered(reopened.transcript)
@@ -190,7 +190,7 @@ RSpec.describe 'conversations end to end' do
       runner.submit('What is 2 + 2?')
       before = (dir / 'history.json').read
 
-      guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, monitor: monitor), monitor)
+      guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock), lock)
         .open_id(runner.conversation.id)
       agents.last.export_history.save(dir)
 
@@ -199,7 +199,7 @@ RSpec.describe 'conversations end to end' do
 
     it 'restores nothing, quietly, for a conversation never saved' do
       fresh = registry.create
-      assert_empty monitor.run { fresh.transcript.to_a }
+      assert_empty lock.run { fresh.transcript.to_a }
     end
   end
 
@@ -221,7 +221,7 @@ RSpec.describe 'conversations end to end' do
 
       # The old runner still exists in this spec's hand, but the registry has
       # dropped it: reopening mints a fresh one over an empty folder.
-      reopened = guard(registry.create, monitor)
+      reopened = guard(registry.create, lock)
       reopened.submit('and again?')
 
       refute conversation.dir.exist?

@@ -107,8 +107,8 @@ RSpec.describe PikuriWeb::AgentRunner do
   # Absent for most examples, as it is for a runner nobody metered; the
   # context-readout context overrides it with a real one.
   let(:token_log) { nil }
-  let(:monitor) { PikuriWeb::AppMonitor.new }
-  let(:transcript) { PikuriWeb::Transcript.new(monitor: monitor) }
+  let(:lock) { PikuriWeb::BigAppLock.new }
+  let(:transcript) { PikuriWeb::Transcript.new(lock: lock) }
   let(:conversation) { conversations.create }
   # Guarded proxy: the spec drives the runner the way a route task does.
   let(:runner) do
@@ -116,11 +116,11 @@ RSpec.describe PikuriWeb::AgentRunner do
             conversation: conversation,
             agent: agent, interloper: interloper, cancellable: cancellable,
             broadcaster: broadcaster, conversations: conversations, listener: listener,
-            transcript: transcript, catalog: catalog, token_log: token_log, monitor: monitor,
+            transcript: transcript, catalog: catalog, token_log: token_log, lock: lock,
             # A real thread, not ImmediateExecutor: these examples are *about* the
             # busy state, which needs the turn still running when #submit returns.
             executor: Concurrent::SingleThreadExecutor.new
-          ), monitor)
+          ), lock)
   end
 
   # Spin until +condition+ holds, failing the spec on timeout — the
@@ -258,8 +258,8 @@ RSpec.describe PikuriWeb::AgentRunner do
                        conversation: conversation, agent: agent, interloper: interloper,
                        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
                        listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
-                       monitor: monitor
-                     ), monitor)
+                       lock: lock
+                     ), lock)
       subscription = broadcaster.subscribe(conversation.id)
 
       queued.submit('hello')
@@ -329,8 +329,8 @@ RSpec.describe PikuriWeb::AgentRunner do
                        conversation: conversation, agent: agent, interloper: interloper,
                        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
                        listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
-                       monitor: monitor
-                     ), monitor)
+                       lock: lock
+                     ), lock)
       subscription = broadcaster.subscribe(conversation.id)
 
       held = Thread::Queue.new
@@ -514,9 +514,9 @@ RSpec.describe PikuriWeb::AgentRunner do
               conversation: conversation, agent: agent, interloper: interloper,
               cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
               listener: listener, transcript: transcript, catalog: catalog,
-              executor: Concurrent::ImmediateExecutor.new, monitor: monitor,
+              executor: Concurrent::ImmediateExecutor.new, lock: lock,
               missing_connection: 'qwen2 @ http://retired:8080/v1'
-            ), monitor)
+            ), lock)
     end
 
     it 'carries the note until something makes it untrue' do
@@ -565,8 +565,8 @@ RSpec.describe PikuriWeb::AgentRunner do
                        conversation: conversation, agent: agent, interloper: interloper,
                        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
                        listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
-                       monitor: monitor
-                     ), monitor)
+                       lock: lock
+                     ), lock)
 
       queued.submit('hello')
       assert_equal :queued, queued.state
@@ -637,8 +637,8 @@ RSpec.describe PikuriWeb::AgentRunner do
                        conversation: conversation, agent: agent, interloper: interloper,
                        cancellable: cancellable, broadcaster: broadcaster, conversations: conversations,
                        listener: listener, transcript: transcript, catalog: catalog, executor: blocker,
-                       monitor: monitor
-                     ), monitor)
+                       lock: lock
+                     ), lock)
 
       queued.submit('hello')
       assert_equal :queued, queued.state

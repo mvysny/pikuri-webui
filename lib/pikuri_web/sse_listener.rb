@@ -20,7 +20,7 @@ module PikuriWeb
   # Threading is where this diverges most from the TUI: there is no UI
   # thread to marshal onto. Rendering (kramdown, escaping, the
   # {StreamingMessage} accumulation) runs off-domain, on whichever thread
-  # delivers the event; each finished block then enters an {AppMonitor}
+  # delivers the event; each finished block then enters a {BigAppLock}
   # task that stores it and broadcasts it as one unit, so a tab's snapshot
   # and its SSE stream can never disagree about a block. The streaming
   # handles (+@assistant+ / +@thinking+) stay off-domain and unguarded:
@@ -69,12 +69,12 @@ module PikuriWeb
     #   reaches only the tabs showing this conversation. +nil+ broadcasts to
     #   everyone, which is what a throwaway listener rendering a snapshot
     #   wants — it has no subscribers at all
-    # @param monitor [AppMonitor] the domain each store-and-broadcast enters
-    def initialize(transcript:, broadcaster:, monitor:, conversation: nil)
+    # @param lock [BigAppLock] the domain each store-and-broadcast enters
+    def initialize(transcript:, broadcaster:, lock:, conversation: nil)
       super()
       @transcript = transcript
       @broadcaster = broadcaster
-      @monitor = monitor
+      @lock = lock
       @conversation = conversation
       @assistant = nil
       @thinking = nil
@@ -190,7 +190,7 @@ module PikuriWeb
       @assistant = nil
       @thinking = nil
       @thinking_streamed = false
-      @monitor.run do
+      @lock.run do
         @transcript.clear
         @broadcaster.broadcast(event: :reset, data: {}, conversation: @conversation)
       end
@@ -202,7 +202,7 @@ module PikuriWeb
     # @param html [String] rendered/escaped HTML
     # @return [void]
     def add_block(kind, html)
-      @monitor.run do
+      @lock.run do
         block = @transcript.add(kind: kind, html: html)
         @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html },
                                conversation: @conversation)
@@ -216,7 +216,7 @@ module PikuriWeb
     # @param kind [Symbol] +:assistant+ or +:thinking+
     # @return [StreamingMessage]
     def open_stream(kind)
-      block = @monitor.run { @transcript.add(kind: kind, html: '') }
+      block = @lock.run { @transcript.add(kind: kind, html: '') }
       StreamingMessage.new(id: block.id, render: MarkdownRenderer.method(:render))
     end
 
@@ -229,7 +229,7 @@ module PikuriWeb
     #   no-op append path can't race)
     # @return [void]
     def push_stream(kind, message, html)
-      @monitor.run do
+      @lock.run do
         @transcript.update(message.id, html)
         @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },
                                conversation: @conversation)
@@ -250,7 +250,7 @@ module PikuriWeb
 
       case mode
       when :wipe
-        @monitor.run do
+        @lock.run do
           @transcript.remove(@assistant.id)
           @broadcaster.broadcast(event: :remove, data: { id: @assistant.id }, conversation: @conversation)
         end

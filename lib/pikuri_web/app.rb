@@ -7,12 +7,12 @@ module PikuriWeb
   # {Broadcaster} pair, which the host injects via class-level settings before
   # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
   #
-  #   PikuriWeb::App.set :app_monitor, monitor
+  #   PikuriWeb::App.set :big_app_lock, lock
   #   PikuriWeb::App.set :registry,    registry
   #   PikuriWeb::App.set :broadcaster, broadcaster
   #   PikuriWeb::App.set :models,      catalog.rows   # what /model lists
   #
-  # Every route body that touches server state is one {AppMonitor} task, so
+  # Every route body that touches server state is one {BigAppLock} task, so
   # what a route reads or mutates together cannot tear — the page snapshot is
   # one consistent picture, and resolve + act is one step. Template rendering
   # and the SSE drain loop stay outside the domain.
@@ -62,7 +62,7 @@ module PikuriWeb
     # one a tab has open, so a bare +/+ picks the newest and hands over a real
     # URL to sit on.
     get '/' do
-      redirect to("/c/#{settings.app_monitor.run { settings.registry.default.id }}"), 303
+      redirect to("/c/#{settings.big_app_lock.run { settings.registry.default.id }}"), 303
     end
 
     # The page shell for one conversation: its transcript and status bar
@@ -84,7 +84,7 @@ module PikuriWeb
       # and the sidebar rows come from the same instant, never straddling a
       # transition. The blocks are immutable and the rest plain data, so the
       # erb render needs no task of its own.
-      snapshot = settings.app_monitor.run do
+      snapshot = settings.big_app_lock.run do
         runner = open_conversation(params['id'])
         {
           blocks: runner.transcript.to_a,
@@ -110,7 +110,7 @@ module PikuriWeb
     # +GET /c/:id+ embeds, so no conversation state is ever assembled in the
     # browser.
     get '/conversations' do
-      rows = settings.app_monitor.run { conversation_rows(viewing: params['viewing'].to_s) }
+      rows = settings.big_app_lock.run { conversation_rows(viewing: params['viewing'].to_s) }
       erb :_sidebar, locals: { conversations: rows }
     end
 
@@ -134,7 +134,7 @@ module PikuriWeb
       headers 'Cache-Control' => 'no-cache'
       conversation = params['conversation'].to_s
       stream do |out|
-        queue, catch_up = settings.app_monitor.run do
+        queue, catch_up = settings.big_app_lock.run do
           [settings.broadcaster.subscribe(conversation), catch_up_frames(conversation)]
         end
         begin
@@ -167,7 +167,7 @@ module PikuriWeb
       # Resolve + submit is one task, so no delete can land between them.
       # +:discarded+ stays answered: it is the runner's own contract, reachable
       # through a stale reference held from an earlier request.
-      outcome = settings.app_monitor.run { open_conversation(params['conversation']).submit(prompt) }
+      outcome = settings.big_app_lock.run { open_conversation(params['conversation']).submit(prompt) }
       halt 404, 'no such conversation' if outcome == :discarded
 
       status 204
@@ -177,7 +177,7 @@ module PikuriWeb
     # the top of its next turn, never on the spot — so this is accepted while a
     # turn is running, exactly as a mid-turn send is.
     post '/model' do
-      outcome = settings.app_monitor.run do
+      outcome = settings.big_app_lock.run do
         open_conversation(params['conversation']).select_model(params['name'].to_s)
       end
       case outcome
@@ -191,7 +191,7 @@ module PikuriWeb
     # is still queued, stopped at the next tool boundary if it is running.
     # Idempotent; no-op when idle.
     post '/cancel' do
-      settings.app_monitor.run { open_conversation(params['conversation']).cancel }
+      settings.big_app_lock.run { open_conversation(params['conversation']).cancel }
       status 204
     end
 
@@ -202,7 +202,7 @@ module PikuriWeb
     # server cannot know which conversation the asking tab has open, the same
     # reason +GET /conversations+ is told.
     post '/conversations' do
-      conversation = settings.app_monitor.run do
+      conversation = settings.big_app_lock.run do
         settings.registry.create(from: params['viewing'].to_s).conversation
                 .tap { settings.broadcaster.broadcast(event: :conversations, data: {}) }
       end
@@ -218,7 +218,7 @@ module PikuriWeb
     # sidebar, while the +conversations+ frame is what un-lists the row in
     # every other tab.
     post '/conversations/:id/delete' do
-      outcome = settings.app_monitor.run do
+      outcome = settings.big_app_lock.run do
         conversation = settings.registry.find(params['id'])
         next :missing if conversation.nil?
 

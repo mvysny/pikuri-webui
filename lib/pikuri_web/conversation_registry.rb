@@ -22,7 +22,7 @@ module PikuriWeb
   #
   # == Threading
   #
-  # Guarded by {AppMonitor}: every call must run inside a task. Per-conversation
+  # Guarded by {BigAppLock}: every call must run inside a task. Per-conversation
   # state is single-writer by construction — one agent, one transcript, and a
   # conversation that admits one turn at a time — and that holds at any
   # +--turns+ setting; it comes from the partition, not from the executor's
@@ -40,18 +40,18 @@ module PikuriWeb
     # @param factory [#call] +conversation → AgentRunner+, built once in
     #   bin/pikuri-web-chat so that every agent gets the same tool set and the
     #   boot-time trifecta report stays true of all of them
-    # @param monitor [AppMonitor] the domain every call must be inside
-    def initialize(store:, factory:, monitor:)
+    # @param lock [BigAppLock] the domain every call must be inside
+    def initialize(store:, factory:, lock:)
       @store = store
       @factory = factory
-      @monitor = monitor
+      @lock = lock
       @runners = {}
     end
 
     # @param id [String]
     # @return [AgentRunner, nil] without minting one
     def resident(id)
-      @monitor.assert!
+      @lock.assert!
       @runners[id]
     end
 
@@ -72,7 +72,7 @@ module PikuriWeb
     # @return [AgentRunner, nil] nil for an id that is neither resident nor
     #   saved — including one deleted a moment ago
     def open_id(id)
-      @monitor.assert!
+      @lock.assert!
       conversation = find(id)
       conversation && open(conversation)
     end
@@ -90,7 +90,7 @@ module PikuriWeb
     #   or one not resident, starts on the catalog's first connection
     # @return [AgentRunner]
     def create(from: nil)
-      @monitor.assert!
+      @lock.assert!
       model, server = from && resident(from)&.model
       open(@store.create(model: model, server: server))
     end
@@ -113,7 +113,7 @@ module PikuriWeb
     # @param conversation [ConversationStore::Conversation]
     # @return [:deleted, :busy, :failed]
     def delete(conversation)
-      @monitor.assert!
+      @lock.assert!
       runner = @runners[conversation.id]
       return :busy if runner && !runner.discard!
 
@@ -133,7 +133,7 @@ module PikuriWeb
     # @param id [String]
     # @return [ConversationStore::Conversation, nil]
     def find(id)
-      @monitor.assert!
+      @lock.assert!
       @runners[id]&.conversation || @store.find(id)
     end
 
@@ -143,7 +143,7 @@ module PikuriWeb
     #
     # @return [Array<Hash>] +{conversation:, busy:}+ per row
     def rows
-      @monitor.assert!
+      @lock.assert!
       saved = @store.list
       extra = @runners.values.map(&:conversation).reject { |c| saved.any? { |s| s.id == c.id } }
       (extra + saved).map { |c| { conversation: c, busy: @runners[c.id]&.busy? || false } }
@@ -154,7 +154,7 @@ module PikuriWeb
     #
     # @return [ConversationStore::Conversation]
     def default
-      @monitor.assert!
+      @lock.assert!
       rows.first&.fetch(:conversation) || create.conversation
     end
 
@@ -162,7 +162,7 @@ module PikuriWeb
     #
     # @return [Array<AgentRunner>]
     def runners
-      @monitor.assert!
+      @lock.assert!
       @runners.values
     end
 
@@ -181,7 +181,7 @@ module PikuriWeb
     # @param conversation [ConversationStore::Conversation]
     # @return [AgentRunner]
     def open(conversation)
-      @monitor.assert!
+      @lock.assert!
       @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
     end
   end

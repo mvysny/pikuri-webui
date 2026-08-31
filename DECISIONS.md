@@ -2125,8 +2125,8 @@ consumes its evidence). The atomicity audit closed what it could; seam 2
 seam was a thing to find by reading. The owner called it: one mechanism
 internal logic can rely on, instead of an audit per seam.
 
-**Decision.** {AppMonitor}: one process-wide re-entrant `Monitor`; work
-enters as **tasks** (`monitor.run { }`) that run to completion, so the
+**Decision.** {BigAppLock}: one process-wide re-entrant `Monitor`; work
+enters as **tasks** (`lock.run { }`) that run to completion, so the
 system is only ever observed *between* tasks, never inside one. The
 reachable state space shrinks from arbitrary interleavings of statements
 to orderings of tasks. It does **not** buy determinism — whether a submit
@@ -2153,7 +2153,7 @@ The task inventory:
 
 Guarded classes — {AgentRunner}, {ConversationRegistry}, {Transcript} —
 lost their own locks and gained a *caller obligation*: every public
-method opens with {AppMonitor#assert!}, so a call from outside a task
+method opens with {BigAppLock#assert!}, so a call from outside a task
 raises instead of racing. `OutsideTask` is an `Exception`, not a
 `StandardError`, so blanket recovery (`rescue StandardError` around the
 turn job and the registry's delete) cannot mask a guarding bug as an

@@ -15,7 +15,7 @@ module PikuriWeb
   # becomes {#remove}.
   #
   # Pikuri-free by design (see the seam rule in AGENTS.md): this class
-  # speaks only ids, kinds and HTML strings. Guarded by {AppMonitor}: every
+  # speaks only ids, kinds and HTML strings. Guarded by {BigAppLock}: every
   # call must run inside a task — {#to_a}'s snapshot is what a task hands out.
   class Transcript
     # One rendered block. +kind+ is the CSS hook (+:user+, +:assistant+,
@@ -29,9 +29,9 @@ module PikuriWeb
     # left a request thread rendering the page able to read a block mid-delta.
     Block = Data.define(:id, :kind, :html)
 
-    # @param monitor [AppMonitor] the domain every call must be inside
-    def initialize(monitor:)
-      @monitor = monitor
+    # @param lock [BigAppLock] the domain every call must be inside
+    def initialize(lock:)
+      @lock = lock
       @blocks = []
       @next_id = 0
     end
@@ -43,7 +43,7 @@ module PikuriWeb
     # @return [Block] the stored block (read its +id+ for later
     #   {#update} / {#remove} calls)
     def add(kind:, html:)
-      @monitor.assert!
+      @lock.assert!
       @next_id += 1
       block = Block.new(id: "b#{@next_id}", kind: kind, html: html)
       @blocks << block
@@ -58,7 +58,7 @@ module PikuriWeb
     # @param html [String]
     # @return [void]
     def update(id, html)
-      @monitor.assert!
+      @lock.assert!
       index = @blocks.index { |b| b.id == id }
       @blocks[index] = @blocks[index].with(html: html) if index
       nil
@@ -70,7 +70,7 @@ module PikuriWeb
     # @param id [String]
     # @return [void]
     def remove(id)
-      @monitor.assert!
+      @lock.assert!
       @blocks.reject! { |b| b.id == id }
       nil
     end
@@ -83,7 +83,7 @@ module PikuriWeb
     #
     # @return [void]
     def clear
-      @monitor.assert!
+      @lock.assert!
       @blocks.clear
       nil
     end
@@ -92,7 +92,7 @@ module PikuriWeb
     #   copied and the blocks in it are immutable, so the caller's task can end
     #   and the snapshot stays good while a turn streams in behind it
     def to_a
-      @monitor.assert!
+      @lock.assert!
       @blocks.dup
     end
   end

@@ -29,17 +29,17 @@ RSpec.configure do |config|
 end
 
 # The spec-side stand-in for App's route wrapping: every method call on the
-# wrapped object runs as its own AppMonitor task, so a spec drives guarded
+# wrapped object runs as its own BigAppLock task, so a spec drives guarded
 # classes the way a route does. Returned values come back raw — a chained
 # call on one needs its own wrap.
 class Guarded
-  def initialize(object, monitor)
+  def initialize(object, lock)
     @object = object
-    @monitor = monitor
+    @lock = lock
   end
 
   def method_missing(name, ...)
-    @monitor.run { @object.public_send(name, ...) }
+    @lock.run { @object.public_send(name, ...) }
   end
 
   def respond_to_missing?(name, include_private = false)
@@ -48,9 +48,9 @@ class Guarded
 end
 
 # @param object [Object] a guarded instance (AgentRunner, Transcript, …)
-# @param monitor [PikuriWeb::AppMonitor] the domain it is guarded by
+# @param lock [PikuriWeb::BigAppLock] the domain it is guarded by
 # @return [Guarded]
-def guard(object, monitor) = Guarded.new(object, monitor)
+def guard(object, lock) = Guarded.new(object, lock)
 
 # Drain every frame currently sitting in a Broadcaster subscription
 # queue, non-blocking. Specs subscribe, poke the producer, then assert

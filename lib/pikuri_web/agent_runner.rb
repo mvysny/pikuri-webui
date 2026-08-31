@@ -82,7 +82,7 @@ module PikuriWeb
   #
   # == Threading
   #
-  # Guarded by {AppMonitor}: every public method must run inside a task. Who
+  # Guarded by {BigAppLock}: every public method must run inside a task. Who
   # enters — route tasks ({App}), the turn job's bookkeeping brackets
   # (+run_turn+ opens its own tasks around +run_loop+, which itself runs
   # off-domain), and the Interloper's +on_change+ callback, which opens a task
@@ -125,10 +125,10 @@ module PikuriWeb
     #   conversation was minted on {ModelCatalog#primary} because the
     #   connection it had saved has left the config file. Reported until a
     #   save or a pick makes it untrue, after which it describes nothing
-    # @param monitor [AppMonitor] the domain every call must be inside
+    # @param lock [BigAppLock] the domain every call must be inside
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
                    conversations:, transcript:, listener:, executor:, catalog:,
-                   monitor:, token_log: nil, missing_connection: nil)
+                   lock:, token_log: nil, missing_connection: nil)
       @conversation = conversation
       @agent = agent
       @interloper = interloper
@@ -141,7 +141,7 @@ module PikuriWeb
       @catalog = catalog
       @token_log = token_log
       @missing_connection = missing_connection
-      @monitor = monitor
+      @lock = lock
       @state = :idle
       @abandon = false
       @discarded = false
@@ -154,7 +154,7 @@ module PikuriWeb
       # showing a stale "2 queued" for the rest of the turn. Opens a task
       # because the drain fires it on the worker, mid-+run_loop+, off-domain;
       # fired from inside {#submit}'s own task it just re-enters.
-      @interloper.on_change = ->(_count) { @monitor.run { broadcast_status } }
+      @interloper.on_change = ->(_count) { @lock.run { broadcast_status } }
     end
 
     # @return [ConversationStore::Conversation]
@@ -171,7 +171,7 @@ module PikuriWeb
     #
     # @return [Boolean] whether a stored history was found and loaded
     def restore!
-      @monitor.assert!
+      @lock.assert!
       history = stored_history
       return false if history.nil?
 
@@ -191,7 +191,7 @@ module PikuriWeb
     #   calling; Interloper/run_loop double-check)
     # @return [:started, :injected, :discarded]
     def submit(message)
-      @monitor.assert!
+      @lock.assert!
       return :discarded if @discarded
 
       if busy?
@@ -223,7 +223,7 @@ module PikuriWeb
     # @return [:selected, :unknown, :discarded] +:unknown+ for a name this
     #   config does not have; +:discarded+ once the conversation is deleted
     def select_model(name)
-      @monitor.assert!
+      @lock.assert!
       choice = @catalog.find(name)
       return :unknown if choice.nil?
       return :discarded if @discarded
@@ -247,7 +247,7 @@ module PikuriWeb
     # @return [Array(String, String)] the +[model, server]+ pair, in the form
     #   {ConversationStore} stores and {ModelCatalog#resolve} matches
     def model
-      @monitor.assert!
+      @lock.assert!
       transport = @pending || @agent.transport
       [transport.model, transport.api_base]
     end
@@ -270,7 +270,7 @@ module PikuriWeb
     # @return [Boolean] false when a turn is queued or running, and the caller
     #   must refuse the delete; true once nothing will ever run here again
     def discard!
-      @monitor.assert!
+      @lock.assert!
       return false if busy?
 
       @discarded = true
@@ -279,7 +279,7 @@ module PikuriWeb
 
     # @return [Boolean] whether a delete has retired this runner
     def discarded?
-      @monitor.assert!
+      @lock.assert!
       @discarded
     end
 
@@ -289,7 +289,7 @@ module PikuriWeb
     #
     # @return [void]
     def cancel
-      @monitor.assert!
+      @lock.assert!
       @abandon = true if @state == :queued
       @cancellable.cancel! if @state == :running
       broadcast_status
@@ -299,13 +299,13 @@ module PikuriWeb
     # @return [:idle, :queued, :running] +:queued+ means the job is posted but
     #   the executor's slots are all taken by other conversations
     def state
-      @monitor.assert!
+      @lock.assert!
       @state
     end
 
     # @return [Boolean] whether a turn is posted and not yet finished
     def busy?
-      @monitor.assert!
+      @lock.assert!
       @state != :idle
     end
 
@@ -322,7 +322,7 @@ module PikuriWeb
     #   +model_pending+ and +model_missing+ are nil in the ordinary case (see
     #   {#select_model} and the +missing_connection:+ constructor argument)
     def status_data
-      @monitor.assert!
+      @lock.assert!
       {
         state: @state,
         busy: busy?,
@@ -361,17 +361,17 @@ module PikuriWeb
       # Named for Puma's backtrace-signal dump (`D_puma_thread_dump`): a turn
       # wedged in run_loop then says which conversation it is.
       Thread.current.name = "turn #{@conversation.id}"
-      return if @monitor.run { claim_running } == :abandoned
+      return if @lock.run { claim_running } == :abandoned
 
       # Both ways into a turn come through here — a submit and the restart
       # {#finish_turn} claims — so one drain covers both; a second entry point
       # into +run_loop+ would silently run the old model.
-      @agent.run_loop(user_message: message, transport: @monitor.run { take_pending })
+      @agent.run_loop(user_message: message, transport: @lock.run { take_pending })
       completed = true
     rescue StandardError => e
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
-      @monitor.run { finish_turn(restart: completed) }
+      @lock.run { finish_turn(restart: completed) }
       Thread.current.name = 'turn-idle'
     end
 

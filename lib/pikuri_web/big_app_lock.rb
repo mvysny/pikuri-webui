@@ -9,7 +9,7 @@ module PikuriWeb
   # *between* tasks, never inside one, and two objects mutated or read
   # together stay one unit:
   #
-  #   monitor.run do                 # a task
+  #   lock.run do                 # a task
   #     runner = registry.open_id(id)
   #     runner&.submit(prompt)       # resolve + submit, untearable
   #   end
@@ -26,7 +26,7 @@ module PikuriWeb
   # economics). A stall inside a task stalls every conversation and every
   # request; the `SIGPWR` dump (`D_puma_thread_dump`) is the debugger for one.
   # See `D_global_monitor` for the whole contract.
-  class AppMonitor
+  class BigAppLock
     # Raised by {#assert!} for a call outside a task. An +Exception+, not a
     # +StandardError+, so the blanket recovery paths (`rescue StandardError`
     # around the turn job and the registry's delete) cannot mask a guarding
@@ -48,13 +48,13 @@ module PikuriWeb
     # Guard clause for methods that must only run inside a task.
     #
     #   def submit(message)
-    #     @monitor.assert!
+    #     @lock.assert!
     #     ...
     #
     # @return [void]
     # @raise [OutsideTask] when the calling thread is not inside {#run}
     def assert!
-      raise OutsideTask, 'must be called inside an AppMonitor task' unless @monitor.mon_owned?
+      raise OutsideTask, 'must be called inside a BigAppLock task' unless @monitor.mon_owned?
 
       nil
     end

@@ -139,9 +139,9 @@ system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 turn_executor = Concurrent::FixedThreadPool.new(turns)
 
 # The serialization domain (`D_global_monitor`): route bodies and the turn
-# job's bookkeeping brackets run as tasks on this one monitor. Minted here and
+# job's bookkeeping brackets run as tasks on this one lock. Minted here and
 # handed to everything guarded, the same way the broadcaster travels.
-app_monitor = PikuriWeb::AppMonitor.new
+big_app_lock = PikuriWeb::BigAppLock.new
 
 # One conversation's whole stack. Every agent this process runs comes from
 # here, which is what keeps the boot-time trifecta report below true of all of
@@ -165,10 +165,10 @@ conversation_factory = lambda do |conversation|
   # the status bar's token readout) see the same TokenLog instance.
   token_log = Pikuri::Agent::Listener::TokenLog.new
 
-  transcript = PikuriWeb::Transcript.new(monitor: app_monitor)
+  transcript = PikuriWeb::Transcript.new(lock: big_app_lock)
   sse_listener = PikuriWeb::SseListener.new(
     transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
-    monitor: app_monitor
+    lock: big_app_lock
   )
 
   # Coalesce streaming delta chunks at 15 fps before they reach the
@@ -231,12 +231,12 @@ conversation_factory = lambda do |conversation|
     catalog: catalog,
     token_log: token_log,
     missing_connection: missing,
-    monitor: app_monitor
+    lock: big_app_lock
   )
 end
 
 registry = PikuriWeb::ConversationRegistry.new(store: conversations, factory: conversation_factory,
-                                               monitor: app_monitor)
+                                               lock: big_app_lock)
 
 # The advisory lethal-trifecta map, printed once at boot: which of private
 # data / untrusted content / egress this tool set actually holds, and
@@ -245,7 +245,7 @@ registry = PikuriWeb::ConversationRegistry.new(store: conversations, factory: co
 #
 # Read off the conversation a fresh visitor would land on, which also warms it:
 # one factory means this report describes every agent, not just this one.
-puts app_monitor.run { registry.open_id(registry.default.id) }.trifecta.render
+puts big_app_lock.run { registry.open_id(registry.default.id) }.trifecta.render
 
 # SSE heartbeat: a comment frame every 15 s. A write attempt is the only
 # way to notice a silently vanished browser, whose /events drain loop
@@ -258,7 +258,7 @@ Thread.new do
   end
 end
 
-PikuriWeb::App.set :app_monitor, app_monitor
+PikuriWeb::App.set :big_app_lock, big_app_lock
 PikuriWeb::App.set :broadcaster, broadcaster
 PikuriWeb::App.set :registry, registry
 # Names, model ids and window sizes — no transport crosses this line. Also what
@@ -291,7 +291,7 @@ puma_events.register(:state) do |state|
   # would park this hook in front of Puma's graceful wait — the same bug the
   # broadcaster close above exists to prevent. An unfinished turn is lost, which
   # is the accepted trade (saves land at turn end; see AgentRunner). Nothing in
-  # this hook may enter the AppMonitor either — a wedged domain must not block
+  # this hook may enter the BigAppLock either — a wedged domain must not block
   # the exit.
   turn_executor.shutdown
 end

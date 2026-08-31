@@ -1,13 +1,13 @@
 # frozen_string_literal: true
 
 RSpec.describe PikuriWeb::Transcript do
-  let(:monitor) { PikuriWeb::AppMonitor.new }
-  let(:transcript) { guard(described_class.new(monitor: monitor), monitor) }
+  let(:lock) { PikuriWeb::BigAppLock.new }
+  let(:transcript) { guard(described_class.new(lock: lock), lock) }
 
   it 'raises on any call outside a task' do
-    bare = described_class.new(monitor: monitor)
-    assert_raises(PikuriWeb::AppMonitor::OutsideTask) { bare.add(kind: :user, html: 'hi') }
-    assert_raises(PikuriWeb::AppMonitor::OutsideTask) { bare.to_a }
+    bare = described_class.new(lock: lock)
+    assert_raises(PikuriWeb::BigAppLock::OutsideTask) { bare.add(kind: :user, html: 'hi') }
+    assert_raises(PikuriWeb::BigAppLock::OutsideTask) { bare.to_a }
   end
 
   context '#add' do

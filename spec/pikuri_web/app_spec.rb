@@ -23,9 +23,9 @@ RSpec.describe PikuriWeb::App do
     attr_reader :conversation, :transcript, :submitted, :cancels, :selected
     attr_accessor :busy, :submit_outcome, :select_outcome
 
-    def initialize(conversation, monitor:)
+    def initialize(conversation, lock:)
       @conversation = conversation
-      @transcript = PikuriWeb::Transcript.new(monitor: monitor)
+      @transcript = PikuriWeb::Transcript.new(lock: lock)
       @submitted = []
       @selected = []
       @cancels = 0
@@ -60,9 +60,9 @@ RSpec.describe PikuriWeb::App do
     attr_accessor :list, :delete_outcome
     attr_reader :deleted, :created, :created_from
 
-    def initialize(list = [], monitor:)
+    def initialize(list = [], lock:)
       @list = list
-      @monitor = monitor
+      @lock = lock
       @runners = {}
       @deleted = []
       @created = 0
@@ -70,7 +70,7 @@ RSpec.describe PikuriWeb::App do
       @delete_outcome = :deleted
     end
 
-    def open(conversation) = @runners[conversation.id] ||= FakeRunner.new(conversation, monitor: @monitor)
+    def open(conversation) = @runners[conversation.id] ||= FakeRunner.new(conversation, lock: @lock)
     def resident(id) = @runners[id]
     def find(id) = @list.find { |c| c.id == id }
 
@@ -135,8 +135,8 @@ RSpec.describe PikuriWeb::App do
     [{ name: 'local', model: 'qwen3.6', context_window: 32_768 },
      { name: 'remote', model: 'qwen3.6', context_window: nil }]
   end
-  let(:monitor) { PikuriWeb::AppMonitor.new }
-  let(:registry) { FakeRegistry.new([live], monitor: monitor) }
+  let(:lock) { PikuriWeb::BigAppLock.new }
+  let(:registry) { FakeRegistry.new([live], lock: lock) }
 
   # The runner GET /c/:id would open for the default conversation.
   let(:runner) { registry.open(live) }
@@ -147,7 +147,7 @@ RSpec.describe PikuriWeb::App do
     # rack-test requests arrive as host "example.org"; Sinatra's
     # development-mode host authorization would 403 them.
     described_class.set :environment, :test
-    described_class.set :app_monitor, monitor
+    described_class.set :big_app_lock, lock
     described_class.set :broadcaster, broadcaster
     described_class.set :registry, registry
     described_class.set :models, models
@@ -172,7 +172,7 @@ RSpec.describe PikuriWeb::App do
 
   context 'GET /c/:id' do
     it 'renders transcript blocks with kind classes and ids' do
-      monitor.run do
+      lock.run do
         runner.transcript.add(kind: :user, html: 'hello there')
         runner.transcript.add(kind: :assistant, html: '<p>general kenobi</p>')
       end
@@ -424,7 +424,7 @@ RSpec.describe PikuriWeb::App do
     # transcript is what closes that, and subscribing first is what makes the
     # overlap a duplicate rather than a miss.
     it 'opens with the resident transcript, reset first' do
-      monitor.run { runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>') }
+      lock.run { runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>') }
 
       get '/events', conversation: live.id
 
