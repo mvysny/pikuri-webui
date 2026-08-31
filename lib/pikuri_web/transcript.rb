@@ -15,9 +15,9 @@ module PikuriWeb
   # becomes {#remove}.
   #
   # Pikuri-free by design (see the seam rule in AGENTS.md): this class
-  # speaks only ids, kinds and HTML strings. Thread-safe — written from
-  # the agent's worker thread (via SseListener), read from Sinatra request
-  # threads.
+  # speaks only ids, kinds and HTML strings. Thread-safe — written through
+  # {SseListener} (from the minting thread during the restore replay, from
+  # the turn worker thereafter), read from Sinatra request threads.
   class Transcript
     # One rendered block. +kind+ is the CSS hook (+:user+, +:assistant+,
     # +:thinking+, +:tool_call+, +:tool_result+, +:notice+, +:error+);

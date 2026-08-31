@@ -30,6 +30,13 @@ framing the task *is* the transaction. The marking discipline is JCiP vocabulary
   snappy. So "may block on disk" is a *bounded-latency budget*, not a licence: anything
   unbounded or proportional-to-history (kramdown over a whole replay) is off-domain by the
   same rule as the agent loop.
+- **No post-and-wait.** A task never blocks on a Future / a worker's result — under A that
+  holds the monitor across the wait, under B it wedges the loop; same ban either way. Results
+  flow the other way: the worker enters the domain with a follow-up task. Under A that "API"
+  is nothing at all — `monitor.run { ... }` from the worker's own thread, result in hand,
+  inline; under B it is `ask` + timeout. The code already lives in this continuation style:
+  `claim_running` / `finish_turn` are the worker's re-entry brackets, `#submit` fire-and-forgets
+  the turn job, `#cancel` flips a flag — nothing today wants post-and-wait.
 - **Everything gets marked.** Every class/function is either *guarded* (runs inside a task) or
   a *worker task* (background thread, enters the domain only via tasks) — per the writing-rdoc
   thread-safety vocabulary; details below.
@@ -72,6 +79,15 @@ bounded wait for tasks that must answer.
 **Lean: Costume A, the global monitor.** Same atomicity, same enforcement, same dumpability;
 free synchronous replies, and it dissolves rather than aggravates the two re-entrancy knots we
 actually have. B's one real advantage — FIFO — solves a problem we don't have.
+
+On deadlock the costumes differ in *shape*, not in exposure: B trades ABBA for self-deadlock
+(a task posting-and-waiting on a task; the `on_change` knot; the `ImmediateExecutor` specs),
+which no ordering discipline fixes — only restructuring the knot. A's hazard is ABBA, and it is
+unusually narrow here: exactly one foreign lock family (pikuri's), so the discipline collapses
+to one rule — **the domain is the outermost lock**: a task may call into pikuri; pikuri must
+never enter the domain while holding its own lock. Today's code already runs on that order at
+per-class scale, and pikuri holds up its end (`on_change` fires outside the Interloper's lock)
+— see the sweep notes below.
 
 ## The classification
 
@@ -130,6 +146,12 @@ identity under B) — cheap enough to keep on permanently, and it turns a forgot
 latent race into an immediate raise. That assertion is the enforcement story
 `D_no_event_queue` said Ruby lacks and Node gets from the language.
 
+Landing order (owner, 2026-08-31): the sweep runs in two phases. The *classification* lands
+now, as fact — phrased caller-side in today's vocabulary (which threads enter, what each lock
+is held across), costume-neutral, true before any mechanism exists. The *enforcement tag*
+("Guarded by {AppMonitor}." + `assert!`) lands only at cutover, in the same change that deletes
+the mutex it replaces — a header states what is true today, never the target.
+
 ## What this closes (the atomicity file's table, updated)
 
 - Seam 2 (compose + publish): **closed structurally** — `status_data` + broadcast is one task.
@@ -176,6 +198,34 @@ ordering tests:
   403s it outside `set :environment, :test`, so a probe asserting *absence* passes happily
   against "Host not permitted" — confirm every new probe's no-fix failure by stashing the fix.
 
+## Sweep notes (2026-08-31 — the classification pass, phase one)
+
+What writing the caller-side headers surfaced:
+
+- **Q5's answer already holds at today's scale.** The full enumeration: under `AgentRunner`'s
+  `@mutex` the code calls `Interloper#pending?` and `Cancellable#cancel!` (task→pikuri); the
+  only pikuri→us callback is `on_change`, which fires outside the Interloper's lock, so the
+  callback thread holds no pikuri lock when it re-takes `@mutex`. Order consistent: ours outer,
+  pikuri's inner. The domain inherits the same rule — re-enumerate at cutover.
+- **Q4 is mostly answered**: the stop hook (bin/pikuri-web-chat) touches only
+  `broadcaster.close` and `turn_executor.shutdown` — no registry sweep exists, no app lock is
+  taken. The constraint going forward is just: keep it that way.
+- **Q2 already bites today, monitor-shaped**: the registry monitor is held across `restore!`'s
+  whole replay, so one slow mint blocks every registry caller (sidebar rows, find, delete,
+  default) for its duration. The domain widens that to *everything* — measuring a big history
+  is a phase-one question, not a someday one.
+- **`AgentRunner#broadcast_status` has a hidden constraint** (now documented): it re-takes the
+  non-reentrant `@mutex` via `announce_busy_change`, so every caller must have released it
+  first — the self-deadlock shape A's re-entrancy dissolves and B's restructuring must respect.
+- **`AgentRunner#empty?` is dead code** — no caller in lib/, bin/ or spec/ — and it is also the
+  one method that would violate pikuri's single-thread chat confinement if called off-worker
+  mid-turn (`export_history` on a request thread). Delete it, or keep it carrying the
+  constraint its doc now states.
+- **`SseListener` was silently relying on confinement**: its streaming handles are unguarded;
+  the safety comes from replay-before-publish (the registry monitor) plus one-turn-at-a-time.
+  The header now states that contract. `ConversationStore`'s thread-safety section already had
+  the target caller-side form and needed nothing.
+
 ## Open questions
 
 1. **Costume A vs B** — leaning A (global monitor); see table. Decide before implementation,
@@ -193,13 +243,14 @@ ordering tests:
 4. **Shutdown vs the domain**: `:state, :stop` must never wait on a wedged monitor/loop.
    Broadcaster is already independent; audit what else the stop hook touches (the registry
    sweep via `#runners`?) and either keep that path lock-free/best-effort or give it a timed
-   acquire.
+   acquire. *Sweep notes: mostly answered — the hook touches nothing else today.*
 5. **Lock ordering (ABBA) with pikuri's own locks**: a task calling into pikuri
    (`inject_user_message` → fires `on_change` → re-enters the monitor: fine under A) vs the
    worker inside pikuri's locks entering a task. Enumerate every task→pikuri call and every
    pikuri→task callback and check the order is consistent. The existing comments (`#submit`'s
    outside-the-mutex block, `#finish_turn`'s "on_change fires outside its own lock") are the
-   audit's starting points.
+   audit's starting points. *Sweep notes: enumerated — consistent today, ours outer; the rule
+   is "domain outermost". Re-enumerate at cutover.*
 6. **Timed acquire / 503s**: under A, a request thread waits on the Monitor with no timeout
    (Ruby `Monitor` has no timed `enter`). Is Puma's pool + the TTIN dump enough, or do routes
    want a bounded wait? (Under B this is forced anyway — every `ask` needs a timeout.)

@@ -18,11 +18,14 @@ module PikuriWeb
   # streamed text on cancel" is "just drop the {StreamingMessage} handle."
   #
   # Threading is where this diverges most from the TUI: there is no UI
-  # thread to marshal onto. {#on_event} runs directly on the agent's
-  # worker thread; {Transcript} and {Broadcaster} are themselves
-  # thread-safe, so dispatch needs no submit/queue hop. Event order is
-  # preserved per connection because each browser's frames go through one
-  # FIFO queue.
+  # thread to marshal onto. The streaming handles (+@assistant+ /
+  # +@thinking+) are unguarded, so this class is confined to one event
+  # producer at a time — the minting thread during {AgentRunner#restore!}'s
+  # replay, the turn worker thereafter. Those never overlap: the registry
+  # publishes the runner only after the replay, and a conversation admits
+  # one turn at a time. {Transcript} and {Broadcaster} are themselves
+  # thread-safe, so dispatch needs no submit/queue hop; per-browser event
+  # order comes from each connection's one FIFO queue.
   #
   # Variant coverage mirrors TuileListener:
   #

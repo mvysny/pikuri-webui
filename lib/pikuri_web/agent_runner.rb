@@ -80,7 +80,26 @@ module PikuriWeb
   # Server-side of the pikuri seam, so it names pikuri types freely
   # (`D_pikuri_free_core`).
   #
-  # Thread-safe.
+  # == Threading
+  #
+  # Thread-safe: +@mutex+ guards the state machine. Three kinds of thread
+  # enter — Sinatra request threads (the public surface), the turn job on the
+  # shared executor ({#run_turn}'s brackets), and the Interloper's +on_change+
+  # callback, which runs synchronously on whichever of those caused the
+  # change. Two ordering rules keep that sound, and both must survive any edit:
+  #
+  # - +@mutex+ is the *outermost* lock: it may be held while calling into
+  #   pikuri (+Interloper#pending?+, +Cancellable#cancel!+), and pikuri never
+  #   holds its own lock when calling back — +on_change+ fires outside the
+  #   Interloper's. Consistent order, so no ABBA deadlock.
+  # - {#broadcast_status} re-takes the non-reentrant +@mutex+ (via
+  #   +announce_busy_change+), so it is only ever called with the mutex
+  #   released.
+  #
+  # Unlocked reads ({#state}, {#busy?}, parts of {#status_data}) are single
+  # ivar reads, atomic under the GVL; a *combination* of them can still
+  # straddle a transition — known and accepted (a status frame is advisory,
+  # the next one corrects it).
   class AgentRunner
     # @param conversation [ConversationStore::Conversation] the one this runner
     #   is for, fixed for its lifetime
@@ -335,6 +354,9 @@ module PikuriWeb
     #   +GET /c/:id+ renders into the page — {App} never touches the report
     def trifecta_html = TrifectaView.render(@agent.trifecta)
 
+    # Only sound while no turn is in flight: it reads the agent off its turn
+    # thread, and pikuri's chat is single-thread-confined.
+    #
     # @return [Boolean] whether this conversation holds no messages, so nothing
     #   would be saved and its folder need not survive
     def empty? = @agent.export_history.messages.empty?

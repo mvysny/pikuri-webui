@@ -34,6 +34,13 @@ module PikuriWeb
   # {#delete} both consult the resident map through helpers that lock, and a
   # plain mutex would deadlock on itself. It does not, however, reach inside a
   # runner — hence {AgentRunner#discard!} for the one place that must.
+  #
+  # The monitor is held across more than map mutation: a mint runs the factory
+  # *and* the whole restore replay under it (which is what keeps a second open
+  # of the same conversation from observing a half-restored runner), and
+  # {#find} / {#rows} / {#delete} hold it across the store's disk I/O. Every
+  # registry caller therefore waits behind a slow mint — accepted while
+  # histories stay small.
   class ConversationRegistry
     # @param store [ConversationStore] the folder: mints ids, lists what is
     #   saved, removes a folder

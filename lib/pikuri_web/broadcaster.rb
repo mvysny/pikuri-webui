@@ -69,6 +69,9 @@ module PikuriWeb
 
     # Format one SSE frame and push it to the subscribers it is addressed to.
     #
+    # Never blocks — the queues are unbounded — so it is safe to call while
+    # holding a lock; the parked drain loops do the actual network writes.
+    #
     # @param event [String, Symbol] SSE event type (the browser-side
     #   +addEventListener+ name): +block+, +remove+, +reset+, +status+,
     #   +conversations+
