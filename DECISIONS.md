@@ -2061,3 +2061,49 @@ imports `dom.js` with the browser resolving it, no bundler in sight.
 starting condition: if a change appears to need an npm package, the
 answer is to render it on the server instead. It is also what keeps
 `--dev` cheap (`D_dev_flag_no_reload`) — there is nothing to rebuild.
+
+## D_puma_thread_dump — Thread dumps come from Puma's own backtrace signal; our threads name themselves
+
+**Status:** Accepted, shipped (2026-08-31).
+
+**Context.** Ruby has no `jstack`: when this server wedges — a `/events`
+drain loop parked on a queue nobody pushes, a turn stuck in `run_loop`
+against an inference server that stopped answering, a save blocked on a
+full disk inside `finish_turn` — there was nothing to look *at*. The
+`D_no_event_queue` reopening priced dumpability as the compensation for
+the coming serialization domain's blast radius: a race consumes its
+evidence, but a stall holds still for a dump. The plan was a
+Sidekiq-style `TTIN` handler of our own.
+
+**Decision.** No handler of ours. Puma already traps a backtrace signal
+— `SIGPWR` on Linux, `SIGINFO` where that exists — in
+`Launcher#setup_signals`, on the exact path Sinatra's embedded `run!`
+takes, and dumps every thread's name and backtrace to its stdout
+(verified end-to-end against Puma 8.0.2). What we own instead is
+*legibility*: every thread we spawn or borrow names itself, because an
+anonymous `Thread: TID-2e4` costs the reader a source dive that
+`sse-heartbeat` or `turn <conversation-id>` does not.
+
+**Rejected: our own `TTIN` handler** (trap pushes a token to a queue, a
+dedicated printer thread writes `Thread.list` backtraces to stderr —
+the indirection because Ruby trap context cannot take a mutex). It buys
+stderr instead of stdout and printing outside trap context, at the price
+of ~15 lines to maintain, one more thread, and a signal with a real
+collision: Puma's *cluster* mode traps `TTIN`/`TTOU` for worker scaling,
+so the Sidekiq convention is only free while this stays single-mode.
+Puma's own handler does run in trap context, but its log path is
+mutex-free by inspection — accepted. Dump-on-slow-shutdown was also
+considered and dropped: `force_shutdown_after: 5` already backstops, and
+on-demand is the tool.
+
+**Consequences.**
+
+- Every thread we create sets `Thread.current.name`, and the turn job
+  names its pooled thread `turn <conversation-id>` for the duration
+  (`turn-idle` after), so a wedged turn names its conversation. A new
+  thread without a name is a review miss.
+- The dump lands on stdout (Puma's log stream), not stderr — an accepted
+  nick in `D_diagnostics_to_stderr`'s wording, whose point is
+  browser-vs-terminal, and both streams reach the terminal.
+- README's "When it looks stuck" documents the signal; it is the
+  operator-facing half of this entry.

@@ -374,6 +374,9 @@ module PikuriWeb
     #   for the Interloper drain +run_loop+ does before its first completion
     # @return [void]
     def run_turn(message)
+      # Named for Puma's backtrace-signal dump (`D_puma_thread_dump`): a turn
+      # wedged in run_loop then says which conversation it is.
+      Thread.current.name = "turn #{@conversation.id}"
       return if claim_running == :abandoned
 
       # Both ways into a turn come through here — a submit and the restart
@@ -385,6 +388,7 @@ module PikuriWeb
       PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")
     ensure
       finish_turn(restart: completed)
+      Thread.current.name = 'turn-idle'
     end
 
     # Save, go idle, and — when the Interloper still holds something — claim

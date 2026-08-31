@@ -110,7 +110,9 @@ the alternatives that were rejected, live one entry per slug in
 
 - **The browser shows the conversation; diagnostics go to stderr.**
   {SseListener} renders events, never log lines, and `PikuriWeb.logger`
-  is never pointed at the {Broadcaster}. See `D_diagnostics_to_stderr`.
+  is never pointed at the {Broadcaster}. A wedge is diagnosed with Puma's
+  built-in backtrace signal (`SIGPWR`), never a handler of ours.
+  See `D_diagnostics_to_stderr`, `D_puma_thread_dump`.
 
 - **JavaScript is mechanics, never a renderer.** Zero JS dependencies, no
   npm, no bundler, no build step. Script is for transport, platform
@@ -337,6 +339,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   degrade to escaped text, `run_loop` failures log and return the UI
   to idle; but contract violations (double finalize, bad flush mode)
   raise.
+- Every thread we spawn names itself (`Thread.current.name`), and a
+  per-job borrow like the turn executor's names the thread for the job's
+  duration — Puma's `SIGPWR` dump is the debugger of last resort and
+  reads by name (`D_puma_thread_dump`).
 - Block kinds (`:user`, `:assistant`, `:thinking`, `:tool_call`,
   `:tool_result`, `:notice`, `:error`) are the contract between
   SseListener, index.erb and style.css — adding one means touching

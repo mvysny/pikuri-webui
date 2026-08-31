@@ -243,6 +243,7 @@ puts registry.default.then { |c| registry.open(c) }.trifecta.render
 # way to notice a silently vanished browser, whose /events drain loop
 # would otherwise park a Puma thread forever.
 Thread.new do
+  Thread.current.name = 'sse-heartbeat'
   loop do
     sleep 15
     broadcaster.broadcast_comment

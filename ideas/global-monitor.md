@@ -76,7 +76,7 @@ bounded wait for tasks that must answer.
 | re-entrancy | `Monitor` re-enters: the Interloper `on_change` knot (fires synchronously from inside `#submit`'s inject and re-enters `broadcast_status`) just dissolves | a task that posts-and-waits on another task deadlocks; the knot needs restructuring |
 | specs | `ImmediateExecutor` (runs the job on the submitting thread, re-entering the task) keeps working | deadlocks under B; specs need a real executor or a test pump |
 | enforcement | `raise unless @monitor.mon_owned?` in guarded methods | `raise unless Thread.current == owner` — parity |
-| dumpability | TTIN dump (`ideas/thread-dump-signal.md` — now nearly a prerequisite) shows the stalled task *with its caller's stack*, so provenance is free | one owner stack; tasks need labels to say who posted them |
+| dumpability | the SIGPWR dump (`D_puma_thread_dump`, landed) shows the stalled task *with its caller's stack*, so provenance is free | one owner stack; tasks need labels to say who posted them |
 | ordering | no FIFO across threads — but per-source order comes from each source being one thread, and cross-source order is the genuine concurrency neither costume removes | FIFO, which buys nothing extra here |
 | never-block discipline | any thread can silently block while holding it | same hazard, one thread — identical review burden (Node comparison in `D_no_event_queue`) |
 
@@ -264,12 +264,12 @@ What writing the caller-side headers surfaced:
    audit's starting points. *Sweep notes: enumerated — consistent today, ours outer; the rule
    is "domain outermost". Re-enumerate at cutover.*
 6. **Timed acquire / 503s**: under A, a request thread waits on the Monitor with no timeout
-   (Ruby `Monitor` has no timed `enter`). Is Puma's pool + the TTIN dump enough, or do routes
+   (Ruby `Monitor` has no timed `enter`). Is Puma's pool + the SIGPWR dump enough, or do routes
    want a bounded wait? (Under B this is forced anyway — every `ask` needs a timeout.)
 7. **Blast radius, accepted**: a stall inside a task now pauses *every* conversation and every
    request, not one — that's the trade `D_no_event_queue` prices. The compensations are
-   (a) the rapid-fire rule above and (b) dumpability: land `ideas/thread-dump-signal.md`'s TTIN
-   handler first or together with this.
+   (a) the rapid-fire rule above and (b) dumpability — landed: Puma's built-in backtrace
+   signal plus the thread-naming convention (`D_puma_thread_dump`).
 8. **Name and API surface**: one class, two-or-three methods (`run`/`assert!`, maybe `ask`),
    injected the same way broadcaster/registry are. `AppMonitor` under A (`EventLoop` under B);
    where does it live in the wiring — bin/pikuri-web-chat mints it and hands it to everything

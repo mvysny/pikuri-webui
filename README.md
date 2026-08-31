@@ -250,6 +250,22 @@ find bin lib views -type f | entr -r bin/pikuri-web-chat --dev
 Both restart by signalling the process, which takes the same path as
 Ctrl+C — about a second, tabs open or not.
 
+### When it looks stuck
+
+Puma answers `SIGPWR` (`SIGINFO` on macOS) with a backtrace of every
+thread, printed to its stdout. The process carries on — it is a
+snapshot, not a stop:
+
+```sh
+kill -PWR $(pgrep -f pikuri-web-chat)
+```
+
+Threads name themselves: `turn <conversation-id>` is that conversation's
+turn in flight (`turn-idle`, a worker between turns), `sse-heartbeat` is
+the keepalive, and the `puma srv tp *` threads serve requests — one of
+them parked in the `/events` drain loop is a connected tab, which is
+normal.
+
 ## Configure
 
 Connections and API keys come from `~/.config/pikuri/config.toml` — the
