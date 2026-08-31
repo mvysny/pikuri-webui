@@ -95,7 +95,8 @@ to an entry in [`DECISIONS.md`](DECISIONS.md):
   the boot banner and `/trifecta` print the exact tool/risk map. Open
   WebUI's surface (accounts, plugins, code execution, uploads) is far too
   large to summarize that way — which is fine at team scale and the point
-  of avoiding at personal scale.
+  of avoiding at personal scale. The prompt-injection section below makes
+  this concrete.
 - **Auditability of the whole stack.** ~5k lines including CSS and
   templates, readable in an afternoon; every behavior decision is written
   down in `DECISIONS.md` with its rejected alternatives.
@@ -106,6 +107,59 @@ to an entry in [`DECISIONS.md`](DECISIONS.md):
 - **Nothing to operate.** No containers, no database migrations, no
   Node toolchain, no version treadmill of a 150k-star project. One
   process, one state folder, Ctrl+C exits in about a second.
+
+## Prompt injection and the lethal trifecta
+
+The sharpest difference is not a feature but a security property, so it
+gets its own section. The question: what stops a scraped page or an
+indexed document from talking the model into exfiltrating your data?
+
+**Open WebUI has no structural guard against the trifecta.** Its security
+model is perimeter- and identity-based — who may install what — not
+capability-based. Concretely, from its own documentation:
+
+- Tool permissioning governs *installation*, not *invocation*. The
+  [tools docs](https://docs.openwebui.com/features/extensibility/plugin/tools/)
+  state that granting tool-creation rights "is equivalent to giving them
+  shell access to the server" — a tool is unsandboxed Python running
+  in-process, with the standard library, the database and the live app in
+  reach. The control is "only admins install tools"; on a personal
+  instance you are the admin, so the control is vacuous. Once a tool is
+  enabled, the *model* decides when to call it — and a scraped page
+  decides what the model wants.
+- The closest thing to a guard is opt-in human-in-the-loop: an
+  experimental `ENABLE_TOOL_PERMISSIONS` Allow/Deny dialog and MCP
+  elicitation confirms
+  ([discussion](https://github.com/open-webui/open-webui/discussions/16701)).
+  An approval prompt, off by default, with the usual approval-fatigue
+  failure mode — not a separation.
+- The [hardening guide](https://docs.openwebui.com/getting-started/advanced-topics/hardening/)
+  never mentions prompt injection. It covers auth, TLS, session cookies,
+  an SSRF blocklist for cloud metadata endpoints, and an optional
+  `IFRAME_CSP` — nothing on model-mediated exfiltration or on keeping
+  untrusted content away from private data.
+- [RAG](https://docs.openwebui.com/features/chat-conversations/rag/)
+  injects retrieved document content into the message context with no
+  provenance separation, so indirect injection rides in through the
+  retrieval pipeline — the same leg your documents sit behind.
+
+The structural point: a trifecta guarantee has to be a *static property
+of a fixed tool set* — auditable once, reliable after. Open WebUI's tool
+surface is mutable at runtime: an admin toggle, a per-chat integrations
+click, or a community plugin import can silently re-link the three legs,
+and a platform whose value proposition is "connect everything" cannot be
+configured out of that. At best you get a snapshot audit, stale after the
+next toggle. None of this is carelessness on Open WebUI's part — it is
+what "extensible platform" means.
+
+pikuri-web's guarantee is the boot script: the chat entry point wires
+*untrusted content* and *egress* and structurally lacks the *private
+data* leg, `/trifecta` prints the map, and growing a leg requires a
+different executable (`D_chat_only_entry_point`), so the report cannot
+drift. This is also why the personal-assistant configuration you would
+actually want from Open WebUI — RAG over your files plus web search — is
+the trifecta assembled by default, with an experimental confirm dialog as
+the only brake.
 
 ## When to use which
 
