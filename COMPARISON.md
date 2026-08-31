@@ -49,7 +49,7 @@ thinnest possible viewport onto it.**
 | Image gen, voice | Yes (DALL·E, ComfyUI, …; STT/TTS) | No |
 | Mid-turn behavior | Background/asynchronous chats | Turns keep running when you navigate away; mid-turn input is *injected* into the running turn (pikuri's Interloper) |
 | Mobile | PWA | PWA manifest; phone layout is the same page restyled by CSS |
-| License | Open WebUI License (BSD-3-derived, branding-preservation clause) | No license file yet |
+| License | Open WebUI License (BSD-3-derived, branding-preservation clause) | MIT |
 | Scale of codebase | Hundreds of contributors, enterprise track | ~5k lines total, one author |
 
 ## What Open WebUI has that pikuri-web deliberately does not
