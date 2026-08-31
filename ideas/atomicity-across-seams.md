@@ -44,6 +44,10 @@ Interloper's `on_change`, which fires from inside pikuri's own enqueue. Candidat
   path.
 - Whatever the `D_no_event_queue` mechanism turns out to be, if it lands first.
 
+**Direction chosen (2026-08-31): the third.** The owner reopened the mechanism question for
+real — see `ideas/global-monitor.md`, which designs it. Seam 2 waits for it; the sequence
+number is parked as the fallback if that work stalls.
+
 ## Open: `ConversationRegistry#open` is still a footgun
 
 `#open_id` fixed the app's path by re-resolving under the monitor. `#open(conversation)` itself will
@@ -89,8 +93,9 @@ against `"Host not permitted"`. Any new probe wants its no-fix failure confirmed
 
 ## Next
 
-1. Close seam 2, most likely with the sequence number.
-2. Then decide `D_no_event_queue` with the count at zero — the audit's own finding is that the seams
-   wanted four different tools, and none of them wanted an owner thread. That is an argument for
-   per-seam atomicity over a global mechanism, but it is *this* audit's argument, and the entry
-   asks for the case to be rebuilt rather than inherited.
+Superseded (2026-08-31): the owner decided `D_no_event_queue` the other way — one global
+serialization domain, being designed in `ideas/global-monitor.md`. That file inherits this one's
+probe method and carries the per-seam-vs-global argument (this audit's finding, recorded there
+as the alternative the graduating D entry must answer). What remains *here* is the working
+state: seam 2 stays open until the mechanism closes it, PROBE 7 / the `#open` footgun stands,
+and the known-and-accepted list above is untouched by the mechanism (request-to-request seams).
