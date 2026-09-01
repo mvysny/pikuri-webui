@@ -8,7 +8,9 @@
 
    Block kinds mirror the TUI's visual language: user turns prefixed and
    bordered, thinking in muted gray (the AnsiGrayscale equivalent), tool
-   lines in cyan monospace, notices yellow, errors red.
+   lines in monospace, notices yellow, errors red. The one departure from
+   the TUI is `--tool`, which is Kuri's coat rather than the terminal's
+   cyan — see the token below.
 
    Theming: both palettes are declared once as `--dark-*` / `--light-*`,
    and the rest of the file only ever reads the eleven semantic tokens
@@ -18,13 +20,21 @@
    to both palettes and both mappings, nowhere else. */
 
 :root {
-  /* Dark palette: the TUI's colors. */
+  /* Dark palette: the TUI's colors, except --tool.
+
+     --tool is pikuri's own: the Talus coat Kuri is drawn in
+     (#a89c8e in public/images/kuri.svg), same hue, chroma lifted so
+     the tool lines read as warm tan rather than as a second shade of
+     --fg-muted's cool gray — the two sit side by side in a slash-menu
+     row (.slash-name / .slash-description), so they have to separate on
+     hue, not just on lightness. The verbatim coat swatch does not:
+     it lands within a hair of --dark-fg-muted's lightness. */
   --dark-bg: #1e1f22;
   --dark-bg-raised: #26282c;
   --dark-fg: #d8dade;
   --dark-fg-muted: #8a8f98;
   --dark-accent: #6aa3f8;
-  --dark-tool: #4fc1c9;
+  --dark-tool: #c1a586;
   --dark-notice: #d9b04c;
   --dark-error: #e06c75;
   --dark-border: #3a3d42;
@@ -32,13 +42,16 @@
   --dark-send-fg: #1e1f22;
 
   /* Light palette: the same roles, darkened enough to carry their
-     meaning on paper-white (all ≥ 4.5:1 against --light-bg). */
+     meaning on paper-white (all ≥ 4.5:1 against --light-bg). --tool is
+     the same coat hue taken down to a brown; Kuri's own darker ear
+     shade (#786d61) is only 4.9:1 here and sits on --light-fg-muted's
+     lightness, so it loses the same separation the dark side needs. */
   --light-bg: #fbfbfa;
   --light-bg-raised: #f0f0ed;
   --light-fg: #1f2124;
   --light-fg-muted: #63696f;
   --light-accent: #1d5fd0;
-  --light-tool: #0f7178;
+  --light-tool: #715433;
   --light-notice: #86620b;
   --light-error: #c0343f;
   --light-border: #d7d7d2;

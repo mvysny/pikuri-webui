@@ -316,7 +316,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
-  thinking, cyan tool lines).
+  thinking, tool lines in Kuri's coat tan).
 - `public/images/kuri.svg` — the mascot, transparent and unplated; master
   artwork every icon beside it is rendered from.
 - `public/images/favicon.svg` — the tab icon: Kuri on a plate; the one
