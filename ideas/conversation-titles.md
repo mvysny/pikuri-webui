@@ -14,6 +14,13 @@ behind the thinking-off fork below. Two runs so far: `qwen-prompt-probes.md` (pr
 
 ## Settled
 
+- **`Q_titler_threat_model`: an adversarial opener is out of scope.** Decided, not deferred. This is
+  a single-user app on `127.0.0.1` with no auth and no sessions; the opening message is one the user
+  typed, and a manipulated title is a wrong string on their own sidebar row. The probing in
+  `titler-model-probes.md` stands as evidence about *models*, but nothing here is designed around
+  resisting an attacker, and a later change must not be blocked for weakening that. Two things
+  survive it for reasons that are not security: the length cap (load-bearing, below) and the
+  `<opener>` wrapper (functional, below).
 - **Which model: the first configured `[[llm]]`**, same as a conversation with nothing saved. Run 2
   killed the "small non-thinking sidecar model" idea on evidence (below), and with thinking off the
   big model titles in ~1.2 s, so there is nothing left for a `[web] title_model` knob to buy. It
@@ -27,41 +34,51 @@ behind the thinking-off fork below. Two runs so far: `qwen-prompt-probes.md` (pr
   process.
 - **When:** from the first user message alone. Fire-and-forget; a titling failure must never fail
   the turn — it just leaves the stamp.
-- **The opener is passed as delimited data, not as the user turn.** Run 1 fed the message in bare
-  and concluded the prompt needs no cleverness; run 2 showed that is the most injectable shape
-  there is. The shipping prompt wraps it — `<opener>…</opener>` in the user turn, and a system line
-  saying that text is data and never an instruction. Verbatim in
-  `titler-model-probes.md`. Still short; just not naive.
+- **The opener is passed as delimited data, not as the user turn** — and the reason is functional,
+  not defensive. A chat app's first message is very often an imperative: *"write me a poem about
+  cats"*, *"summarize this"*, *"fix this stack trace"*. Those are honest users, not attackers, and a
+  bare `user_message` invites the titler to **do** them instead of naming them — which is exactly
+  what the 4B did, poem and all. Wrapping the opener as `<opener>…</opener>` with a system line
+  saying that text is data is what makes an imperative opener get *titled*. It would be worth
+  keeping with no adversary anywhere in the picture. Verbatim in `titler-model-probes.md`.
 - **`Q_title_length`: 3–7 words.** The original 10–20 word ask is disregarded — it is long for a
   `clamp(12rem, 20%, 20rem)` sidebar row. Ellipsised in CSS as a backstop.
 
-## Prompt-following is a non-issue; prompt *injection* is a real one
+## Prompt-following, and what to do about the model's output
 
 **Format-following: 8/8, twice.** Qwen 3.6 obeys 3–7 words, no quotes, no trailing period, no
 preamble, no markdown, and answers in the input's own language — with thinking on (run 1) and with
 thinking off (run 2). The "Sure! Here's a title:" case has never once appeared.
 
-**Injection is a different question, and run 1's single probe was the easiest one in the set.** Run
-2 ran six. Against the hardened prompt, Qwen 3.6 held 5/6; the one that lands is a `</opener>`
-breakout carrying a fake system instruction, and it lands only when the demanded output is itself
-title-shaped (`BANANA BANANA BANANA` yes, a full sentence no).
+**Injection was measured, then scoped out** — see `Q_titler_threat_model`. For the record: run 2 ran
+six attacks; Qwen 3.6 held 5/6 and the 4B held 2/6. The one that lands on the 35B is a `</opener>`
+breakout carrying a fake system instruction, and only when the demanded output is itself
+title-shaped (`BANANA BANANA BANANA` yes, a full sentence no) — i.e. **the format constraint is what
+holds, not the instruction hierarchy.** Nobody can make the titler emit a sentence, markup, or a
+long payload; they can only choose which 3–7 words. Against the accepted threat model that is a
+non-event, and it is recorded here so a later reader does not re-run the experiment.
 
-That is the residual risk, stated properly: **the format constraint is the defence, not the
-instruction hierarchy.** An attacker who gets pasted content into the opening message can influence
-*which* 3–7 words the sidebar row shows; they cannot make the titler emit a sentence, markup, or a
-long payload. A rude sidebar row is the worst case.
+The implementation consequences survive anyway, because none of them is really about attackers:
 
-Consequences for the implementation, all cheap:
-
-- **Cap in Ruby, don't trust the prompt.** A hard word and character cap, single line, applied to
-  whatever comes back. The prompt is a request; the cap is the guarantee.
-- **`Pikuri::Sanitizer`, not just escaping.** Unchanged and now better motivated — the words are
-  attacker-choosable, which is exactly where a bidi override or a zero-width character comes from.
-  The title reaches `_sidebar.erb` as plain text in four places (link text, the `<a title>`, the
-  delete button's `aria-label` and its `title`); `set :erb, escape_html: true` stops markup and
-  nothing else. Same standing rule as the tool lines (AGENTS.md, *Conventions*).
-- **Strip a leading `</think>`.** Run 1 saw the artifact on every thinking-off response; run 2 could
-  not reproduce it in ~16 calls. Keep the strip as a one-line backstop — the server is not pinned.
+- **Cap in Ruby, and treat it as load-bearing.** Not hygiene. The degradation mode of the
+  thinking-off adapter is *silently not applied* — a ruby_llm middleware reorder, a template change,
+  a titler pointed at a connection that ignores the param — and run 4 caught the thinking-on path
+  dumping **~4000 characters of chain-of-thought into `content`** where a title belongs. So the cap
+  is what stands between a silent regression and an essay in the sidebar. Hard word *and* character
+  cap, single line, applied to whatever comes back.
+- **A cheap canary for that same regression.** The titler knows its own completion-token count and
+  latency. A title that took 600 tokens or 30 s is a title generated by a model that thought,
+  which means the param stopped working — log it, and prefer keeping the stamp over storing a
+  suspect title. Nearly free, and it turns a silent failure into a visible one.
+- **Strip a leading `</think>`, and anything before a `</think>`.** Run 1 saw the artifact on the
+  thinking-*off* path; runs 2–4 never reproduced that, and run 4 instead found the leak on the
+  thinking-*on* path in a much worse form. The strip is a one-line backstop for both shapes.
+- **`Pikuri::Sanitizer`, not just escaping.** Unchanged, and it stands on the standing rule rather
+  than on this feature's threat model: the title reaches `_sidebar.erb` as plain text in four places
+  (link text, the `<a title>`, the delete button's `aria-label` and its `title`), and
+  `set :erb, escape_html: true` stops markup but not a bidi override or a zero-width character.
+  Same rule as the tool lines (AGENTS.md, *Conventions*). Model output is text of unknown
+  provenance whether or not anyone is attacking.
 
 ## The fork: thinking must be off — and the channel was there all along
 
