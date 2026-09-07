@@ -52,15 +52,11 @@ module PikuriWeb
     # per-chat +RubyLLM::Context+ — so no process-global +RubyLLM.configure+ is
     # involved and two conversations on two servers coexist.
     #
-    # With +permits+, each transport also carries a {ThrottledAdapter} rationing
-    # concurrent completions. The pool is per +api_base+, not per +[[llm]]+:
-    # two entries running different models on one server share that server's
-    # slots, because the slots are the server's (`D_throttle_at_the_request`).
-    #
     # @param llms [Array<Config::Llm>] every configured connection, in
     #   declaration order
-    # @param permits [Integer, nil] concurrent completions allowed per server;
-    #   nil leaves the transports unthrottled
+    # @param permits [Integer, nil] concurrent completions allowed *per server*
+    #   — entries sharing an +api_base+ share one {ThrottledAdapter} pool, since
+    #   the slots are the server's. nil leaves the transports unthrottled
     # @return [ModelCatalog]
     def self.from_llms(llms, permits: nil)
       throttles = {}

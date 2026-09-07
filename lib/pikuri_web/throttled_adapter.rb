@@ -4,54 +4,35 @@ require 'concurrent'
 require 'faraday'
 
 module PikuriWeb
-  # A Faraday adapter that rations concurrent completion requests to one
-  # inference server. Bind a permit count, then hand the class to every
-  # transport pointing at that server:
+  # A Faraday adapter that rations concurrent completions to one inference
+  # server. One pool per server, memoized on the way in:
   #
-  #   adapter = ThrottledAdapter.with_permits(2)
+  #   adapter = pools[transport.api_base] ||= ThrottledAdapter.with_permits(2)
   #   transport = transport.with(faraday_adapter: adapter)
-  #   # two completions in flight at once; the third blocks in #call until one returns
+  #   # two completions in flight against that server; a third blocks in #call
   #
-  # The permits belong to the *class*: two transports on one server share the
-  # server's slots by sharing one class from {.with_permits}, and a second
-  # server gets a second class with its own count.
+  # The permits ride on the *class*, so sharing a pool means sharing one
+  # {.with_permits} class — which two +[[llm]]+ entries on one box must, since
+  # the slots are the server's. Only +/chat/completions+ pays a permit;
+  # everything else on the connection passes straight through.
   #
-  # **Why not a constructor argument** — the obvious shape, and unreachable.
-  # Faraday would allow it (+RackBuilder::Handler#build+ is
-  # +klass.new(app, *args, **kwargs)+), but nothing between here and there
-  # passes any: ruby_llm builds the adapter as +faraday.adapter(adapter)+, and
-  # pikuri's seam (+ChatTransport#faraday_adapter+ → +config.faraday_adapter=+)
-  # carries a single value. The class object is the only per-server thing that
-  # reaches the instance, so the pool rides on it.
-  #
-  # Only chat completions are rationed. Anything else on the connection passes
-  # straight through: the point is the model's generation slot, not the socket.
+  # Why the throttle lives here rather than in the turn executor or in
+  # +Pikuri::Agent+, and why the pool cannot arrive through the constructor:
+  # `D_throttle_at_the_request`.
   #
   # == Implementation details
   #
-  # A permit is held across the whole HTTP request, streaming included —
-  # ruby_llm streams through Faraday's +on_data+, which net_http drives from
-  # inside the request, so +#call+ spans the generation rather than returning at
-  # the first byte. That is the property the whole design rests on; a transport
-  # that ever streams some other way would silently release the server early.
+  # Two properties hold this up, and breaking either is quiet.
   #
-  # **Not replaceable by the turn executor's pool size.** That caps concurrent
-  # *turns*, and a turn holds its slot across the whole +run_loop+ — tool
-  # execution included — so a single slot leaves the server idle for the length
-  # of a +web_search+ while nothing else may talk to it. A permit is held only
-  # while the server is actually working (`D_throttle_at_the_request`).
+  # **A permit spans the whole response, streamed or not** — ruby_llm streams
+  # through Faraday's +on_data+, which net_http drives from inside the request.
+  # A transport streaming some other way would hand the server back at the first
+  # byte and gate nothing.
   #
-  # The scope is one request, which is what makes nesting safe: a sub-agent's
-  # completion is a separate +#call+, made while its parent's has already
-  # returned its permit. There is nowhere to hoist the acquire to, so the
-  # parent-waits-for-its-child deadlock a coarser scope invites cannot be
-  # written here.
-  #
-  # Waiting is not interruptible and the queue is not FIFO
-  # (+Concurrent::Semaphore+ makes no fairness guarantee). Both are accepted:
-  # cancellation is a tool-boundary stop that does not reach a completion
-  # anyway, and starvation across a handful of conversations on one desktop is
-  # not a real risk.
+  # **The scope is exactly one request**, which is what keeps nesting safe: a
+  # sub-agent's completion is a separate +#call+, made after its parent's has
+  # returned its permit. Widening the acquire would deadlock a parent against
+  # its own child — there is nowhere here to widen it to, and that is the point.
   #
   # Thread-safe.
   class ThrottledAdapter < Faraday::Adapter::NetHttp
@@ -85,6 +66,9 @@ module PikuriWeb
         end
       end
 
+      # Names the permit count, so a log line or a thread dump says which pool
+      # this is rather than +#<Class:0x…>+. {.to_s} follows, for interpolation.
+      #
       # @return [String]
       def inspect = permits ? "#{ThrottledAdapter.name}(permits: #{permits})" : super
 
@@ -93,6 +77,10 @@ module PikuriWeb
     end
 
     # Run the request, holding a permit for its duration when it is a completion.
+    #
+    # Blocks until a permit frees, with no timeout and no cancellation, and the
+    # wait order is whatever +Concurrent::Semaphore+ gives — so a caller may
+    # wait as long as everything ahead of it takes.
     #
     # @param env [Faraday::Env] the request being sent
     # @return [Faraday::Response]
