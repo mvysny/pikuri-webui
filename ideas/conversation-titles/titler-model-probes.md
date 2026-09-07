@@ -176,6 +176,81 @@ long-lived streaming connections better?`, a fenced Postgres query with `why is 
 `Plan a 6-day trip to Kyoto in April. I want temples and good food, and I'd rather avoid the worst
 of the crowds.`
 
+## Run 3: there *is* a channel — `ChatTransport#faraday_adapter`
+
+Run 2 concluded the fork closes on a pikuri feature request. That was wrong: pikuri 0.1.0 already
+ships a generic HTTP seam, and it carries this fine.
+
+`ChatTransport` has a `faraday_adapter` field, documented as "a generic HTTP seam — inject a VCR /
+logging / *scripted-fake* adapter without touching the global `RubyLLM.config`", installed onto the
+agent's per-chat `RubyLLM::Context` at `agent.rb:785`. In `RubyLLM::Connection#setup_middleware`
+(`connection.rb:116`) the order is `faraday.request :json` **then** `faraday.adapter(...)` — so by
+the time an adapter sees `env.body` it is already a JSON *string*, and an adapter can parse, merge
+and re-serialize it:
+
+```ruby
+class ParamsInjectingAdapter < Faraday::Adapter::NetHttp
+  EXTRA = { 'chat_template_kwargs' => { 'enable_thinking' => false } }.freeze
+
+  def call(env)
+    if env.body.is_a?(String) && env.url.path.to_s.end_with?('/chat/completions')
+      env.body = JSON.generate(JSON.parse(env.body).merge(EXTRA))
+    end
+    super
+  end
+end
+```
+
+Installed with `transport.with(faraday_adapter: ParamsInjectingAdapter)`. Measured through a real
+`Pikuri::Agent` (no tools, `StepLimit.new(max: 1)`, `streaming: false`), same hardened prompt, same
+`sinatra-roda` opener, two runs:
+
+| | with adapter | without |
+|---|---|---|
+| run A | 1.3 s — `Sinatra vs Roda for SSE Heavy Apps` | 39.6 s — `Sinatra vs Roda for SSE` |
+| run B | 0.5 s — `Sinatra vs Roda for SSE Apps` | 56.6 s — `Sinatra vs Roda for SSE Apps` |
+
+No `Content-Length` fixup is needed — net_http recomputes it. The path guard matters: the same
+connection also serves {ContextWindowDetector}'s `/props` probe, which must pass through untouched.
+
+What it costs, stated honestly:
+
+- **A stretch of the field's documented intent.** Its worked use is `Testing.fake_transport`. Using
+  it in production to rewrite request bodies is within the contract but not what the rdoc pictures.
+- **A llama.cpp/Qwen-specific param in this repo**, which is the thing the scope rule warns about —
+  but behind one named 8-line class on one transport, not transport ownership. `Agent#build_context`
+  and `openai_use_system_role` stay pikuri's.
+- **Coupling to ruby_llm's middleware order.** If `:json` ever moves after the adapter, `env.body` is
+  a Hash and the guard skips silently — *slow titles, not broken ones*. Worth a spec that calls the
+  adapter with a fake env and asserts the merged body, since an end-to-end assertion can't stack a
+  second adapter.
+- **It is per-transport, which is the safety property.** Install it on the titler's transport only;
+  the conversation agents never see it. On a non-llama.cpp server the field is either ignored (slow
+  titles) or 400s (a failed title, which the design already requires to be non-fatal).
+
+## The server-side alternative: llama.cpp has the knobs too
+
+If the adapter is judged too clever, the operator can make thinking-off a property of the *server*
+and pikuri-web needs no code at all — just a second `[[llm]]` entry. `llama-server` flags:
+
+| flag | meaning |
+|---|---|
+| `--reasoning-budget N` | "token budget for thinking: -1 for unrestricted, **0 for immediate end**" |
+| `--reasoning on\|off\|auto` | "use reasoning/thinking in the chat" (default `auto`, detect from template) |
+| `--chat-template-kwargs STRING` | the request field's CLI twin, "must be a valid json object string" |
+| `--reasoning-format none\|deepseek` | where thoughts land (`content` vs `reasoning_content`) |
+
+The router already proves it can define two aliases over one GGUF — `unsloth/Qwen3-Coder-Next` and
+`unsloth/Qwen3-Coder-Next-GGUF:Q4_K_M` are the same `hf-repo` under different presets. So a
+`qwen3.6-nothink` preset with `reasoning-budget = 0` and a small `ctx-size` is a few lines of router
+config.
+
+**The catch is VRAM**: each alias is its own `llama-server` process, so this is a second full copy of
+the 35B's weights (~20 GB at Q4_K_M), not a second view of the resident one. That is the whole
+argument against it. Worth it only on a box with room to spare — in which case it is strictly
+cleaner than the adapter: declarative, operator-visible, no ruby_llm coupling, no Qwen-specific
+string in our repo.
+
 ## Other models on the server
 
 Unchanged from run 1. Nothing else there is a titler candidate: the remaining entries are two

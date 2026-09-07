@@ -63,9 +63,10 @@ Consequences for the implementation, all cheap:
 - **Strip a leading `</think>`.** Run 1 saw the artifact on every thinking-off response; run 2 could
   not reproduce it in ~16 calls. Keep the strip as a one-line backstop — the server is not pinned.
 
-## The fork: thinking must be off, and pikuri has no channel for it
+## The fork: thinking must be off — and the channel was there all along
 
-Still the blocking decision — but run 2 narrowed five options to one. Qwen 3.6 thinks *hard* about
+**Closed.** Run 2 narrowed five options to a pikuri feature request; run 3 found the channel already
+shipped, so nothing here blocks implementation any more. Qwen 3.6 thinks *hard* about
 titles: 800–1500 completion tokens, 30–80 s per title on the local 35B MoE, and the variance between
 runs is itself large. Thinking off is ~10 tokens and ~1 s. Two orders of magnitude, and it decides
 whether the retro-sweep below is viable at all.
@@ -96,23 +97,37 @@ channel — no `params:`, no thinking knob, and its `@chat` has no reader. Where
   The assistant-prefill variant is dead in a more interesting way: llama.cpp answers
   `Assistant response prefill is incompatible with enable_thinking` — prefill is available only once
   thinking is *already* off, so it can never be the thing that turns it off.
-- **A feature request to pikuri — now the recommendation.** An extra-params channel on
-  `ChatTransport`, or an explicit thinking knob. It was already the right long-term home (a titler is
-  exactly the sub-agent case where reasoning is waste); run 2 removed every way around it. Cost
-  unchanged: it blocks this on a pikuri release, and the gems are pinned to one minor
-  (`D_released_pikuri_gems`). Worth noting the ask is *general* — `enable_thinking` is not
-  Qwen-specific plumbing once it is spelled as a params passthrough.
-- **Raw `RubyLLM::Chat` off the transport's fields.** The escape hatch if the release wait is
-  unacceptable. Fast and certain, but it means this project owning LLM transport wiring — against
-  "All LLM transport … that's all pikuri. We own the web shell only." Also makes a llama.cpp/Qwen
-  param ours, and `Agent#build_context` is ~10 lines we would have to replicate,
-  `openai_use_system_role = true` included.
+- **`ChatTransport#faraday_adapter` — the answer, and it already exists.** Run 2 said pikuri has no
+  channel. It has one: `faraday_adapter` is documented as "a generic HTTP seam", installed onto the
+  agent's per-chat `RubyLLM::Context`, and ruby_llm runs `faraday.request :json` *before* the
+  adapter — so an 8-line `Faraday::Adapter::NetHttp` subclass can merge `chat_template_kwargs` into
+  the already-serialized body. **Measured end-to-end through a real `Pikuri::Agent`: 0.5–1.3 s with
+  it, 40–57 s without.** No pikuri release, no second model, no VRAM, no config knob. Code and the
+  four costs (intent stretch, a Qwen-specific string in our repo, coupling to ruby_llm's middleware
+  order, per-transport-only) are in `titler-model-probes.md`. The failure mode of every one of those
+  costs is *slow titles*, never wrong ones, which is what makes it acceptable here.
+- **Server-side `--reasoning-budget 0`, no code at all.** `llama-server` has the knobs
+  (`--reasoning-budget 0`, `--reasoning off`, `--chat-template-kwargs`), and the router can alias one
+  GGUF twice, so thinking-off becomes a property of a connection and the titler is just a second
+  `[[llm]]`. Strictly cleaner than the adapter — declarative, operator-visible, nothing
+  Qwen-specific in our repo. Costs a second full copy of the 35B's weights in VRAM (~20 GB), because
+  each alias is its own process. The right choice on a box with room; the adapter is the choice on
+  this one.
+- **A feature request to pikuri — still the right long-term home**, now demoted to a nicety rather
+  than a blocker. An explicit extra-params channel on `ChatTransport` would retire the adapter and
+  its middleware-order coupling; the ask is *general* (`enable_thinking` is not Qwen-specific
+  plumbing once spelled as a params passthrough). No longer blocks anything, so it does not collide
+  with the one-minor pin (`D_released_pikuri_gems`).
+- **Raw `RubyLLM::Chat` off the transport's fields.** Now pointless — the adapter reaches the same
+  wire format without this project owning LLM transport wiring, and without replicating
+  `Agent#build_context` (~10 lines, `openai_use_system_role = true` included).
 - **Live with it.** Unchanged and still bad: fire-and-forget means a late title is cosmetic, but 60 s
   of inference-server occupancy contends with the user's actual answer — on a `--parallel 1` local
   server the user's own turn stalls behind a title. Fatal for the sweep.
 
-**So the fork closes on the param channel, not on the model.** Nothing here is worth loading a second
-model for.
+**So the fork closes on a param channel, not on the model — and the channel is `faraday_adapter`, in
+the gem we already depend on.** Nothing here is worth loading a second model for, and nothing here
+waits on a pikuri release. The remaining work is the *Plumbing* section below.
 
 ## Retrospective titling
 
@@ -152,7 +167,9 @@ mean the feature isn't only for new conversations.
 - **Refreshing the sidebar is free.** `broadcaster.broadcast(event: :conversations, data: {})`
   already exists and every tab re-fetches the list through `app.js`'s one `refreshSidebar()`.
 - **The seam.** A titler holding a `Pikuri::Agent` is pikuri-side, like `AgentRunner`; the title
-  crosses as a `String`. Add it to `D_pikuri_free_core`'s "pikuri types used freely" list.
+  crosses as a `String`. Add it to `D_pikuri_free_core`'s "pikuri types used freely" list — the
+  thinking-off Faraday adapter is pikuri-side too, and belongs beside the titler rather than
+  anywhere a conversation transport could pick it up by accident.
 
 ## Manual rename
 
