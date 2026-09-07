@@ -118,21 +118,65 @@ Mostly good, and it is a real change to a shipped decision rather than an additi
   can slip into the gap while a real turn is running a tool — which is the outcome that discussion
   actually wanted and could not reach.
 
-## Prove it first, without touching pikuri
+## The Faraday adapter may be the answer, not just the spike
 
 `ChatTransport#faraday_adapter` already lets this project wrap the HTTP call
-(`ideas/conversation-titles/titler-model-probes.md` — the thinking-off adapter uses it). A
-throttling adapter would `acquire` around `super` and release in an `ensure`. Zero upstream change,
-runnable this week.
+(`ideas/conversation-titles/titler-model-probes.md` — the thinking-off adapter uses it). A throttling
+adapter would `acquire` around `super` and release in an `ensure`. Zero upstream change.
 
-That would give real numbers for the upstream ask: how much wall-clock does filling the tool-call
-gaps actually buy on a `--parallel 1` box, with a couple of conversations and a titler? If the answer
-is "not much", the refactor is not worth anyone's time. If it is "a lot", the pikuri issue writes
-itself and comes with evidence.
+### Streaming: measured, and it holds
 
-Caveats to the spike: HTTP granularity is the right granularity by luck rather than design; the
-adapter cannot see `Cancellable`, so a parked request is uninterruptible; and it is more behaviour in
-an adapter than the field's rdoc pictures. Fine for measurement, not for shipping.
+The obvious worry is that an SSE response returns from the adapter immediately and streams
+afterwards, in which case the permit would be released while the server was still generating and the
+whole thing would be worthless. **It does not.** ruby_llm streams through Faraday's
+`req.options.on_data` (`ruby_llm-1.16.0/lib/ruby_llm/streaming.rb:18`), which net_http drives from
+inside `Net::HTTP#request` — so the adapter's `call` spans the entire generation.
+
+Measured against the 35B, streaming on, a 150-line completion
+(`ideas/throttle-inference-not-turns/stream_probe.rb`, re-runnable):
+
+```
+adapter #call spanned : 33.69s
+run_loop total        : 33.69s
+delta events          : 491
+first delta           :  9.93s after adapter entered   (prompt processing)
+last delta            : 33.64s after adapter entered
+deltas INSIDE the adapter window: 491/491
+```
+
+All 491 deltas inside the window, and the adapter call is essentially the whole turn's LLM time. A
+permit held across `super` is held for exactly as long as the server is busy — which is the
+definition we want.
+
+### And the scope problem solves itself
+
+The deadlock hazard above — a parent holding a permit while a nested sub-agent waits for one — is a
+hazard *because* someone could hoist the acquire to a step or a loop. In an adapter **there is
+nowhere to hoist it to**: the scope is one HTTP request, which is precisely "one `complete` call".
+A sub-agent's request is a different adapter invocation, made while the parent's has already
+returned. The invariant that needed a regression test in the pikuri version is structural here.
+
+That is a genuine argument for the adapter as the *design*, not merely as the cheap experiment.
+
+### What it still cannot do
+
+- **Interruptible waiting.** The adapter cannot see `Cancellable`, so a request parked on a permit
+  cannot be cancelled — it acquires, then discovers the turn is dead. Note that pikuri's cancel is a
+  tool-boundary stop and does not interrupt a completion today either, so this may be a smaller gap
+  than it looks.
+- **Priority.** No way to let a user's turn jump a queue of titles. Same as the pikuri version.
+- **It is host-side, so every host reimplements it.** pikuri-tui gets nothing. That is the standing
+  argument for the upstream version even if this ships first.
+- **Verify the `/props` probe's path.** `ContextWindowDetector` appears to build its own Faraday
+  connection rather than the chat's, so it likely bypasses the adapter and needs no permit — which
+  is what we want. Confirm before relying on it. (Moot when the transport carries an explicit
+  `context_window`, which suppresses the probe entirely — `agent.rb:706`.)
+
+### Still the right way to get evidence
+
+Whether or not it ships, it answers the question the upstream ask needs: how much wall clock does
+filling the tool-call gaps actually buy on a `--parallel 1` box with two conversations and a titler?
+If the answer is "not much", nobody should refactor `Pikuri::Agent` for it.
 
 ## Graduation
 
