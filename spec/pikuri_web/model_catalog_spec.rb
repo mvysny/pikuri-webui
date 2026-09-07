@@ -36,6 +36,30 @@ RSpec.describe PikuriWeb::ModelCatalog do
       one = described_class.from_llms([llm('local', server: 'http://localhost:8080/v1')])
       assert_equal 'http://localhost:8080/v1', one.primary.transport.api_base
     end
+
+    it 'leaves transports unthrottled without permits' do
+      assert_nil catalog.find('local').transport.faraday_adapter
+    end
+
+    # The slots belong to the server, so two models on one box must not each
+    # get the full count — that would send 2N completions to a server told to
+    # expect N.
+    it 'shares one permit pool between connections on the same server' do
+      throttled = described_class.from_llms(
+        [llm('big', server: 'http://localhost:8080', model: 'qwen3.6'),
+         llm('small', server: 'http://localhost:8080', model: 'qwen3-4b'),
+         llm('elsewhere', server: 'http://remote:8080')],
+        permits: 2
+      )
+
+      big = throttled.find('big').transport.faraday_adapter
+      small = throttled.find('small').transport.faraday_adapter
+      elsewhere = throttled.find('elsewhere').transport.faraday_adapter
+
+      assert_same big.semaphore, small.semaphore
+      refute_same big.semaphore, elsewhere.semaphore
+      assert_equal 2, big.permits
+    end
   end
 
   context '#find' do

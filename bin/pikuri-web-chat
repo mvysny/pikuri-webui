@@ -51,8 +51,9 @@ parser = OptionParser.new do |opts|
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
   opts.on('--turns N', Integer,
-          "Conversations allowed to run a turn at once (default: #{turns}; " \
-          "match your inference server's parallel slots)") { |v| turns = v }
+          "Completions in flight per inference server (default: #{turns}; " \
+          "match your server's parallel slots). Twice this many conversations " \
+          'may hold a turn, so one waiting on a tool does not idle the server.') { |v| turns = v }
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -92,7 +93,7 @@ end
 # Every [[llm]], as transports. A conversation is minted on the one it saved
 # and can be moved to any of the others (/model); the first is where one with
 # nothing saved starts.
-catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
+catalog = PikuriWeb::ModelCatalog.from_llms(config.llms, permits: turns)
 
 Pikuri::Extractors::PDF.register
 
@@ -123,20 +124,26 @@ system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
 system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
 # Turns run here rather than on a Sinatra request thread, and every
-# conversation shares this one executor. The pool size is an *admission gate*,
-# not a correctness device: it caps how many conversations can be mid-turn, so
-# turns don't outnumber the inference server's parallel slots. Match it to
-# llama.cpp's --parallel; the default of 1 suits a server serving one.
+# conversation shares this one executor.
 #
-# Nothing in this process needs it to be 1. Per-conversation state is
-# single-writer whatever this number is, because the partition is per
-# conversation and a conversation admits one turn at a time (AgentRunner#submit
-# injects rather than starting a second) — two turns are two transcripts, two
-# listeners, two agents, and two disjoint conversation folders. The tool
-# constants below are shared across every agent by pikuri's own contract, not
-# by this number. What *does* scale with it is load on the inference server,
-# and on the process-wide search limiter noted at the tool wiring.
-turn_executor = Concurrent::FixedThreadPool.new(turns)
+# Deliberately *twice* the server's slot count, because this pool no longer
+# rations the server — ThrottledAdapter does, per completion request
+# (`D_throttle_at_the_request`). A turn holds a thread here across its whole
+# run_loop, tool execution included, so sizing this at the slot count would
+# leave the server idle for the length of a web_search with nobody able to use
+# it. At 2N, a turn blocked in a tool has released its permit and a second
+# conversation can be mid-completion. It stays bounded rather than unbounded so
+# a runaway cannot spawn threads without limit; nothing breaks at a larger
+# factor, it just stops buying anything.
+#
+# Nothing in this process needs either number to be 1. Per-conversation state is
+# single-writer at any size, because the partition is per conversation and a
+# conversation admits one turn at a time (AgentRunner#submit injects rather than
+# starting a second) — two turns are two transcripts, two listeners, two agents,
+# and two disjoint conversation folders. The tool constants below are shared
+# across every agent by pikuri's own contract, not by this number. What scales
+# with it is the process-wide search limiter noted at the tool wiring.
+turn_executor = Concurrent::FixedThreadPool.new(turns * 2)
 
 # The serialization domain (`D_global_monitor`): route bodies and the turn
 # job's bookkeeping brackets run as tasks on this one lock. Minted here and

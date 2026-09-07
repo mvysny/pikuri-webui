@@ -52,21 +52,31 @@ module PikuriWeb
     # per-chat +RubyLLM::Context+ — so no process-global +RubyLLM.configure+ is
     # involved and two conversations on two servers coexist.
     #
+    # With +permits+, each transport also carries a {ThrottledAdapter} rationing
+    # concurrent completions. The pool is per +api_base+, not per +[[llm]]+:
+    # two entries running different models on one server share that server's
+    # slots, because the slots are the server's (`D_throttle_at_the_request`).
+    #
     # @param llms [Array<Config::Llm>] every configured connection, in
     #   declaration order
+    # @param permits [Integer, nil] concurrent completions allowed per server;
+    #   nil leaves the transports unthrottled
     # @return [ModelCatalog]
-    def self.from_llms(llms)
+    def self.from_llms(llms, permits: nil)
+      throttles = {}
       new(choices: llms.map do |llm|
         key = llm.api_key.to_s.strip
-        Choice.new(
-          name: llm.name,
-          transport: Pikuri::Agent::ChatTransport.from_openai_server(
-            server: llm.server,
-            model: llm.model,
-            api_key: key.empty? ? 'not-needed' : key,
-            context_window: llm.context_window
-          )
+        transport = Pikuri::Agent::ChatTransport.from_openai_server(
+          server: llm.server,
+          model: llm.model,
+          api_key: key.empty? ? 'not-needed' : key,
+          context_window: llm.context_window
         )
+        if permits
+          adapter = throttles[transport.api_base] ||= ThrottledAdapter.with_permits(permits)
+          transport = transport.with(faraday_adapter: adapter)
+        end
+        Choice.new(name: llm.name, transport: transport)
       end)
     end
 

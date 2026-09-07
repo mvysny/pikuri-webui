@@ -53,6 +53,106 @@ replacement fresh.
 
 ---
 
+## D_throttle_at_the_request — The server's slots are rationed per completion, by a Faraday adapter, not by the turn pool
+
+**Status:** Accepted, shipped as {ThrottledAdapter}, one permit pool per
+`api_base` minted in `ModelCatalog.from_llms(permits:)`. `--turns N` is now
+N permits; the turn executor is `N * 2`.
+
+**Context.** `--turns` was the executor's pool size, and a turn holds its
+thread across the whole `run_loop` — tool execution included. So a turn off
+running a `web_search` for five seconds kept the slot while the inference
+server sat idle, and at the default of 1 nothing else in the process could
+talk to it. The cap was a proxy for "requests the server is handling", and
+the proxy leaked exactly when a tool ran.
+
+**Decision.** Ration the thing being contended: hold a permit for the
+length of one HTTP completion request and give it back. `--turns` keeps its
+documented meaning — match it to llama.cpp's `--parallel` — and becomes
+literally true instead of approximately.
+
+The pool is keyed on `api_base`, **not** on the `[[llm]]` entry: two entries
+running different models on one box share that box's slots, because the
+slots belong to the server. Two servers get two pools.
+
+The executor is sized `2N` so a turn blocked in a tool has somewhere to
+wait without occupying a permit — that is the whole point, and at `1N` the
+change would buy nothing. Bounded rather than unbounded so a runaway cannot
+spawn threads without limit; a larger factor is harmless and buys nothing.
+
+**Measured** against a local llama.cpp, four identical completions:
+
+| permits | total | completions land at |
+|---|---|---|
+| 1 | 46.6 s | 11.6, 23.2, 34.9, 46.6 s |
+| 4 | 26.0 s | 25.9, 26.0, 26.0, 26.0 s |
+
+Evenly staggered at 1 (serialized), simultaneous at 4.
+
+**Why a Faraday adapter and not `Pikuri::Agent`.** The agent loop is
+pikuri's (`AGENTS.md`, the reuse rule), so the principled home for a
+throttle is a control on the loop — and that remains the better long-term
+answer, because every other pikuri host has this problem too. Rejected *for
+now* on two grounds: it blocks on a pikuri release against the one-minor
+pin (`D_released_pikuri_gems`), and the adapter turns out to have a
+property the upstream version would have to be careful to keep.
+
+**That property: an adapter cannot get the scope wrong.** A permit must
+cover exactly one completion. Widen it to a step or a whole `run_loop` and a
+parent holding the only permit deadlocks against a sub-agent waiting for
+one — the synthesizer runs from the `StepLimit::Exceeded` rescue, and
+sub-agent tools run between completions, so both are *outside* the
+completion and would wait forever. In an adapter there is nowhere to hoist
+the acquire to: the scope is one HTTP request, and a nested agent's request
+is a separate `#call` made after the parent's returned. The invariant that
+would need a regression test upstream is structural here.
+
+**Verified: the permit spans a streamed response.** The design would be
+worthless if `#call` returned at the first byte and the tokens arrived
+afterwards, since the permit would be released while the server was still
+generating. It does not — ruby_llm streams through Faraday's `on_data`,
+which net_http drives from inside the request. Measured on a 150-line
+streamed completion: the adapter spanned 33.69 s, `run_loop` totalled
+33.69 s, and all 491 delta events landed inside the adapter's window. A
+transport that ever streamed some other way would silently break this.
+
+**Rejected: a constructor argument for the semaphore.** The obvious shape,
+and unreachable. Faraday would allow it — `RackBuilder::Handler#build` is
+`klass.new(app, *args, **kwargs)` — but nothing between here and there
+passes any: ruby_llm builds the adapter as `faraday.adapter(adapter)`, and
+pikuri's seam (`ChatTransport#faraday_adapter` → `config.faraday_adapter=`)
+carries a single value. The class object is the only per-server thing that
+reaches the instance, so `.with_permits` returns a subclass holding the
+pool in a class-level ivar.
+
+**Rejected: a process-global registry keyed by server URL.** Would let one
+named class serve every server and read nicer in a backtrace. Not done: it
+is process-global mutable state, which `D_global_monitor` says must either
+join the domain or argue for its own lock — and this one cannot join the
+domain, because a task may not block and acquiring a permit is precisely
+blocking. A subclass per server has no global state to argue about.
+
+**Rejected: making the executor unbounded instead.** Removes the
+head-of-line problem without a throttle, but then nothing caps requests to
+the server at all, which is the one thing the number was for.
+
+**Consequences.**
+
+- **Waiting is not interruptible and the queue is not FIFO.**
+  `Concurrent::Semaphore` promises no fairness. Accepted: cancellation is a
+  tool-boundary stop that does not reach a completion today either, and
+  starvation across a few conversations on one desktop is not a real risk.
+  An upstream `Control::Throttle` could fix both, which is the remaining
+  argument for building it.
+- **Only `/chat/completions` pays a permit.** Anything else on the
+  connection passes through — the contended resource is the model's
+  generation slot, not the socket. `ContextWindowDetector`'s `/props` probe
+  builds its own connection and never sees the adapter.
+- **`:queued` now means two things**, both honest: no executor thread, or
+  no permit. The status bar does not distinguish them and does not need to.
+- The `faraday_adapter` seam is now load-bearing in production, not just in
+  `Pikuri::Testing`. A pikuri release that narrowed it would break this.
+
 ## D_both_forms_in_the_block — A tool block carries the short line and the raw one both, and CSS picks
 
 **Status:** Accepted, shipped. {ToolLine} renders both,
@@ -1406,8 +1506,15 @@ tabs alone; server-side last-viewed is this decision reversed.
 
 ## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count
 
-**Status:** Accepted, shipped as a `Concurrent::FixedThreadPool` sized
-by `--turns` (default 1), injected into every {AgentRunner}.
+**Status:** **Superseded in part by `D_throttle_at_the_request`** — the
+half that made the pool size the server's load cap. The executor itself
+stands: one shared `Concurrent::FixedThreadPool` injected into every
+{AgentRunner}, sized `--turns * 2`, still the admission gate that reports
+`:queued`. What the server may run at once is now {ThrottledAdapter}'s
+permit count, so the paragraph below beginning "The pool size caps
+concurrent turns" describes a job this pool no longer has. Everything here
+about single-writer safety living in the partition rather than the number
+is untouched, and load-bearing for the `2N` sizing.
 
 **Context.** A turn blocks on the LLM for minutes, so it cannot run on a
 Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations

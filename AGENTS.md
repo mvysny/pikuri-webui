@@ -172,12 +172,20 @@ the alternatives that were rejected, live one entry per slug in
   `--bind` defaults to 127.0.0.1; anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
-- **Turns run on one shared executor, and its pool size is a load cap, not
-  a correctness device.** Sending never refuses for load — a turn with no
-  free slot is *queued*, which the status bar says out loud. Match
-  `--turns` to llama.cpp's `--parallel`. Single-writer safety comes from
-  the partition, so it holds at any pool size; don't rebuild a correctness
-  argument on that number. See `D_serial_turn_executor`.
+- **The server is rationed per *request*, not per turn.** `--turns N` is N
+  permits in {ThrottledAdapter}, taken for the length of one completion
+  and given back — so a turn off running a tool is not holding a slot the
+  server could be using. The pool is per `api_base`, because the slots are
+  the server's: two `[[llm]]` entries on one box share one pool. The turn
+  executor is sized `2N` and is now only a thread bound; never re-derive
+  the server's load cap from it. See `D_throttle_at_the_request`.
+
+- **Turns run on one shared executor, and its pool size is not a
+  correctness device.** Sending never refuses for load — a turn with no
+  free slot is *queued*, which the status bar says out loud. Single-writer
+  safety comes from the partition, so it holds at any pool size; don't
+  rebuild a correctness argument on that number. See
+  `D_serial_turn_executor`.
 
 - **The mascot is the library's; the plate is ours.** `public/images/kuri.svg`
   is a **verbatim** copy of `../pikuri/assets/kuri.svg` (`D_kuri_mascot`)
@@ -300,7 +308,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   takes the history and writes both halves), lists what is saved, deletes
   a folder.
 - `lib/pikuri_web/model_catalog.rb` — `PikuriWeb::ModelCatalog`, the
-  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport.
+  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport;
+  mints one throttle per server and hangs it on each.
+- `lib/pikuri_web/throttled_adapter.rb` — `PikuriWeb::ThrottledAdapter`,
+  a Faraday adapter holding a permit for the length of one completion.
 - `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
   description for one palette row, and the `CATALOG` a page is served a
   config-gated subset of.

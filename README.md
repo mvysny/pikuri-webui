@@ -73,18 +73,25 @@ Ctrl+C stops it. Open browser tabs don't delay the exit.
 
 ### How many conversations can think at once
 
-One, by default. Send in a second conversation while the first is working
-and the message is accepted and *queued* — never refused — and that
-conversation says so until its turn starts.
-
-`--turns N` raises the cap. It is there to match your inference server:
-one turn per parallel slot, so `--turns 4` against llama.cpp started with
-`--parallel 4`. Setting it higher than the server has slots doesn't buy
-throughput, it just moves the queue from this process into that one.
+`--turns N` is the number of **completions in flight against your
+inference server** — match it to your server's parallel slots, so
+`--turns 4` against llama.cpp started with `--parallel 4`. The default is
+one. Setting it higher than the server has slots doesn't buy throughput,
+it just moves the queue from this process into that one.
 
 ```sh
 bin/pikuri-web-chat --turns 4
 ```
+
+Send in a second conversation while the first is working and the message
+is accepted and *queued* — never refused — and that conversation says so
+until its turn starts.
+
+Twice `N` conversations may hold a turn, because a turn is not only
+inference: it also runs tools. A conversation waiting on a web search is
+not using the server, so its slot goes to somebody who is. That is why
+the cap is on the request rather than on the turn, and it means a fast
+second conversation can answer while a first is off fetching a page.
 
 Note that web searches still serialize across conversations however high
 you set this — the rate limiter that keeps you off provider blocklists is
