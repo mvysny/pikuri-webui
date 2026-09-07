@@ -41,6 +41,10 @@ module PikuriWeb
   #   content (deltas are preview-only). Thinking gets no special
   #   renderer — the +thinking+ block kind is the CSS hook that does the
   #   TUI's grayscale job.
+  # - +ToolCall+ / +ToolResult+ each render as one plain-text line: the name
+  #   with its inspected arguments, then the capped observation. Both are
+  #   attacker-influenced and neither is Markdown, so both go through
+  #   {#neutralize} before the HTML escape.
   # - +SystemInjected+ (reference text the host injected — a loaded skill,
   #   recalled memory) collapses to a one-line +notice+; see
   #   {#render_system_injection}.
@@ -122,8 +126,8 @@ module PikuriWeb
       in Pikuri::Agent::Event::ToolCall(name:, arguments:)
         flush_assistant(:wipe)
         release_thinking
-        args = arguments.map { |k, v| "#{k}=#{v.inspect}" }.join(', ')
-        add_block(:tool_call, MarkdownRenderer.escape("→ #{name}(#{args})"))
+        args = arguments.map { |k, v| "#{k}=#{neutralize(v.inspect)}" }.join(', ')
+        add_block(:tool_call, MarkdownRenderer.escape("→ #{neutralize(name)}(#{args})"))
       in Pikuri::Agent::Event::ToolResult(content:)
         flush_assistant(:wipe)
         release_thinking
@@ -270,19 +274,44 @@ module PikuriWeb
       @thinking = nil
     end
 
-    # Flatten whitespace and cap to {MAX_TOOL_RESULT_CHARS}. Long results
-    # (rendered HTML, PDF text) would otherwise drown the transcript; the
-    # byte-count suffix distinguishes "tool returned exactly this" from
-    # "tool returned much more."
+    # Neutralize, flatten whitespace and cap to {MAX_TOOL_RESULT_CHARS}. Long
+    # results (rendered HTML, PDF text) would otherwise drown the transcript;
+    # the byte-count suffix distinguishes "tool returned exactly this" from
+    # "tool returned much more" and counts the *original* bytes, before
+    # neutralizing grew any of them.
+    #
+    # {#neutralize} runs first, so the cap measures what the browser will
+    # show and cannot cut an escape in half. One visible consequence: a tab
+    # survives the flatten as a literal +\t+ rather than collapsing to a
+    # space.
     #
     # @param content [String] tool observation
     # @return [String] single-line display form, possibly truncated
     def truncate_tool_result(content)
       original_bytes = content.to_s.bytesize
-      flattened = content.to_s.gsub(/\s+/, ' ').strip
+      flattened = neutralize(content).gsub(/\s+/, ' ').strip
       return flattened if flattened.length <= MAX_TOOL_RESULT_CHARS
 
       "#{flattened[0, MAX_TOOL_RESULT_CHARS]}… (#{original_bytes} bytes total)"
     end
+
+    # Make attacker-influenced text safe to *read* — what HTML-escaping, which
+    # only makes it safe to *place*, does not do:
+    #
+    #   neutralize("safe\u{202e}gnp.exe")   # => 'safe\u{202e}gnp.exe'
+    #
+    # A browser honors that bidi override exactly as a terminal does: raw, the
+    # filename *displays* as +safeexe.png+ while really ending in +.exe+. So
+    # both passes run, this one first, then {MarkdownRenderer.escape}.
+    # +inspect+ is not a substitute — it escapes the +ESC+ that escaping
+    # already renders inert, and passes bidi, zero-width and homoglyphs
+    # straight through.
+    #
+    # Warnings are dropped: nothing in this shell gates a tool on them, and a
+    # chat transcript has no confirmation prompt to hang them off.
+    #
+    # @param text [String] model-composed or tool-returned text
+    # @return [String] the same text with dangerous codepoints made visible
+    def neutralize(text) = Pikuri::Sanitizer.sanitize(text.to_s).text
   end
 end

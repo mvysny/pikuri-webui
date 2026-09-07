@@ -227,7 +227,11 @@ the alternatives that were rejected, live one entry per slug in
   schema, including sections this host never reads. Anything the file has
   a home for comes from the file and nowhere else — no flag, no `ENV`, no
   project-local overlay — so there is never a precedence rule between an
-  override, the file and a conversation's saved model.
+  override, the file and a conversation's saved model. Schema-completeness
+  is a *standing* obligation, not a one-time port: a config-schema
+  addition in pikuri-tui is a pikuri-web change, and strictness is
+  asymmetric on purpose — strict inside the tables we consume, permissive
+  inside the ones we only carry.
   See `D_schema_complete_config`.
 
 - **`--dev` is Sinatra's development mode, not code reloading** — the
@@ -361,6 +365,14 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   `:tool_result`, `:notice`, `:error`) are the contract between
   SseListener, index.erb and style.css — adding one means touching
   all three.
+- Attacker-influenced text that reaches a block as **plain text** goes
+  through `Pikuri::Sanitizer` *before* `MarkdownRenderer.escape` —
+  escaping stops markup, not a bidi override that reorders a filename or
+  a zero-width character hiding in one, and `inspect` covers only the
+  `ESC` that escaping already made inert. Today that means the tool
+  lines ({SseListener}`#neutralize`). Markdown-rendered prose
+  (`:assistant`, `:thinking`) is the known exemption: sanitizing the
+  source would mangle the Markdown, and kramdown's output is the block.
 - Slash commands are the same shape of contract, in three places:
   {SlashCommand}`::CATALOG` (the palette cannot list what it does not
   hold), the `commands` map `public/js/app.js` hands `composer.js` (the

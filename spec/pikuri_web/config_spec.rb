@@ -285,6 +285,50 @@ describe PikuriWeb::Config do
         assert_equal 1, c.mcp.size
       end
     end
+
+    # The regression this describe existed for and missed: pikuri-tui grew a
+    # [ui] table, this shell raised on the unknown top-level key, and anyone
+    # who had set a density preference in the TUI could not boot the web shell
+    # at all.
+    it 'reads the [ui] density table pikuri-tui writes' do
+      with_dirs do |home, _|
+        write_config(home, <<~TOML)
+          [ui]
+          show_thinking = false
+          tool_lines = "verbose"
+        TOML
+        c = described_class.load(env: env_for(home))
+        refute c.show_thinking
+        assert_equal :verbose, c.tool_lines
+      end
+    end
+
+    it 'defaults the [ui] keys when the table is absent' do
+      c = load_bare
+      assert c.show_thinking
+      assert_equal :short, c.tool_lines
+    end
+
+    # Permissive on purpose: pikuri-tui owns what grows in [ui] and its own
+    # rdoc already names `markdown` as the next key. Raising here would be the
+    # same boot failure with a later date.
+    it 'logs and ignores a [ui] key this shell does not read' do
+      with_dirs do |home, _|
+        write_config(home, "[ui]\nshow_thinking = false\nmarkdown = false\n")
+        c = described_class.load(env: env_for(home))
+        refute c.show_thinking
+      end
+    end
+
+    # Shape-checked, never matched against a copy of the vocabulary — a copy
+    # would reject a legal file the day pikuri-tui adds a third form. The
+    # reader falls back instead, as App does for an unknown `theme` cookie.
+    it 'carries an unrecognized tool_lines form through to its reader' do
+      with_dirs do |home, _|
+        write_config(home, "[ui]\ntool_lines = \"banana\"\n")
+        assert_equal :banana, described_class.load(env: env_for(home)).tool_lines
+      end
+    end
   end
 
   describe 'load logging (PikuriWeb.logger)' do
@@ -433,6 +477,21 @@ describe PikuriWeb::Config do
     it 'rejects a non-boolean sandbox' do
       e = expect_error("[code]\nsandbox = \"yes\"")
       assert_includes e.message, 'true or false'
+    end
+
+    it 'rejects a non-boolean ui.show_thinking' do
+      e = expect_error("[ui]\nshow_thinking = \"yes\"")
+      assert_includes e.message, 'true or false'
+    end
+
+    it 'rejects a non-string ui.tool_lines' do
+      e = expect_error("[ui]\ntool_lines = 3")
+      assert_includes e.message, 'must be a string'
+    end
+
+    it 'rejects [ui] declared as an array of tables' do
+      e = expect_error("[[ui]]\nshow_thinking = false")
+      assert_includes e.message, 'must be a table'
     end
 
     it 'rejects an unknown key in the [search] table' do

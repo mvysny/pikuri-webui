@@ -132,6 +132,47 @@ RSpec.describe PikuriWeb::SseListener do
       assert_includes html, '… (500 bytes total)'
       refute_includes html, 'x' * 300
     end
+
+    # Pikuri::Sanitizer, not just HTML-escaping. A browser honors a bidi
+    # override exactly as a terminal does: raw, this path displays as
+    # "safeexe.png" while really ending in ".exe" — the whole trick.
+    it 'neutralizes a bidi override in a tool argument' do
+      listener.on_event(
+        Pikuri::Agent::Event::ToolCall.new(name: 'read', arguments: { path: "safe‮gnp.exe" })
+      )
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, 'u{202e}'
+      refute_includes html, "‮"
+    end
+
+    # The carve-out that does not port: pikuri-tui leaves the verbose argument
+    # dump to `inspect`, which escapes ESC (already inert once HTML-escaped)
+    # and passes zero-width characters straight through.
+    it 'neutralizes a zero-width character inspect would have passed through' do
+      listener.on_event(
+        Pikuri::Agent::Event::ToolCall.new(name: 'read', arguments: { path: "in​visible" })
+      )
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, 'u{200b}'
+      refute_includes html, "​"
+    end
+
+    it 'neutralizes the tool name as well as its arguments' do
+      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: "ca‭lc", arguments: {}))
+      refute_includes transcript.to_a.fetch(0).html, "‭"
+    end
+
+    it 'neutralizes a tool result' do
+      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: "Deleted‮ txet"))
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, 'u{202e}'
+      refute_includes html, "‮"
+    end
+
+    it 'leaves ordinary tool output alone' do
+      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: 'Results for rails 8: ok (200)'))
+      assert_equal '= Results for rails 8: ok (200)', transcript.to_a.fetch(0).html
+    end
   end
 
   context 'SystemInjected' do

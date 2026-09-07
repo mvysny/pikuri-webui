@@ -22,6 +22,17 @@ module PikuriWeb
   #   brave_key = "BSA…"
   #   engines = ["brave"]
   #
+  # == The +[ui]+ table
+  #
+  #   [ui]
+  #   show_thinking = false     # start with reasoning blocks collapsed
+  #   tool_lines    = "verbose" # start on the raw argument dump
+  #
+  # Transcript density, one table for every pikuri shell because the
+  # preference is per *person* far more than per shell. Parsed and exposed
+  # ({#show_thinking} / {#tool_lines}) but wired to nothing here yet — this
+  # shell renders reasoning and the verbose tool line unconditionally.
+  #
   # == Precedence
   #
   # Lowest to highest: built-in defaults → +/etc/xdg/pikuri/config.toml+
@@ -39,10 +50,11 @@ module PikuriWeb
   # == Implementation details
   #
   # The schema is the *whole* pikuri-shell schema, not the subset this host
-  # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
-  # with nothing wired to them. Trimming it would break the file: pikuri
-  # -tui writes +[code]+ / +[[code.mcp]]+ into the same path, and {.load}
-  # raises on an unknown top-level key.
+  # reads — {#sandbox}, {#confirm}, {#mcp}, {#show_thinking} and
+  # {#tool_lines} are validated and exposed with nothing wired to them.
+  # Trimming it would break the file: pikuri-tui writes +[code]+ /
+  # +[[code.mcp]]+ / +[ui]+ into the same path, and {.load} raises on an
+  # unknown top-level key.
   #
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
@@ -153,6 +165,11 @@ module PikuriWeb
     DEFAULT_SANDBOX = true
     # @return [Boolean] confirm on unless a file says otherwise.
     DEFAULT_CONFIRM = true
+    # @return [Boolean] reasoning blocks are shown unless +[ui]+ says otherwise.
+    DEFAULT_SHOW_THINKING = true
+    # @return [Symbol] the tool-line form to start on. Matches pikuri-tui's
+    #   default so one file means one look in both shells.
+    DEFAULT_TOOL_LINES = :short
 
     # Config file basename and the per-app subdirectory under each XDG
     # config root. Shared verbatim with pikuri-tui — same file.
@@ -198,12 +215,17 @@ module PikuriWeb
       mcp = (code['mcp'] || []).each_with_index.map { |h, i| build_mcp(h, i) }
       check_unique!(mcp.map(&:id), 'code.mcp id')
 
+      ui = merged['ui'] || {}
+      validate_ui!(ui)
+
       new(
-        llms:    llms,
-        search:  build_search(merged['search']),
-        sandbox: pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
-        confirm: pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
-        mcp:     mcp
+        llms:          llms,
+        search:        build_search(merged['search']),
+        sandbox:       pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
+        confirm:       pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
+        mcp:           mcp,
+        show_thinking: pick(ui['show_thinking'], DEFAULT_SHOW_THINKING),
+        tool_lines:    pick(ui['tool_lines']&.to_sym, DEFAULT_TOOL_LINES)
       )
     end
 
@@ -213,12 +235,19 @@ module PikuriWeb
     # @param confirm [Boolean] resolved confirmer switch (parsed, unwired).
     # @param mcp [Array<McpServer>] MCP servers (parsed, unwired; may be
     #   empty).
-    def initialize(llms:, search:, sandbox:, confirm:, mcp:)
+    # @param show_thinking [Boolean] resolved +[ui]+ reasoning-block default
+    #   (parsed, unwired).
+    # @param tool_lines [Symbol] resolved +[ui]+ tool-line form (parsed,
+    #   unwired).
+    def initialize(llms:, search:, sandbox:, confirm:, mcp:,
+                   show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES)
       @llms    = llms.freeze
       @search  = search
       @sandbox = sandbox
       @confirm = confirm
       @mcp     = mcp.freeze
+      @show_thinking = show_thinking
+      @tool_lines    = tool_lines
       freeze
     end
 
@@ -232,6 +261,13 @@ module PikuriWeb
     attr_reader :confirm
     # @return [Array<McpServer>] MCP servers, declaration order.
     attr_reader :mcp
+    # @return [Boolean] whether reasoning blocks start shown (+[ui]+ > default).
+    attr_reader :show_thinking
+    # @return [Symbol] the tool-line form to start on (+[ui]+ > default) —
+    #   whatever the file said, symbolized, so an unrecognized form arrives
+    #   here unresolved. **The reader falls back**, as {App} does for an
+    #   unknown +theme+ cookie; the vocabulary belongs to whoever renders it.
+    attr_reader :tool_lines
 
     # @return [Llm] the boot connection (the first).
     def primary_llm = @llms.first
@@ -302,7 +338,7 @@ module PikuriWeb
     end
 
     def self.validate_top!(merged)
-      unknown = merged.keys - %w[llm search code]
+      unknown = merged.keys - %w[llm search code ui]
       raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
       if merged.key?('llm') && !merged['llm'].is_a?(Array)
         raise Error, '`llm` must be an array of tables (use [[llm]], not [llm])'
@@ -310,9 +346,41 @@ module PikuriWeb
       if merged.key?('search') && !merged['search'].is_a?(Hash)
         raise Error, '`search` must be a table ([search])'
       end
-      return unless merged.key?('code') && !merged['code'].is_a?(Hash)
+      raise Error, '`code` must be a table ([code])' if merged.key?('code') && !merged['code'].is_a?(Hash)
+      return unless merged.key?('ui') && !merged['ui'].is_a?(Hash)
 
-      raise Error, '`code` must be a table ([code])'
+      raise Error, '`ui` must be a table ([ui])'
+    end
+
+    # Validate the +[ui]+ table, deliberately more loosely than its
+    # neighbours: an unknown key is logged and ignored, and +tool_lines+ is
+    # checked for shape but never against a list of forms.
+    #
+    # pikuri-tui owns what grows here — it defines the keys and its own +[ui]+
+    # rdoc already names the next one (+markdown+). Every strict check this
+    # method *doesn't* make is one that would reject a legal file the day the
+    # sibling shell adds a key or a third form, which is the boot failure the
+    # +ui+ entry in {.validate_top!} exists to prevent. Same bargain
+    # +search.engines+ takes; +show_thinking+ is strict because two values
+    # cannot grow.
+    #
+    # @param ui [Hash] the raw +[ui]+ table (+{}+ when the section is absent).
+    # @return [void]
+    # @raise [Error] on a non-boolean +show_thinking+ or a non-string
+    #   +tool_lines+.
+    def self.validate_ui!(ui)
+      unknown = ui.keys - %w[show_thinking tool_lines]
+      unless unknown.empty?
+        PikuriWeb.logger.info(
+          "config: ignoring [ui] key(s) this shell does not read: #{unknown.join(', ')}"
+        )
+      end
+      if ui.key?('show_thinking') && ![true, false].include?(ui['show_thinking'])
+        raise Error, 'ui.show_thinking must be true or false'
+      end
+      return unless ui.key?('tool_lines') && !ui['tool_lines'].is_a?(String)
+
+      raise Error, 'ui.tool_lines must be a string, e.g. tool_lines = "short"'
     end
 
     # Build the {Search} value object from the +[search]+ table (or +nil+
@@ -518,7 +586,7 @@ module PikuriWeb
     def self.non_empty_string?(value) = value.is_a?(String) && !value.strip.empty?
 
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
-                         :validate_top!, :validate_code!, :build_llm, :build_mcp, :build_mcp_headers,
+                         :validate_top!, :validate_code!, :validate_ui!, :build_llm, :build_mcp, :build_mcp_headers,
                          :build_basic_auth, :build_mcp_env, :build_search, :default_llm,
                          :pick, :check_unique!, :non_empty_string?
   end

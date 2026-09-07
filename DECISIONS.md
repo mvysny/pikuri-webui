@@ -1708,6 +1708,44 @@ day, where a flag is genuinely the fastest path; pikuri-web is started
 once and lives, so the flag buys almost nothing and the ambiguity costs
 the same as anywhere. The intent is for the TUI to follow.
 
+**Amended: the schema drifted and broke boot, so strictness is now
+asymmetric.** pikuri-tui added a `[ui]` transcript-density table
+(`show_thinking`, `tool_lines`); `validate_top!` here still allowed only
+`llm` / `search` / `code`, so anyone who set a density preference in the
+TUI got `unknown top-level key(s): ui` and *could not start pikuri-web at
+all*. Exactly the failure the "Rejected: trimming the schema" paragraph
+above forbids — carrying the whole schema is not a one-time act, it is a
+standing obligation to whatever the sibling shell adds next.
+
+The fix is not just `ui` in the allow-list, because the naive version
+re-breaks on the next key and the TUI's own `[ui]` rdoc already names it
+("the conversation pane's `markdown:` flag … the natural third entry").
+So validation now splits by *who owns the growth*:
+
+- **Tables this shell consumes** (`[[llm]]`, `[search]`) stay strict —
+  unknown keys raise. We own the meaning, so a typo is our error to
+  report.
+- **Inside a table we merely carry** (`[ui]`), an unknown key is logged
+  and ignored. The sibling shell defines the keys and will catch the
+  typo; raising here only breaks the shared file.
+- **A value whose vocabulary is not ours** (`tool_lines`) is
+  shape-checked and passed through unresolved, the way `search.engines`
+  already is. A copy of the form list here would reject a legal file the
+  day a third form ships. `Config#tool_lines`'s *reader* falls back on a
+  form it does not recognize — the pattern `App` already uses for the
+  `theme` cookie.
+
+**Consequences.** Top-level strictness is deliberately *kept*: a brand-new
+pikuri-tui table still breaks boot here. Loosening it would silently
+swallow a typo'd `[serach]` along with the Brave key inside it, and a new
+top-level section is a visible feature event far likelier to prompt a
+cross-repo sweep than one more key in a table that already exists. So the
+standing obligation remains a **procedure**: a config-schema addition in
+pikuri-tui is a pikuri-web change. The guard is the `cross-shell schema`
+describe in `spec/pikuri_web/config_spec.rb` — the test that existed for
+this and missed it, now carrying the `[ui]` case; a pikuri upgrade should
+read pikuri-tui's `Shared::Config` allow-list against ours.
+
 ## D_track_pikuri_master — Path dependencies on `../pikuri`, not released gems
 
 **Status:** **Superseded by `D_released_pikuri_gems`.** Held while the
