@@ -92,10 +92,13 @@ Evenly staggered at 1 (serialized), simultaneous at 4.
 **Why a Faraday adapter and not `Pikuri::Agent`.** The agent loop is
 pikuri's (`AGENTS.md`, the reuse rule), so the principled home for a
 throttle is a control on the loop — and that remains the better long-term
-answer, because every other pikuri host has this problem too. Rejected *for
-now* on two grounds: it blocks on a pikuri release against the one-minor
-pin (`D_released_pikuri_gems`), and the adapter turns out to have a
-property the upstream version would have to be careful to keep.
+answer: pikuri's own `Agent` yardoc invites hosts to run several agents on
+one thread each, and offers them nothing to keep those agents off one
+server's throat. Filed there as `ideas/llm-request-throttle.md`; when it
+lands, this entry is superseded and {ThrottledAdapter} retires. Rejected
+*for now* on two grounds: it blocks on a pikuri release against the
+one-minor pin (`D_released_pikuri_gems`), and the adapter turns out to have
+a property the upstream version would have to be careful to keep.
 
 **That property: an adapter cannot get the scope wrong.** A permit must
 cover exactly one completion. Widen it to a step or a whole `run_loop` and a
