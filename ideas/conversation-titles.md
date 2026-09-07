@@ -28,10 +28,13 @@ behind the thinking-off fork below. Two runs so far: `qwen-prompt-probes.md` (pr
 - **What runs it:** its own `Pikuri::Agent`, no tools. A *system* agent: no listener that reaches
   the browser, no transcript block, nothing in the UI. Not the conversation's own agent — a titling
   request through that lands in the history and pollutes it.
-- **Fresh every time.** There is no conversation to maintain. `Pikuri::Agent#clear_conversation` is
-  the reset, not a new `Agent.new`: it resets messages / controls / system prompt without re-running
-  the constructor's context-window probe, so one long-lived titler agent costs one probe for the
-  process.
+- **Fresh every time — a new `Agent` per title, not one long-lived titler.** The earlier plan was a
+  resident agent reset by `clear_conversation`, to dodge the constructor's context-window probe.
+  Unnecessary: the probe runs *only* when the transport carries no explicit `context_window`
+  (`agent.rb:706` is `@transport.context_window || <probe>`), and a titler does not care what the
+  real cap is. Set it on the transport and `Agent.new` does no I/O at all. A per-title agent holds no
+  state between calls, so there is nothing to confine to a thread and nothing to serialize — which
+  is what lets titles share `turn_executor` at any pool size (`Q_titler_executor`).
 - **When:** from the first user message alone. Fire-and-forget; a titling failure must never fail
   the turn — it just leaves the stamp.
 - **The opener is passed as delimited data, not as the user turn** — and the reason is functional,
@@ -163,12 +166,15 @@ mean the feature isn't only for new conversations.
   **52 minutes** of inference-server occupancy fighting every real turn. That is the difference
   between "lazy on open, or just sweep the lot once Puma is up" and "don't build it" — and run 3
   settled which side we are on.
-- **"Still stamp-titled" needs a test, and today there isn't one.** `meta.json`'s `title` always
-  holds *something*, and `ConversationStore#row` falls back to the stamp when it doesn't. Two ways:
-  regex the stamp shape (`%Y-%m-%d %H:%M`), or add a key to `meta.json` — the class doc says a key
-  can be added without a `SCHEMA` bump, since `#load_meta` ignores what it doesn't read. The key is
-  better: it also lets a *manual* rename mark itself so auto-titling never overwrites a title the
-  user chose.
+- **`Q_stamp_test`: regex the stamp shape.** `meta.json`'s `title` always holds *something*, and
+  `ConversationStore#row` falls back to the stamp when it doesn't, so "is this still stamp-titled"
+  needs a test. Decided: match `%Y-%m-%d %H:%M` against `stamp_title(created_at)` — one line, no
+  schema surface, and a model title colliding with that shape is not a real case. The rejected
+  alternative was a `title_source` key in `meta.json` (addable without a `SCHEMA` bump, since
+  `#load_meta` ignores what it does not read); it is the better answer *once manual rename exists*,
+  because it is what stops auto-titling overwriting a title the user chose. Rename is not built, so
+  the key would be four lines carrying nothing today. **Revisit when rename lands** — at that point
+  the regex is not enough, and existing conversations will need the key backfilled.
 - **Sweeping needs the history, which is the expensive half.** A title wants the first user message;
   getting it means `Pikuri::Agent::History.load` per conversation, i.e. reading every history on
   disk at boot. Cheaper: sweep lazily (title a stamp-titled conversation when it is first *opened*),
@@ -179,11 +185,32 @@ mean the feature isn't only for new conversations.
 
 ## Plumbing, once the fork is closed
 
-- **Threading.** A `Pikuri::Agent`'s chat is single-thread-confined, and one shared titler agent
-  reset by `clear_conversation` means titling requests must serialize. Its own single-thread
-  executor — *not* `turn_executor`, whose pool size is the real turns' load cap
-  (`D_serial_turn_executor`); a title must not consume a turn slot. A single thread also
-  self-limits the retro-sweep for free.
+- **`Q_titler_executor`: titles run on `turn_executor`, like everything else.** The earlier plan gave
+  the titler its own single-thread executor "so a title does not consume a turn slot". That reasoning
+  was backwards. `D_serial_turn_executor` says the pool size "exists so turns do not outnumber the
+  inference server's parallel slots — match it to llama.cpp's `--parallel`. It is an operator setting
+  about load." A title *is* load on that server — 1.2 s of it — so a titler with its own executor is
+  a request the cap cannot see, and at `--turns 1` it means two concurrent requests to a server told
+  to expect one. The executor is one queue per inference server, and the titler belongs in it.
+  (If local models ever live on several machines, the queue becomes per-server; out of scope here.)
+
+  What that *did* protect, and the reason it looked necessary: a `Pikuri::Agent`'s chat is
+  single-thread-confined, so one resident titler agent could not be safely driven from a pool of two.
+  Resting that on the pool being 1 is exactly what `D_serial_turn_executor` warns against — "never
+  rest a correctness claim on a pool size". A per-title agent (above) removes the shared state
+  instead, so confinement holds at any pool size and no mutex is needed.
+
+  **Not reachable: filling the tool-call gaps.** Under `--parallel 1` the server sits idle during a
+  turn's `web_search` or `fetch`, and a queued title could in principle use that window. It cannot: a
+  turn job holds its executor slot across the whole `run_loop`, tool execution included, so a size-1
+  pool has no gap to give away. Getting at it would mean releasing the slot around tool calls inside
+  pikuri's loop, which is not ours. The cheap approximation is `--turns 2` against
+  llama.cpp `--parallel 2`.
+
+  **Consequence — head-of-line blocking, accepted.** A title posted while a long multi-step turn
+  runs waits for that whole turn, not just its LLM time. Titling is fire-and-forget and a late title
+  is cosmetic, so this is fine; it is also the second reason the retro-sweep is lazy-on-open rather
+  than bulk, since a hundred queued titles really would sit in front of the user's next message.
 - **Writing the title.** `ConversationStore#save` writes `meta.json` wholesale from
   `conversation.title`, and `Conversation` is a frozen `Data`, so a landed title has to reach both
   disk and the runner's `@conversation` (`#with(title:)`) or the next turn-end save reverts it.
