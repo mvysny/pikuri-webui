@@ -292,30 +292,38 @@ preference sees; nothing about the agent changes.
 - `index.erb` — the `:root` attribute, and the snapshot's resolved `open`.
 - `style.css` — the summary row (muted, subtle) and the collapsed/open marker.
   No visibility rule: `<details>` owns that now.
-- `transcript.js` — the three lines of `D_disclosure_state_on_the_block_div`,
-  the click that writes `data-disclosure`, and **the re-stick** (below). This
-  is the feature's own file by `D_feature_owns_its_file`, since all of it is
-  `#transcript`'s business.
+- `transcript.js` — the three lines of `D_disclosure_state_on_the_block_div`
+  and the click that writes `data-disclosure`. Nothing about scroll; see
+  below. This is the feature's own file by `D_feature_owns_its_file`, since all
+  of it is `#transcript`'s business.
 - `app.js` — the surface wiring only: the cookie write and the `/thinking`
   command calling into `transcript.js`.
 
-### The scroll re-stick — the one non-obvious mechanic
+### The scroll on a disclosure change — deliberately not handled
 
-`transcript.js`'s `nearBottom()` decides whether a streaming update keeps the
-pane pinned to the bottom. Every disclosure change moves the document height —
-a single click, and `D_toggle_moves_everything` by a lot — so a pinned pane
-silently unpins and a scrolled-up reader jumps. The TUI got this free: tuile
-0.15's `set_region_text` clamps `scroll_top_row` and re-runs auto-scroll.
+**Decided: build nothing here.** No re-stick and no scroll bookkeeping, for a
+single click or for `D_toggle_moves_everything`. `transcript.js` keeps exactly
+the `nearBottom()` it has for streaming, and a disclosure change goes through
+the browser untouched.
 
-So a toggle is *two* things: the state write, and "if we were at the bottom, be
-at the bottom again." Both live in `transcript.js`, which is also where the
-click lands — so unlike the earlier global-flip sketch, nothing outside has to
-reach into `#transcript` to arrange it.
+This is recorded because it is an omission rather than an oversight — anyone
+reading `nearBottom()` next to a new click handler will reach for it. The
+mechanics, so a reopen need not re-derive them:
 
-Open: whether an *individual* expand should re-stick at all. Clicking a block
-to read it is a deliberate act; yanking the view to the bottom afterwards may
-be exactly wrong. Probably re-stick on the global toggle and *not* on a single
-click — but that is a feel question, so try both.
+Every disclosure change moves the document height, a global toggle by a lot. So
+a pane pinned to the bottom can silently unpin, and a scrolled-up reader can
+have the view shift under them. The TUI got this free: tuile 0.15's
+`set_region_text` clamps `scroll_top_row` and re-runs auto-scroll.
+
+The reason not to pre-empt it is that the right behaviour is unknown and
+differs by case. Clicking one block to read it is a deliberate act, and yanking
+the view to the bottom afterwards is plausibly worse than leaving it alone.
+Guessing in advance means feel-code no spec can justify.
+
+**What "it bites" looks like**, for whoever picks this up: reasoning streams in
+while you are pinned at the bottom and the pane stops following; or a collapse
+leaves you staring at whitespace with the conversation somewhere above. If
+neither shows up in real use, the omission was right.
 
 ---
 
@@ -501,7 +509,7 @@ a problem this shell does not have:
 | `D_no_hidden_marker` — no `· thought` line | **Flipped.** The marker *is* the affordance (`D_details_per_block`). |
 | One mode for the whole transcript | Per block, with the config setting the default. |
 | `Pikuri::Sanitizer` on short lines, verbose args exempt on `inspect` | Every tool path, **no exemption** — `inspect` misses the Unicode classes. |
-| tuile's `set_region_text` scroll clamping | Hand-rolled: `transcript.js` re-sticks after a toggle. |
+| tuile's `set_region_text` scroll clamping | Nothing, on purpose — no equivalent is built. |
 | Six specs worth porting | Mostly moot; see below. |
 
 Of the TUI's six specs, the one that survives outright is "prose and tool lines
@@ -535,8 +543,6 @@ What replaces them, and the shape is different — most of Part 1 is now
 
 ## Open questions
 
-- **Should a single expand re-stick the scroll, or only the global toggle?**
-  See *The scroll re-stick*. A feel question — try both.
 - **Does the short form want the `:tool_call` / `:tool_result` split at all?**
   The short form is a call line with its result indented under it — visually
   one unit. Two blocks is what makes the result upsertable independently, and
@@ -575,9 +581,13 @@ Per AGENTS.md's graduation map:
     whole entry.
   - `D_both_forms_in_the_block` (Part 2).
   `D_toggle_moves_everything` is small enough to be a *Consequences* line under
-  `D_details_per_block` rather than an entry. `D_theme_cookie` gains one too:
-  it is no longer the only presentational cookie, and what the second one
-  taught.
+  `D_details_per_block` rather than an entry, and **the deliberate scroll
+  omission is a second one** — deferred work belonging to a logged decision,
+  which is where AGENTS.md says it goes rather than surviving as an idea. State
+  it as what it is: no re-stick was built because the right feel is unknown,
+  plus the two symptoms that would justify revisiting. `D_theme_cookie` gains a
+  *Consequences* line too: it is no longer the only presentational cookie, and
+  what the second one taught.
 - ~~The `[ui]` fix~~ and ~~the sanitizer fix~~ → done; see *Landed already*
   for where each nugget went.
 - Block-kind markup changes → the **Conventions** block-kinds bullet, **which
