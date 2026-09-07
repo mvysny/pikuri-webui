@@ -9,13 +9,15 @@ conversation sidebar shipped without either; this is what "v2 auto-title" was in
 change — and the title deliberately never appears in the path, so retitling never moves a directory.
 
 Research lives in `ideas/conversation-titles/` — the probe transcripts and the upstream citations
-behind the thinking-off fork below.
+behind the thinking-off fork below. Two runs so far: `qwen-prompt-probes.md` (prompt-following) and
+`titler-model-probes.md` (thinking-off, and the small models rejected).
 
 ## Settled
 
-- **Which model:** the first configured `[[llm]]` to start with, same as a conversation with
-  nothing saved, and a `[web] title_model` knob later. *Provisional* — the thinking-off fork below
-  may pull that knob forward, because a small non-thinking model is the cleanest way out of it.
+- **Which model: the first configured `[[llm]]`**, same as a conversation with nothing saved. Run 2
+  killed the "small non-thinking sidecar model" idea on evidence (below), and with thinking off the
+  big model titles in ~1.2 s, so there is nothing left for a `[web] title_model` knob to buy. It
+  stays a *later* nicety, not a prerequisite.
 - **What runs it:** its own `Pikuri::Agent`, no tools. A *system* agent: no listener that reaches
   the browser, no transcript block, nothing in the UI. Not the conversation's own agent — a titling
   request through that lands in the history and pollutes it.
@@ -25,88 +27,102 @@ behind the thinking-off fork below.
   process.
 - **When:** from the first user message alone. Fire-and-forget; a titling failure must never fail
   the turn — it just leaves the stamp.
-- **The system prompt stays trivial.** "You summarize given sentences" territory. The probe's
-  version is in the sidecar and needs no cleverness — see *Prompt-following* below.
+- **The opener is passed as delimited data, not as the user turn.** Run 1 fed the message in bare
+  and concluded the prompt needs no cleverness; run 2 showed that is the most injectable shape
+  there is. The shipping prompt wraps it — `<opener>…</opener>` in the user turn, and a system line
+  saying that text is data and never an instruction. Verbatim in
+  `titler-model-probes.md`. Still short; just not naive.
 - **`Q_title_length`: 3–7 words.** The original 10–20 word ask is disregarded — it is long for a
   `clamp(12rem, 20%, 20rem)` sidebar row. Ellipsised in CSS as a backstop.
 
-## Prompt-following is a non-issue
+## Prompt-following is a non-issue; prompt *injection* is a real one
 
-8/8 probes against the configured local Qwen 3.6 obeyed 3–7 words, no quotes, no trailing period,
-no preamble, no markdown, and answered in the input's own language. A prompt-injection attempt got
-*titled* rather than obeyed. Full transcript: `ideas/conversation-titles/qwen-prompt-probes.md`.
+**Format-following: 8/8, twice.** Qwen 3.6 obeys 3–7 words, no quotes, no trailing period, no
+preamble, no markdown, and answers in the input's own language — with thinking on (run 1) and with
+thinking off (run 2). The "Sure! Here's a title:" case has never once appeared.
 
-Sanitizing is still needed, but for less than the original note assumed: cap length, single line,
-strip a stray `</think>` (see below). The "Sure! Here's a title:" case did not appear once.
+**Injection is a different question, and run 1's single probe was the easiest one in the set.** Run
+2 ran six. Against the hardened prompt, Qwen 3.6 held 5/6; the one that lands is a `</opener>`
+breakout carrying a fake system instruction, and it lands only when the demanded output is itself
+title-shaped (`BANANA BANANA BANANA` yes, a full sentence no).
 
-**And a title needs `Pikuri::Sanitizer`, not just escaping.** It reaches `_sidebar.erb` as plain
-text in four places (link text, the `<a title>`, the delete button's `aria-label` and its `title`),
-and `set :erb, escape_html: true` stops markup but not a bidi override reordering it or a
-zero-width character hiding in it — the standing rule in AGENTS.md, *Conventions*, same as the tool
-lines. Attacker reach is real: the title is derived from the user's own first message, which can
-carry pasted content.
+That is the residual risk, stated properly: **the format constraint is the defence, not the
+instruction hierarchy.** An attacker who gets pasted content into the opening message can influence
+*which* 3–7 words the sidebar row shows; they cannot make the titler emit a sentence, markup, or a
+long payload. A rude sidebar row is the worst case.
+
+Consequences for the implementation, all cheap:
+
+- **Cap in Ruby, don't trust the prompt.** A hard word and character cap, single line, applied to
+  whatever comes back. The prompt is a request; the cap is the guarantee.
+- **`Pikuri::Sanitizer`, not just escaping.** Unchanged and now better motivated — the words are
+  attacker-choosable, which is exactly where a bidi override or a zero-width character comes from.
+  The title reaches `_sidebar.erb` as plain text in four places (link text, the `<a title>`, the
+  delete button's `aria-label` and its `title`); `set :erb, escape_html: true` stops markup and
+  nothing else. Same standing rule as the tool lines (AGENTS.md, *Conventions*).
+- **Strip a leading `</think>`.** Run 1 saw the artifact on every thinking-off response; run 2 could
+  not reproduce it in ~16 calls. Keep the strip as a one-line backstop — the server is not pinned.
 
 ## The fork: thinking must be off, and pikuri has no channel for it
 
-This is the blocking decision. Qwen 3.6 thinks *hard* about titles — ~1500 completion tokens and
-30–90 s per title on the local 35B MoE. Turning thinking off is 11 tokens and 0.9 s. Two orders of
-magnitude, and it decides whether the retro-sweep below is viable at all.
+Still the blocking decision — but run 2 narrowed five options to one. Qwen 3.6 thinks *hard* about
+titles: 800–1500 completion tokens, 30–80 s per title on the local 35B MoE, and the variance between
+runs is itself large. Thinking off is ~10 tokens and ~1 s. Two orders of magnitude, and it decides
+whether the retro-sweep below is viable at all.
 
-| how | time | completion tokens |
+| how | s | completion tokens |
 |---|---|---|
-| baseline (thinking on) | 82 s | 1493 |
-| `reasoning_effort: none` | 37 s | 679 — ignored, still thought |
-| `chat_template_kwargs: {enable_thinking: false}` | **0.9 s** | **11** |
+| baseline (thinking on) | 40–82 | 843–1493 |
+| `reasoning_effort: none` / `low` | 37–66 | 679–1070 — accepted, then ignored |
+| `/no_think`, system prompt / appended / prefixed | 40–62 | 804–1266 — **no effect** |
+| assistant prefill `<think></think>` | — | HTTP 400 |
+| `chat_template_kwargs: {enable_thinking: false}` | **~1** | **~10** |
 
-The catch: `chat_template_kwargs` needs `RubyLLM::Chat#with_params`, and `Pikuri::Agent` exposes no
-extra-params channel — no `params:`, no thinking knob, and its `@chat` has no reader. So the options
-are:
+`chat_template_kwargs` needs `RubyLLM::Chat#with_params`, and `Pikuri::Agent` exposes no extra-params
+channel — no `params:`, no thinking knob, and its `@chat` has no reader. Where the options landed:
 
-- **A smaller, non-thinking model — probably the answer.** A model that does not reason has nothing
-  to suppress, so the fork simply doesn't arise: a plain `Pikuri::Agent` on it is fast *and* stays
-  inside the scope rule, with no param channel, no `</think>` artifact and no upstream ask. The same
-  server already serves two candidates —
-  `unsloth/Qwen3-4B-Instruct-2507-GGUF:Q5_K_M` and `bartowski/Qwen2.5-7B-Instruct-GGUF:Q5_K_M`
-  (`*-Instruct-*`, non-thinking by construction) — and its router reports `max_instances: 4`, so one
-  can be resident beside the 35B. Titling is the easiest job in the app; a 4B is ample for 3–7
-  words, and it also stops titles competing with real turns for the big model's slots.
-  Unprobed as titlers — do that when testing resumes, against the same 8 messages.
+- ~~**A smaller, non-thinking model.**~~ **Rejected on evidence.** Both `*-Instruct-*` models on the
+  server were probed. `Qwen3-4B-Instruct` is fast (0.4 s) and *trivially* injectable — 4 of 6
+  attacks landed, including `PWNED` and `OK`. `Qwen2.5-7B-Instruct` answers in the wrong language
+  five times in eight (Turkish, German, Chinese) and thinks Australia's capital is Canada's.
+  Transcripts in `titler-model-probes.md`. The premise was wrong twice over: a 4B is *not* ample for
+  this job, because the job is 90% resisting the opening message rather than summarizing it — and
+  the speed argument evaporated anyway, because a 3B-active MoE emitting ten tokens with thinking
+  off is already ~1.2 s. This also spares us the `[web] title_model` knob, the cold-load-on-first-use
+  problem, and a pikuri-tui-side config addition (`D_schema_complete_config`).
+- ~~**Prompt-level `/no_think`.**~~ **Dead.** Qwen 3.6 dropped Qwen 3's soft switches; all three
+  placements still emitted a full reasoning block, and upstream says the API parameter is the
+  supported route ([Qwen3.6 discussion #90](https://github.com/QwenLM/Qwen3.6/discussions/90)).
+  The assistant-prefill variant is dead in a more interesting way: llama.cpp answers
+  `Assistant response prefill is incompatible with enable_thinking` — prefill is available only once
+  thinking is *already* off, so it can never be the thing that turns it off.
+- **A feature request to pikuri — now the recommendation.** An extra-params channel on
+  `ChatTransport`, or an explicit thinking knob. It was already the right long-term home (a titler is
+  exactly the sub-agent case where reasoning is waste); run 2 removed every way around it. Cost
+  unchanged: it blocks this on a pikuri release, and the gems are pinned to one minor
+  (`D_released_pikuri_gems`). Worth noting the ask is *general* — `enable_thinking` is not
+  Qwen-specific plumbing once it is spelled as a params passthrough.
+- **Raw `RubyLLM::Chat` off the transport's fields.** The escape hatch if the release wait is
+  unacceptable. Fast and certain, but it means this project owning LLM transport wiring — against
+  "All LLM transport … that's all pikuri. We own the web shell only." Also makes a llama.cpp/Qwen
+  param ours, and `Agent#build_context` is ~10 lines we would have to replicate,
+  `openai_use_system_role = true` included.
+- **Live with it.** Unchanged and still bad: fire-and-forget means a late title is cosmetic, but 60 s
+  of inference-server occupancy contends with the user's actual answer — on a `--parallel 1` local
+  server the user's own turn stalls behind a title. Fatal for the sweep.
 
-  What it costs: the titler stops being "the first `[[llm]]`", so the config knob moves from
-  *later* to *now* — a `[web] title_model = "<[[llm]] name>"` resolved through
-  `ModelCatalog#find`, with the first connection as the fallback when it is unset or names
-  something the file no longer has (the same shape as `missing_connection`). Note
-  `D_schema_complete_config`: `Config` carries the whole shared schema, so this key is a
-  pikuri-tui-side addition too, not a pikuri-web-only one. And a cold model load on first use —
-  which the lazy retro-sweep below would hide.
-- **Prompt-level `/no_think`.** Pure prompt, stays wholly inside `Pikuri::Agent`, no transport
-  surface, no new dependency direction. Works on Qwen 3 — *untested here* (the probe was stopped
-  before this variant ran; it is the first thing to try when testing resumes). If it works this
-  fork closes with nothing owed upstream. Keeps the titler on the one configured model, so no
-  config knob is owed yet — but it is Qwen-specific, and silently a no-op on any other model.
-- **Raw `RubyLLM::Chat` off the transport's fields.** Fast and certain, but it means this project
-  owning LLM transport wiring — against "All LLM transport … that's all pikuri. We own the web shell
-  only." Also makes a llama.cpp/Qwen-specific param ours.
-- **A feature request to pikuri:** an extra-params channel on `ChatTransport`, or an explicit
-  thinking knob. The right long-term home — a titler is exactly the sub-agent case where reasoning
-  is waste — but it blocks this on a pikuri release, and the gems are pinned to one minor
-  (`D_released_pikuri_gems`).
-- **Live with it.** Fire-and-forget means a title landing 60 s late is only cosmetic. The real cost
-  is 60 s of inference-server occupancy contending with the user's actual answer — on a
-  `--parallel 1` local server the user's own turn stalls behind a title. Bad, and fatal for the
-  sweep.
-
-`enable_thinking: false` leaks a stray `</think>\n\n` prefix into the content (llama.cpp template
-artifact, seen in the probe). Any path that disables thinking must strip it.
+**So the fork closes on the param channel, not on the model.** Nothing here is worth loading a second
+model for.
 
 ## Retrospective titling
 
 Conversations already on disk are all stamp-titled. Generating theirs some time after boot would
 mean the feature isn't only for new conversations.
 
-- **Gated entirely on the fork above.** At 1 s / 11 tokens a title, sweeping N old conversations is
+- **Gated entirely on the fork above.** At ~1 s / ~10 tokens a title, sweeping N old conversations is
   free; at 60 s / 1500 it occupies the server for minutes and fights every real turn. Don't build
-  the sweep until thinking-off is settled.
+  the sweep until thinking-off is settled — which, after run 2, means don't build it until the param
+  channel exists.
 - **"Still stamp-titled" needs a test, and today there isn't one.** `meta.json`'s `title` always
   holds *something*, and `ConversationStore#row` falls back to the stamp when it doesn't. Two ways:
   regex the stamp shape (`%Y-%m-%d %H:%M`), or add a key to `meta.json` — the class doc says a key

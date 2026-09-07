@@ -2,7 +2,11 @@
 
 Run 2026-09-07 against the configured primary connection,
 `unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M @ http://mavi-fw:8080/v1`. Stopped early (the 35B with
-thinking on was cooking the box), so the `/no_think` variants below are **untested**.
+thinking on was cooking the box), so the `/no_think` variants below went untested here.
+
+**Run 2 finished them, and moved several conclusions — read `titler-model-probes.md` next.** In
+short: `/no_think` does nothing on Qwen 3.6, the `</think>` artifact no longer reproduces, and the
+bare-`user_message` prompt shape below is the injectable one.
 
 ## The prompt used
 
@@ -59,10 +63,12 @@ params could be varied:
 
 The 0.9 s answer carries a literal `</think>\n\n` prefix in `content`, with `reasoning_content`
 empty: the chat template opens an empty think block that the response parser then doesn't own.
-Anything taking this path strips a leading `</think>`.
+Anything taking this path strips a leading `</think>`. **Run 2 could not reproduce this** in ~16
+thinking-off calls — keep the strip as a cheap backstop, not as a known-live requirement.
 
-Untested, and first up when testing resumes: `/no_think` in the system prompt, `/no_think` appended
-to the user message, `/no_think` prefixed to it, and an assistant prefill of `<think></think>`.
+The four then-untested variants — `/no_think` in the system prompt, appended to the user message,
+prefixed to it, and an assistant prefill of `<think></think>` — all ran in run 2. All four are dead
+ends; see `titler-model-probes.md`.
 
 ## Why the fast path isn't free
 
@@ -92,5 +98,6 @@ unsloth/Qwen3-Coder-Next-GGUF:Q4_K_M
 unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M
 ```
 
-The two `*-Instruct-*` entries are non-thinking by construction, which is the interesting part —
-see the idea file's *A smaller, non-thinking model* option. Neither has been probed as a titler yet.
+The two `*-Instruct-*` entries are non-thinking by construction, which looked like the interesting
+part. Run 2 probed both as titlers and **rejected both** — the 4B is trivially injectable, the 7B
+answers in the wrong language. See `titler-model-probes.md`.
