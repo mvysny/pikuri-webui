@@ -58,20 +58,16 @@ module PikuriWeb
     THEMES = %w[dark light].freeze
     DEFAULT_THEME = 'dark'
 
-    # The two reasoning-disclosure states style.css and transcript.js know
-    # about, carried by the `thinking` cookie the same way `theme` is carried
-    # and validated the same way — app.js is the only writer, the user can
-    # still edit it, so an unknown value falls back.
-    #
-    # The fallback is the configured `[ui] show_thinking` rather than a
-    # constant: the config file says what a browser that has never expressed a
-    # preference sees (`D_ui_cookie_over_config`).
+    # Whether reasoning blocks start open, carried by the `thinking` cookie
+    # and user-editable like `theme`, so an unknown value falls back. Unlike
+    # the theme it falls back to a *configured* value, not a constant —
+    # `[ui] show_thinking` is the shared config file's say in what a browser
+    # with no preference of its own sees (`D_ui_cookie_over_config`).
     THINKING = %w[expanded collapsed].freeze
 
-    # Whether reasoning starts expanded for a browser with no `thinking`
-    # cookie — the host sets it from `Config#show_thinking`. Defaults to the
-    # config default rather than to nothing, so a spec that injects no setting
-    # still renders a legal page.
+    # {THINKING} fallback, set by the host from `Config#show_thinking`. True
+    # rather than nil so a spec injecting no setting still renders a legal
+    # page.
     set :show_thinking, true
 
     # No page of its own: there is no "current" conversation any more, only the

@@ -101,9 +101,8 @@ RSpec.describe PikuriWeb::SseListener do
     end
   end
 
-  # D_details_per_block. `open` is unconditional because the listener is shared
-  # by every tab reading the conversation and cannot know a per-browser
-  # preference; transcript.js resolves it.
+  # D_details_per_block. What is pinned here is the markup; the `open` in it is
+  # the pre-JS state, and resolving it per tab is transcript.js's.
   context 'reasoning disclosure' do
     it 'wraps a non-streamed thinking block in an open disclosure' do
       listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'I should read the config.'))

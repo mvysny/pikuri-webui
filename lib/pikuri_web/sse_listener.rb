@@ -38,9 +38,9 @@ module PikuriWeb
   #   distinguished visually yet).
   # - Streaming deltas go through a {StreamingMessage} per turn; the
   #   +Assistant+ / +Thinking+ bookends finalize with the authoritative
-  #   content (deltas are preview-only). Thinking gets no special
-  #   renderer — the +thinking+ block kind is the CSS hook that does the
-  #   TUI's grayscale job.
+  #   content (deltas are preview-only). Reasoning gets the disclosure
+  #   {#disclose} wraps it in; the +thinking+ block kind is the CSS hook
+  #   that does the TUI's grayscale job.
   # - +ToolCall+ / +ToolResult+ each render as one plain-text line: the name
   #   with its inspected arguments, then the capped observation. Both are
   #   attacker-influenced and neither is Markdown, so both go through
@@ -215,22 +215,16 @@ module PikuriWeb
     end
 
     # Wrap a +:thinking+ block in the disclosure the browser collapses, and
-    # pass every other kind through untouched:
+    # pass every other kind through untouched (`D_details_per_block`):
     #
     #   disclose(:thinking, "<p>The user wants…</p>")
     #   # => "<details open><summary>thinking</summary><p>The user wants…</p></details>"
     #
-    # The collapsed summary row is both the "reasoning happened here" signal
-    # and the way in, which is why it replaces the TUI's decision to draw
-    # nothing at all (`D_details_per_block`). +:thinking+ is the only kind that
-    # gets one: a notice behind a triangle is a notice nobody reads.
-    #
-    # +open+ is in the markup unconditionally because this listener *cannot*
-    # know the preference — it is per-conversation and shared by every tab
-    # reading it, while collapsing is per-browser. So this renders the pre-JS
-    # state and +transcript.js+ resolves it per tab; expanded is the state
-    # chosen for it so that the default configuration never flashes, and so
-    # that a browser running no script at all still shows everything.
+    # +open+ is unconditional, and cannot become the preference: this listener
+    # is per-conversation and shared by every tab reading it, while collapsing
+    # is per-browser. It renders the pre-JS state, +transcript.js+ resolves it
+    # per tab — expanded, so the default configuration never flashes and a
+    # browser running no script still shows everything.
     #
     # @param kind [Symbol] block kind
     # @param html [String] the block's rendered HTML
