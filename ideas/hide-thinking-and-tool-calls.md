@@ -8,14 +8,19 @@ than a port usually does — see *What does not port* below.
 
 Two changes, independent of each other:
 
-1. **Thinking becomes hideable** (show / hide), with a config default.
+1. **Thinking becomes collapsible, one disclosure per block**, with the config
+   setting whether they start open or closed (`D_details_per_block`). The TUI's
+   one-flag-hides-everything shape is deliberately *not* what this became.
 2. **Tool lines get a short form, with the raw form one flip away.** v1 is
    web-only from what the events carry today; v2 consumes the summaries pikuri
    will compose (`../pikuri/ideas/tool-summary-lines.md`, still unbuilt).
 
-Never hidden, never shortened: user echoes (`:user`), assistant prose
+Never collapsed, never shortened: user echoes (`:user`), assistant prose
 (`:assistant`), `⊕` skill injections and `!` fallback notices (`:notice`),
-cancel markers (`:error`). The TUI's list also protects the
+cancel markers (`:error`). `<details>` is for `:thinking` and nothing else —
+the invariant matters more now than under a global hide, because a disclosure
+per block is an inviting pattern to reach for and a notice behind a triangle is
+a notice nobody reads. The TUI's list also protects the
 `Code::TranscriptConfirmer` decision block and the `edit` / `write` diff
 blocks (`D_diffs_always_visible`) — neither exists here, because this shell is
 chat-only (`D_chat_only_entry_point`). A sibling OS/code shell would bring both
@@ -97,82 +102,154 @@ That fix alone makes the *keys* legal. Honoring them is Part 1 / Part 2.
 
 ## Part 1 — hiding thinking
 
-### `D_web_css_hides` — visibility is a CSS class, not a re-render
+### `D_details_per_block` — a disclosure per block; the config sets its default
 
-The headline divergence, and it deletes most of the TUI's design. There, a
-hidden region's text had to be recomputed, so the pane grew a
-`{region, kind, indent, render}` register and a `#rerender(kind:)`
-(`D_kinded_regions`) — the single largest piece of that work.
+**Decided.** Each thinking block renders as its own `<details>`, and `[ui]`
+`show_thinking` sets whether they start **open or closed** — not whether they
+exist. A turn that reasoned twice, with the reader having opened the second
+because the answer looked wrong:
 
-Here, every block is already **complete HTML in the DOM**, kramdown having run
-on the server. So:
-
-```css
-:root[data-thinking="hidden"] .block.thinking { display: none; }
+```
+│ ▍ how many llms are in the config?          │
+│ ▸ thinking                                   │  collapsed (the default)
+│ → read(path="~/.config/pikuri/config.toml")  │
+│ = [[llm]] name = "Local Qwen 3.6" …          │
+│ ▾ thinking                                   │  this one clicked open
+│   Two entries. Both point at localhost:8080,  │
+│   so the /model picker will be offered.       │
+│ Two — both on your local llama.cpp.          │
 ```
 
-and the whole feature is one rule plus a cookie. No register, no thunk, no
-per-block bookkeeping, nothing new in `{Transcript}` or `{SseListener}`,
-nothing that can go stale on a reveal. A reveal is free and instant because
-the content never left.
+The collapsed row is the whole point: it is *both* the "the model reasoned
+here" signal and the way in. Short feedback that thinking happened, subtle
+enough not to disturb the flow of the conversation.
 
-This is the same shape as the theme (`D_theme_cookie`): the server renders the
-resolved preference into `<html>` so the first paint is already right, and
-`app.js` rewrites the attribute and the cookie in place. It also lands on the
-right side of `D_no_js_build_step` — placement and presentation are CSS's, and
-"markup the server could have produced" never moves.
+**So the TUI's `D_no_hidden_marker` flips here, and for its own stated
+reason.** It rejected a `· thought` line because grey filler earns nothing and
+a terminal has no cheap per-block affordance. A browser has one, which turns
+the same row from filler into the affordance — it pays for its line twice.
 
-- Rejected `O_port_kinded_regions`: a server-side visibility gate would make
-  the *server* hold a display preference, which is per-browser view state by
-  decision. Two tabs with different preferences would fight over one
-  transcript.
+It also keeps `show_thinking` meaning one thing in both shells — "do I want
+reasoning by default" — expressed as each chrome can afford: the TUI omits, the
+browser collapses.
+
+Markup, emitted by {SseListener} into the block's html payload:
+
+```html
+<div class="block thinking" id="b3">        <!-- the div is transcript.js's -->
+  <details><summary>thinking</summary><p>Two entries. Both point at…</p></details>
+</div>
+```
+
+**Cheaper than the first sketch of this claimed.** `index.erb` and
+`transcript.js` both wrap an identical `block.html` in an identical
+`div.block.<kind>`, so putting the `<details>` *inside* the payload gets both
+paths from one change in {SseListener}. Two places (listener + `style.css`),
+not the three the block-kind contract usually costs.
+
+Native `<details>` rather than a hand-rolled `<button aria-expanded>` + body:
+keyboard handling and disclosure semantics come free, and `D_target_browsers`
+makes it unconditionally available.
+
+**The summary stays a static word.** A live one — a spinner, or the first few
+words of the reasoning — is tempting and wrong: a thing moving in the periphery
+is the exact flow disruption the collapsed default exists to avoid.
+
+- Rejected `O_global_only` — one hide/show flip for the whole transcript, no
+  marker. The straight port, and one CSS rule, but it throws away the
+  affordance the browser has and the terminal does not. "That answer looks
+  wrong, show me *that* step's reasoning" is the case that matters, and a
+  global switch cannot express it.
+- Rejected `O_port_kinded_regions` — a server-side visibility gate. It would
+  make the *server* hold a display preference, which is per-browser view state
+  by decision; two tabs with different preferences would fight over one
+  transcript. The TUI needed its `{region, kind, indent, render}` register and
+  `#rerender(kind:)` (`D_kinded_regions`) because a hidden region's text had to
+  be *recomputed*; here every block is already complete HTML in the DOM, so
+  none of that machinery has an equivalent. Nothing new in {Transcript} and
+  nothing that can go stale on a reveal.
 - Rejected `O_listener_drops_deltas` (the TUI's `D_drop_deltas_while_hidden`):
-  the server cannot drop a `ThinkingDelta` for one tab and keep it for
-  another without a per-connection filter, and
-  `D_server_authoritative_transcript` says the transcript is one picture. The
-  TUI dropped deltas to avoid *rendering* work on a hidden pane; here the cost
-  is SSE bytes on localhost, which is nothing. **The server always renders and
-  always broadcasts; the browser decides what it paints.**
-  - Consequence, and it is a *win* over the TUI: the TUI accepted "a cancel
-    mid-thinking while hidden has no bookend, so only what streamed is
-    revealable." Here nothing is ever lost — hidden or not, the block is whole.
-- Rejected `O_display_none_on_the_block_element` (JS walking the blocks and
-  setting `style.display`): the same effect, but it has to run again on every
-  `upsert`, so a streamed thinking block would flash before the walk caught it.
-  A `:root` attribute applies to blocks that do not exist yet.
+  the server cannot drop a `ThinkingDelta` for one tab and keep it for another
+  without a per-connection filter, and `D_server_authoritative_transcript` says
+  the transcript is one picture. The TUI dropped deltas to avoid *rendering*
+  work on a hidden pane; here the cost is SSE bytes on localhost, which is
+  nothing. **The server always renders and always broadcasts; the browser
+  decides what it shows.**
+  - Consequence, and a *win* over the TUI: it accepted "a cancel mid-thinking
+    while hidden has no bookend, so only what streamed is revealable." Here
+    nothing is ever lost — collapsed or not, the block is whole.
 
-### `D_no_hidden_marker` — **flips on the web**
+### `D_disclosure_state_on_the_block_div` — the mechanism, and why it is required
 
-The TUI decided against a `· thought` line where reasoning was: grey filler,
-nothing about its absence confuses, and a terminal has no cheap per-block
-affordance anyway.
+Collapsed-by-default puts the most likely first action straight onto the one
+broken path, so this is **day-one work, not a later refinement**: reasoning
+streams *into a collapsed block*, the user gets curious and clicks, and the
+next delta rewrites that block's `innerHTML` and slams it shut. At pikuri's
+15 fps coalescing that is roughly every 67 ms, so expanding during a turn would
+be impossible.
 
-The browser has one, and *needs* one if we ever want per-block reveal. So the
-question re-opens as a genuine fork, and it is really the shape question:
+(Note the asymmetry: open-by-default has the mirror problem, where streaming is
+fine and only *collapsing* fights the rewrite. The decided default is the one
+that has to solve this immediately.)
 
-- `O_global_only` — one hidden/shown flip for the whole transcript, no marker
-  at all. Straight port, one CSS rule, done.
-- `O_details_per_block` — `.block.thinking` becomes
-  `<details><summary>thinking</summary>…</details>`. Native disclosure, zero
-  JS, per-call granularity, and the global flip becomes "start them closed."
-  Costs: the block-kind markup contract now differs between `{SseListener}`
-  and `index.erb`'s snapshot (both must build the same element — that is
-  already `transcript.js`'s stated contract), `<details>` open-state is
-  per-element so a *global* flip of already-rendered blocks needs either JS
-  touching each one or a CSS override of `details > :not(summary)`, and an
-  open `<details>` re-collapses on nothing when a delta rewrites the block's
-  `innerHTML`.
-- `O_both` — global default via the `:root` attribute, per-block override via
-  `<details>`. The honest answer for a web chrome and the one the TUI note
-  guessed at, but it is the most markup and the most CSS.
+The fix is nearly free, because `transcript.js`'s upsert **reuses the element
+and replaces only its contents**:
 
-Lean: **`O_global_only` first**, because it is the port and it is one rule, and
-the markup shape it lands on does not preclude `O_details_per_block` later.
-Worth deciding before writing the CSS, though — `O_both` wants the `<details>`
-markup from day one, and retrofitting it means touching the kind contract
-twice.
+```js
+let el = document.getElementById(id);
+if (!el) { el = document.createElement('div'); … transcript.append(el); }
+el.innerHTML = html;          // ← the <details> inside dies here
+```
+
+`el` — the `div.block.thinking`, with its id and its attributes — survives
+every delta. So per-block disclosure state lives **on the block div**, outside
+the html payload, and persists for free:
+
+```js
+el.innerHTML = html;
+const d = el.querySelector('details');
+if (d) d.open = el.dataset.disclosure ? el.dataset.disclosure === 'open' : defaultOpen;
+```
+
+A click writes `el.dataset.disclosure`; its *absence* means "follow the
+default", which is what makes `D_toggle_moves_everything` below a one-line
+operation. No state map, no ids held anywhere, and state dies with the element
+on `#remove` / `#reset` — a reopened conversation starts fresh, which is right.
+
+This keeps the seam clean: the server still renders all the markup, and the
+browser owns only a boolean. That is per-browser view state, explicitly
+script's job under `D_no_js_build_step` ("script is for transport, platform
+mechanics only it can reach, and per-browser state") — not rendering.
+
+- Rejected `O_stable_body_slot` — have `transcript.js` replace only an inner
+  `.thinking-body` so the `<details>` element itself is never rebuilt. It
+  works, but it requires the script to know that `:thinking` blocks have a body
+  slot, i.e. markup knowledge in JS, which is the half of
+  `D_no_js_build_step` that is not negotiable.
+- Rejected `O_server_renders_open` — let {SseListener} emit `<details open>`
+  per the preference. The listener is per-*conversation* and shared by every
+  tab reading it; the preference is per-*browser*. It cannot know.
+  `index.erb`'s snapshot is the one exception and *should* render `open`
+  resolved, so a page load has no flash; the SSE path's blocks are brand new
+  when they arrive, so applying it in script costs no visible flicker there.
+
+### `D_toggle_moves_everything` — the runtime toggle is collapse-all / expand-all
+
+Flipping the preference at runtime (`/thinking`) **clears every per-block
+override and moves the whole transcript**, as well as setting the default for
+blocks yet to arrive. Dropping the `data-disclosure` attributes and re-reading
+the default is the entire implementation.
+
+- Rejected `O_default_only` — leave blocks already on screen as they are and
+  affect only future ones. Cheaper, but it leaves the transcript in a mixed
+  state nobody chose, and it makes the command stop feeling like a density
+  control.
 
 ### `D_ui_cookie_over_config` — where the runtime preference lives
+
+What the cookie holds, under `D_details_per_block`, is the **default open
+state** — not visibility. Everything below is unchanged by that; the
+precedence question is the same whichever the value means.
 
 The TUI's `D_config_default` is *file sets the default, the runtime toggle
 overrides for the session and is never written back*. The web's store for a
@@ -204,32 +281,41 @@ preference sees; nothing about the agent changes.
 
 ### Where the code goes
 
-Small, and mostly not in `lib/`:
-
-- `Config` — `[ui]` (the blocker above).
-- `app.rb` `GET /c/:id` — resolve the cookie against the config default the
-  same line the theme is resolved on, render it into `<html>`. The two
-  fallbacks are the same shape, so this is one more `include?`-or-default.
-  `App` needs the config's `[ui]` values, which arrive as class-level
-  settings like `:models` does.
-- `index.erb` — the `:root` attribute.
-- `style.css` — the rule.
-- `app.js` / a new file — the flip, the cookie, and **the re-stick** (below).
+- `Config` — `[ui]`. **Done**, see *Landed already*.
+- `{SseListener}` — wrap a `:thinking` block's html in
+  `<details><summary>`. The one `lib/` change, and it serves both render paths.
+- `app.rb` `GET /c/:id` — resolve the cookie against the config default on the
+  line the theme is resolved on; same `include?`-or-default shape. Render it
+  into `<html>` as `data-thinking`, and render `open` on the snapshot's own
+  `<details>` so a page load has no flash. `App` needs the config's `[ui]`
+  values, arriving as a class-level setting the way `:models` does.
+- `index.erb` — the `:root` attribute, and the snapshot's resolved `open`.
+- `style.css` — the summary row (muted, subtle) and the collapsed/open marker.
+  No visibility rule: `<details>` owns that now.
+- `transcript.js` — the three lines of `D_disclosure_state_on_the_block_div`,
+  the click that writes `data-disclosure`, and **the re-stick** (below). This
+  is the feature's own file by `D_feature_owns_its_file`, since all of it is
+  `#transcript`'s business.
+- `app.js` — the surface wiring only: the cookie write and the `/thinking`
+  command calling into `transcript.js`.
 
 ### The scroll re-stick — the one non-obvious mechanic
 
 `transcript.js`'s `nearBottom()` decides whether a streaming update keeps the
-pane pinned to the bottom. A global flip changes the document height by
-however much reasoning is on screen, so a pinned pane silently unpins and a
-scrolled-up reader jumps. The TUI got this free — tuile 0.15's
-`set_region_text` clamps `scroll_top_row` and re-runs auto-scroll.
+pane pinned to the bottom. Every disclosure change moves the document height —
+a single click, and `D_toggle_moves_everything` by a lot — so a pinned pane
+silently unpins and a scrolled-up reader jumps. The TUI got this free: tuile
+0.15's `set_region_text` clamps `scroll_top_row` and re-runs auto-scroll.
 
-So the flip is *two* things: an attribute write, and "if we were at the bottom,
-be at the bottom again." That second half is `#transcript`'s business, which is
-`transcript.js`'s file by `D_feature_owns_its_file` — so `initTranscript`
-returns a `restick()` (or the flip itself moves in there and `app.js` only
-wires the surface to it). Do not let a density feature reach into `#transcript`
-directly.
+So a toggle is *two* things: the state write, and "if we were at the bottom, be
+at the bottom again." Both live in `transcript.js`, which is also where the
+click lands — so unlike the earlier global-flip sketch, nothing outside has to
+reach into `#transcript` to arrange it.
+
+Open: whether an *individual* expand should re-stick at all. Clicking a block
+to read it is a deliberate act; yanking the view to the bottom afterwards may
+be exactly wrong. Probably re-stick on the global toggle and *not* on a single
+click — but that is a feel question, so try both.
 
 ---
 
@@ -276,13 +362,22 @@ the markup.
   </div>
   ```
 
-  Flip is instant and per-browser, nothing re-renders, no server state, the
-  same one-rule CSS as Part 1, and it composes with `O_details_per_block` (the
-  verbose form is exactly what a disclosure triangle wants to hold). Cost: the
-  block's HTML roughly doubles for tool blocks, and `.block.tool_call`'s
+  Flip is instant and per-browser, nothing re-renders, no server state. Cost:
+  the block's HTML roughly doubles for tool blocks, and `.block.tool_call`'s
   `white-space: pre-wrap` now wraps two spans — the newline between them in
   the source *will* render as a blank line unless the markup is emitted
   without one or the spans are `display: block`.
+
+  **Now that `D_details_per_block` is decided, the obvious variant is
+  `O_verbose_in_a_details`** — short line as the `<summary>`, verbose dump as
+  the body, one mechanism for both parts of this note and no `:root` attribute
+  for tool lines at all. Tempting, and worth deciding at the same time: it
+  reuses `D_disclosure_state_on_the_block_div` wholesale, but it makes "show me
+  the raw form" a per-call act rather than a mode, which is the *opposite* of
+  what a debugging session wants (`D_verbose_toggle`'s whole point was
+  reachability of the raw form while reading a whole turn). Probably: both —
+  the `:root` mode for "I am debugging now", the disclosure for one curious
+  call. But do not build both before trying one.
 - `O_server_mode` — the server holds one mode and re-renders tool blocks on a
   flip. That is `O_port_kinded_regions` again with the same objection: a
   display preference in server state, shared across tabs.
@@ -374,14 +469,19 @@ The TUI answer was a `u` which-key submenu with live-state labels plus
   discoverability on the desktop (the footer is always visible), reachable on
   the phone through the drawer, and no dialog at all. But three toggles in a
   footer is a settings bar, and the drawer is about *conversations*.
-- `O_details_only` — no global surface; per-block `<details>` is the whole UI.
-  Only coherent if `O_details_per_block` wins Part 1, and it gives no way to
-  say "always hide."
+- `O_details_only` — no global surface at all; the per-block `<details>` *is*
+  the whole UI. Now that `D_details_per_block` is decided this is a live
+  option rather than a hypothetical, and it is genuinely tempting: the common
+  case is one curious click, not a standing preference. But it leaves no way to
+  say "always expanded", which is a real taste some people have and which the
+  shared `[ui] show_thinking` already promises to honor. So: a surface is still
+  needed, just a less prominent one than the global-hide design wanted.
 
-Lean: **`O_two_slash_pickers`**, plus keeping `#theme-toggle` company in the
-drawer footer *only* for thinking, if it turns out to be a thing worth flipping
-mid-read. Decide the dialogs before the CSS attribute names, since the
-`<template>` bodies name the values.
+Lean: **`O_two_slash_pickers`**, and — given `O_details_only`'s point stands
+partway — *not* a drawer-footer button. With disclosure available per block,
+flipping the default is a rare act, and rare acts belong behind a command
+rather than beside `#theme-toggle`. Decide the dialogs before the CSS attribute
+names, since the `<template>` bodies name the values.
 
 ---
 
@@ -392,24 +492,35 @@ a problem this shell does not have:
 
 | pikuri-tui | pikuri-web |
 | --- | --- |
-| `D_kinded_regions` — `{region, kind, indent, render}` register + `#rerender(kind:)` | Nothing. One CSS rule (`D_web_css_hides`). |
-| `D_drop_deltas_while_hidden` — listener drops `ThinkingDelta` | Nothing. Server always renders; the browser paints (`O_listener_drops_deltas`, rejected). |
+| `D_kinded_regions` — `{region, kind, indent, render}` register + `#rerender(kind:)` | Nothing. `<details>` and one `data-` attribute (`D_details_per_block`). |
+| `D_drop_deltas_while_hidden` — listener drops `ThinkingDelta` | Nothing. Server always renders; the browser discloses (`O_listener_drops_deltas`, rejected). |
 | The `O_replay` trap (`clear` erases a parked decision) | Vacuous — no confirmer in a chat-only shell. |
 | `D_pane_owns_flag` — sub-agent listeners share the pane | No flag on the server at all. |
 | `#open_thinking_block` registers its own region | Nothing — a streamed block is already whole HTML. |
-| `indent_block` returns an empty block unchanged | Nothing — `display: none` is genuinely zero height. |
+| `indent_block` returns an empty block unchanged | Nothing — a collapsed `<details>` is genuinely one row. |
+| `D_no_hidden_marker` — no `· thought` line | **Flipped.** The marker *is* the affordance (`D_details_per_block`). |
+| One mode for the whole transcript | Per block, with the config setting the default. |
 | `Pikuri::Sanitizer` on short lines, verbose args exempt on `inspect` | Every tool path, **no exemption** — `inspect` misses the Unicode classes. |
-| tuile's `set_region_text` scroll clamping | Hand-rolled: `transcript.js` re-sticks after a flip. |
+| tuile's `set_region_text` scroll clamping | Hand-rolled: `transcript.js` re-sticks after a toggle. |
 | Six specs worth porting | Mostly moot; see below. |
 
-Of the TUI's six specs, the ones that survive are "prose and tool lines are
-untouched by the thinking flip" and, for Part 2, the renderer specs
+Of the TUI's six specs, the one that survives outright is "prose and tool lines
+are untouched by the thinking flip"; for Part 2, the renderer specs port whole
 (`display_name`, first-value pick, `OK, N kB` vs `Error:`, the cap, the
 sanitizer). Everything about collapse/reveal/re-hide is testing the register
-this shell does not have. What replaces them is a `Config` `[ui]` spec, an
-`app.rb` spec that the resolved attribute reaches `<html>` (the theme's spec is
-the template), and — if `O_render_both` wins — one asserting both forms land in
-the block.
+this shell does not have.
+
+What replaces them, and the shape is different — most of Part 1 is now
+*client* behaviour, so `spec/js` is where it lands rather than rspec:
+
+- Ruby: {SseListener} wraps a `:thinking` block in `<details><summary>` and
+  wraps nothing else; `app.rb` renders the resolved `data-thinking` into
+  `<html>` and `open` into the snapshot (the theme's spec is the template).
+- JS: a delta rewriting an *expanded* block leaves it expanded — the
+  `D_disclosure_state_on_the_block_div` guard, and the one a naive
+  implementation fails; a click writes `data-disclosure` and survives the next
+  upsert; a block with no override follows the default; the global toggle drops
+  every override.
 
 ---
 
@@ -417,15 +528,15 @@ the block.
 
 1. ~~The `[ui]` config fix~~ — **done**, see *Landed already*.
 2. ~~The sanitizer on tool lines~~ — **done**, see *Landed already*.
-3. Part 1 (`O_global_only`), once the `O_details_per_block` fork is decided.
+3. Part 1 — `D_details_per_block` + `D_disclosure_state_on_the_block_div` +
+   `D_toggle_moves_everything`. Decided; ready to build.
 4. Part 2 v1 (`O_render_both`).
 5. Part 2 v2 when pikuri ships `tool-summary-lines`.
 
 ## Open questions
 
-- **`O_details_per_block` or not** — decide before writing the kind markup,
-  because `O_both` wants `<details>` from day one and a retrofit touches the
-  three-place block-kind contract twice.
+- **Should a single expand re-stick the scroll, or only the global toggle?**
+  See *The scroll re-stick*. A feel question — try both.
 - **Does the short form want the `:tool_call` / `:tool_result` split at all?**
   The short form is a call line with its result indented under it — visually
   one unit. Two blocks is what makes the result upsertable independently, and
@@ -446,18 +557,35 @@ the block.
 Per AGENTS.md's graduation map:
 
 - Every `D_` above with a real fork → one `DECISIONS.md` entry each, plus a
-  flat invariant + `See D_<slug>` in **Scope decisions**. The ones that carry a
-  fork worth logging: `D_web_css_hides` (with `O_port_kinded_regions` /
-  `O_listener_drops_deltas` as the why-nots), `D_ui_cookie_over_config` (the
-  `D_schema_complete_config` tension is the whole entry), `D_both_forms_in_the_block`,
-  and whatever `D_no_hidden_marker` resolves to. `D_theme_cookie` gains a
-  *Consequences* line: it is no longer the only presentational cookie, and what
-  the second one taught.
+  flat invariant + `See D_<slug>` in **Scope decisions**. The four worth
+  logging:
+  - `D_details_per_block` — carries `O_global_only` and `O_port_kinded_regions`
+    as why-nots, **and the `D_no_hidden_marker` flip**, which is the entry's
+    most interesting line: the same argument the TUI used to reject a marker is
+    what makes one right here. Also the invariant `<details>` is for
+    `:thinking` only.
+  - `D_disclosure_state_on_the_block_div` — the stable-div mechanism, why it is
+    required rather than an optimization (the 15 fps rewrite), and
+    `O_stable_body_slot` / `O_server_renders_open` as why-nots. This one is a
+    **trap note**: `el.innerHTML = html` looks like it can carry the state and
+    cannot, and a reader who moves the attribute inside the payload breaks
+    mid-turn expansion only — which no spec catches unless the JS spec named
+    above exists. Write that spec *and* the note.
+  - `D_ui_cookie_over_config` — the `D_schema_complete_config` tension is the
+    whole entry.
+  - `D_both_forms_in_the_block` (Part 2).
+  `D_toggle_moves_everything` is small enough to be a *Consequences* line under
+  `D_details_per_block` rather than an entry. `D_theme_cookie` gains one too:
+  it is no longer the only presentational cookie, and what the second one
+  taught.
 - ~~The `[ui]` fix~~ and ~~the sanitizer fix~~ → done; see *Landed already*
   for where each nugget went.
-- Block-kind markup changes → the **Conventions** block-kinds bullet (which
-  already names the three places) and `transcript.js`'s markup-contract
-  comment.
+- Block-kind markup changes → the **Conventions** block-kinds bullet, **which
+  needs amending rather than following**: it says adding a kind means touching
+  SseListener + index.erb + style.css, and `D_details_per_block` shows a kind's
+  *markup* travels in the html payload, so a change to how one renders is two
+  places, not three. `transcript.js`'s markup-contract comment gains the
+  disclosure state, since that is the one part of a block the script owns.
 - New slash commands → `{SlashCommand}::CATALOG`, the `commands` map, the
   `<template>`s, and the three-place contract note in **Conventions**.
 - `[ui]` keys → `README.md`, since a user must know they exist and that they
