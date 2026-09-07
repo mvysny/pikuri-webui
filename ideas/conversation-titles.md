@@ -79,6 +79,13 @@ whether the retro-sweep below is viable at all.
 | assistant prefill `<think></think>` | — | HTTP 400 |
 | `chat_template_kwargs: {enable_thinking: false}` | **~1** | **~10** |
 
+Run 4 measured the two ends properly — same eight openers, same agent, same code path, only the
+injected param differing: **1.2 s and 8 tokens a title against 31.1 s and 625, i.e. 27× on wall
+clock and 83× on tokens.** Thinking-off is also the *steadier* of the two (0.9–1.4 s against
+1.5–72.2 s) and the safer: with thinking on, one of the eight dumped ~4000 characters of
+chain-of-thought straight into `content` where a title belongs. Full tables in
+`titler-model-probes.md`.
+
 `chat_template_kwargs` needs `RubyLLM::Chat#with_params`, and `Pikuri::Agent` exposes no extra-params
 channel — no `params:`, no thinking knob, and its `@chat` has no reader. Where the options landed:
 
@@ -134,10 +141,11 @@ waits on a pikuri release. The remaining work is the *Plumbing* section below.
 Conversations already on disk are all stamp-titled. Generating theirs some time after boot would
 mean the feature isn't only for new conversations.
 
-- **Gated entirely on the fork above.** At ~1 s / ~10 tokens a title, sweeping N old conversations is
-  free; at 60 s / 1500 it occupies the server for minutes and fights every real turn. Don't build
-  the sweep until thinking-off is settled — which, after run 2, means don't build it until the param
-  channel exists.
+- **Was gated on the fork above; now priced.** At the measured 1.2 s a title, sweeping 100
+  stamp-titled conversations is **two minutes** of background work. At the thinking-on 31.1 s it is
+  **52 minutes** of inference-server occupancy fighting every real turn. That is the difference
+  between "lazy on open, or just sweep the lot once Puma is up" and "don't build it" — and run 3
+  settled which side we are on.
 - **"Still stamp-titled" needs a test, and today there isn't one.** `meta.json`'s `title` always
   holds *something*, and `ConversationStore#row` falls back to the stamp when it doesn't. Two ways:
   regex the stamp shape (`%Y-%m-%d %H:%M`), or add a key to `meta.json` — the class doc says a key

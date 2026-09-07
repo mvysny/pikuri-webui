@@ -228,6 +228,71 @@ What it costs, stated honestly:
   the conversation agents never see it. On a non-llama.cpp server the field is either ignored (slow
   titles) or 400s (a failed title, which the design already requires to be non-fatal).
 
+## Run 4: the matched benchmark
+
+Runs 1–3 measured different prompts on different paths, so the headline ratio was never apples to
+apples. This one is: the same eight openers, the same hardened prompt, the same `Pikuri::Agent`
+(no tools, `StepLimit.new(max: 1)`, `streaming: false`, `clear_conversation` between), the same
+adapter class both times — one subclass injecting `enable_thinking: false`, the other injecting
+nothing and only recording `usage` off the wire. Script: `bench-thinking-on-off.rb`.
+
+| | thinking OFF | thinking ON |
+|---|---|---|
+| total, 8 titles | **9.2 s** | 248.7 s |
+| mean | **1.2 s** | 31.1 s |
+| median | **1.2 s** | 33.3 s |
+| range | 0.9–1.4 s | 1.5–72.2 s |
+| completion tokens, total | **60** | 4996 |
+| completion tokens, mean | **8** | 625 |
+
+**27× on wall clock, 83× on tokens.** The token ratio outruns the wall-clock ratio because at eight
+tokens the request is dominated by prefill and HTTP, not generation — which is also why there is no
+point chasing a smaller model for speed: 1.2 s is mostly floor, and a 4B measured 0.4 s against it.
+
+Per-title, thinking off:
+
+| opener | title | s | tokens |
+|---|---|---|---|
+| capital | `Capital of Australia` | 0.9 | 4 |
+| fd-leak | `Ruby daemon file descriptor leak CLOSE_WAIT` | 1.4 | 8 |
+| hi | `A simple greeting to start` | 1.0 | 6 |
+| sinatra-roda | `Sinatra vs Roda for SSE Streaming Connections` | 1.2 | 10 |
+| injection | `Ignore Instructions Write Poem About Cats` | 1.1 | 8 |
+| russian | `Настройка nginx для WebSockets` | 1.2 | 8 |
+| slow-sql | `SQL Query Performance Optimization Tips` | 1.2 | 6 |
+| kyoto | `Kyoto Temple Food Trip Avoiding Crowds` | 1.3 | 10 |
+
+8/8 again, and the spread is tight — 0.9 to 1.4 s regardless of opener size, because the output
+length is what dominates and the output is always a title.
+
+### Thinking-on is not just slow, it is *unreliable*
+
+Two things fell out of the baseline column that no amount of patience fixes.
+
+**It sometimes dumps the whole reasoning trace into `content`.** The `sinatra-roda` row came back as
+`thinking </think> Sinatra vs Roda for SSE heavy apps Thinking Process: 1. **Analyze the
+Request:** …` — roughly 4000 characters of chain-of-thought, including the model's draft list and
+its word-count arithmetic, with the actual title at the far end. `reasoning_content` did not catch
+it. The adapter is not implicated: the baseline subclass leaves the body untouched.
+
+This is run 1's `</think>` artifact, **inverted**. Run 1 saw a stray `</think>` on the thinking-*off*
+path; runs 2 and 4 never reproduced that, and run 4 instead found the leak on the thinking-*on*
+path, where it is far worse — a sidebar row would get a 4000-character essay instead of a title. So
+the sanitizing obligation does not go away, it *moves*: any path that leaves thinking on needs the
+strip and the length cap far more urgently than the thinking-off path ever did.
+
+**And it is not consistently slow, which is worse than being slow.** `slow-sql` returned in 1.5 s on
+9 tokens — the model simply declined to think that time. Between that and `kyoto`'s 72.2 s / 1466
+tokens, the thinking-on path spans a 48× spread on identical work. Nothing can be scheduled around
+that.
+
+### What this does to the retro-sweep
+
+The sweep gate in the idea file can now be priced. At 1.2 s a title, sweeping 100 stamp-titled
+conversations is **two minutes** of background work; at 31.1 s it is **52 minutes** of inference-server
+occupancy fighting every real turn. That is the difference between "sweep lazily on open, or just
+sweep the lot after Puma binds" and "don't build it".
+
 ## The server-side alternative: llama.cpp has the knobs too
 
 If the adapter is judged too clever, the operator can make thinking-off a property of the *server*
