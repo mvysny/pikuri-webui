@@ -187,6 +187,16 @@ the alternatives that were rejected, live one entry per slug in
   `style.css`, and are exceptions on the record — don't grow a third.
   See `D_icon_plate`.
 
+- **Reasoning is collapsible per block, and never hidden.** Every
+  `:thinking` block is its own `<details>`; `[ui] show_thinking` sets
+  whether blocks *start* open, never whether they render. `<details>` is
+  for `:thinking` alone — a notice behind a triangle is a notice nobody
+  reads. Which blocks are open lives in `data-disclosure` on the **block
+  div**, outside the html `upsert` rewrites 15×/s, or mid-turn expansion
+  breaks silently. `/thinking` is collapse-all/expand-all, and nothing
+  touches the scroll.
+  See `D_details_per_block`, `D_disclosure_state_on_the_block_div`.
+
 - **Theme is a presentational cookie, not transcript state.** Eleven
   semantic tokens, two palettes, both in `public/style.css`; `GET /`
   renders `data-theme` and app.js rewrites the cookie in place. A new
@@ -231,8 +241,11 @@ the alternatives that were rejected, live one entry per slug in
   is a *standing* obligation, not a one-time port: a config-schema
   addition in pikuri-tui is a pikuri-web change, and strictness is
   asymmetric on purpose — strict inside the tables we consume, permissive
-  inside the ones we only carry.
-  See `D_schema_complete_config`.
+  inside the ones we only carry. The one thing the file does *not* own
+  outright is a `[ui]` view preference: there it sets the starting value
+  and a per-browser cookie outranks it, because view state is the
+  browser's by decision.
+  See `D_schema_complete_config`, `D_ui_cookie_over_config`.
 
 - **`--dev` is Sinatra's development mode, not code reloading** — the
   agent, its listener stack and the runner thread are wired once at
@@ -313,14 +326,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/js/statusbar.js` — `initStatusBar`, `#status-bar` and its ■:
   status frames, `POST /cancel`, and the intended model read back.
 - `public/js/transcript.js` — `initTranscript`, `#transcript`: blocks
-  upserted by id, dropped, emptied, and the stick-to-bottom scroll.
+  upserted by id, dropped, emptied, the stick-to-bottom scroll, and which
+  reasoning blocks are open.
 - `public/js/conversations.js` — `initConversations`, the list and how a
   phone reaches it: `#sidebar` refresh, delete, mint, and the drawer.
 - `public/js/dom.js` — generic DOM mechanics (`openDialog`, `cloneTemplate`,
   `el`) with no app knowledge; imported by `app.js` as an ES module.
 - `public/style.css` — hand-written chat layout, two layouts off one
   breakpoint; block kinds mirror the TUI's visual language (muted
-  thinking, tool lines in Kuri's coat tan).
+  thinking, tool lines in Kuri's coat tan) and own the reasoning
+  disclosure row.
 - `public/images/kuri.svg` — the mascot, transparent and unplated; master
   artwork every icon beside it is rendered from.
 - `public/images/favicon.svg` — the tab icon: Kuri on a plate; the one
@@ -364,7 +379,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - Block kinds (`:user`, `:assistant`, `:thinking`, `:tool_call`,
   `:tool_result`, `:notice`, `:error`) are the contract between
   SseListener, index.erb and style.css — adding one means touching
-  all three.
+  all three. Changing how an *existing* kind renders is only two of
+  them: a kind's markup rides inside the html payload, and index.erb and
+  transcript.js wrap that payload in the same `div.block.<kind>`, so the
+  listener and style.css are the pair that move (`D_details_per_block`).
 - Attacker-influenced text that reaches a block as **plain text** goes
   through `Pikuri::Sanitizer` *before* `MarkdownRenderer.escape` —
   escaping stops markup, not a bidi override that reorders a filename or

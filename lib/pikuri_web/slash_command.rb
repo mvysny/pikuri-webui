@@ -45,6 +45,7 @@ module PikuriWeb
       new(name: '/new', description: 'start a fresh conversation'),
       new(name: '/model', description: 'put this conversation on another connection'),
       new(name: '/theme', description: 'switch between the dark and light theme'),
+      new(name: '/thinking', description: 'start reasoning blocks expanded or collapsed'),
       new(name: '/trifecta', description: 'lethal-trifecta report for this agent')
     ].freeze
 

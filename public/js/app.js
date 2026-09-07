@@ -46,6 +46,26 @@ const applyTheme = (theme) => {
 themeToggle.addEventListener('click', () =>
   applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light'));
 
+// Same cookie-is-the-store shape as the theme: the server resolves it into
+// `data-thinking` on the next GET /, so this only has to move the live page.
+// transcript.js owns what that means for the blocks.
+const applyThinking = (open) => {
+  transcript.setThinkingDefault(open);
+  document.cookie = `thinking=${open ? 'expanded' : 'collapsed'}; path=/; max-age=31536000; samesite=lax`;
+};
+
+const openThinkingPicker = () => {
+  const dialog = openDialog('Reasoning', cloneTemplate('tpl-thinking'));
+  const current = document.documentElement.dataset.thinking;
+  dialog.querySelectorAll('[data-thinking]').forEach((option) => {
+    if (option.dataset.thinking === current) option.setAttribute('aria-current', 'true');
+    option.addEventListener('click', () => {
+      applyThinking(option.dataset.thinking === 'expanded');
+      dialog.close();
+    });
+  });
+};
+
 const openThemePicker = () => {
   const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
   const current = document.documentElement.dataset.theme;
@@ -96,6 +116,7 @@ initComposer({
     '/new': conversations.start,
     '/model': openModelPicker,
     '/theme': openThemePicker,
+    '/thinking': openThinkingPicker,
     '/trifecta': () => openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')),
   },
 });

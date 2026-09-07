@@ -21,7 +21,15 @@
 
      `interactive-widget=resizes-content` is what keeps the composer above
      iOS's on-screen keyboard instead of behind it. -->
-<html lang="en" data-theme="<%= theme %>" data-conversation="<%= conversation %>">
+<!-- `data-thinking` is the resolved reasoning-disclosure default — "expanded"
+     or "collapsed". Rendered here for the same reason `data-theme` is: the
+     blocks arrive as `<details open>` (the listener cannot know a per-browser
+     preference), so transcript.js reads this attribute to resolve them, and a
+     server-rendered value means it never has to wait for a cookie read.
+     A per-block override lives on the block div; see public/js/transcript.js
+     and DECISIONS.md D_details_per_block. -->
+<html lang="en" data-theme="<%= theme %>" data-thinking="<%= thinking %>"
+      data-conversation="<%= conversation %>">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
@@ -192,6 +200,20 @@
       </button></li>
       <% end %>
     </ul>
+  </template>
+
+  <!-- Which row is current is app.js's, as in the theme picker: the default
+       moves in the page after this was served. "Expanded" and "Collapsed"
+       describe how a *new* reasoning block arrives; picking either also drops
+       every per-block override, so the whole transcript follows
+       (D_details_per_block). -->
+  <template id="tpl-thinking">
+    <ul class="picker">
+      <li><button type="button" class="picker-option" data-thinking="expanded">Expanded</button></li>
+      <li><button type="button" class="picker-option" data-thinking="collapsed">Collapsed</button></li>
+    </ul>
+    <p class="dialog-detail">Reasoning is always kept — this is only whether it
+      starts open. Any block can be opened or closed on its own.</p>
   </template>
 
   <template id="tpl-unknown-command">

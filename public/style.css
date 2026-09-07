@@ -314,6 +314,50 @@ body {
 
 .block.thinking { color: var(--fg-muted); }
 
+/* The disclosure row is the whole affordance: it says reasoning happened here
+   and it is the way in, so it has to read as subordinate to the conversation
+   rather than as another message. Hence the muted tone at the block's own
+   color, a small caps-ish label, and the native marker replaced by one that
+   sits tight against the word. */
+.block.thinking summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.8em;
+  letter-spacing: 0.04em;
+  width: fit-content;
+  /* The label is 0.8em, which leaves a ~17px row — under the 24px floor a
+     finger needs on the phone layouts. The padding is what makes the row a
+     tappable control rather than a line of text that happens to react. */
+  padding: 0.3rem 0;
+}
+
+/* Safari draws its own triangle through a pseudo-element the standard
+   list-style does not reach. */
+.block.thinking summary::-webkit-details-marker { display: none; }
+
+.block.thinking summary::before {
+  content: '▸';
+  font-size: 0.9em;
+  /* Rotate rather than swap glyphs, so the marker cannot shift the label's
+     baseline as it changes. */
+  transition: transform 0.12s ease;
+}
+
+.block.thinking details[open] > summary::before { transform: rotate(90deg); }
+
+/* Hover only. Brightening an *open* summary was tried and reverted: it made
+   the label compete with the assistant prose under it, which inverts the
+   hierarchy the muted reasoning tone exists to establish. The rotated marker
+   already says which state the block is in. */
+.block.thinking summary:hover { color: var(--fg); }
+
+/* Indent the reasoning under its own row, so an expanded block reads as
+   belonging to the summary rather than as loose prose. */
+.block.thinking details > :not(summary) { margin-left: 0.9rem; }
+
 .block.tool_call,
 .block.tool_result {
   white-space: pre-wrap;

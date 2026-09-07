@@ -137,6 +137,8 @@ RSpec.describe PikuriWeb::App do
   end
   let(:lock) { PikuriWeb::BigAppLock.new }
   let(:registry) { FakeRegistry.new([live], lock: lock) }
+  # What `[ui] show_thinking` resolved to at boot; the config default.
+  let(:show_thinking) { true }
 
   # The runner GET /c/:id would open for the default conversation.
   let(:runner) { registry.open(live) }
@@ -151,6 +153,9 @@ RSpec.describe PikuriWeb::App do
     described_class.set :broadcaster, broadcaster
     described_class.set :registry, registry
     described_class.set :models, models
+    # Class-level and therefore sticky across examples: set every time, or an
+    # example that overrides it leaks into the next.
+    described_class.set :show_thinking, show_thinking
   end
 
   def get_live = get("/c/#{live.id}")
@@ -288,13 +293,56 @@ RSpec.describe PikuriWeb::App do
 
     it 'names the known commands in the unknown-command dialog' do
       get_live
-      assert_includes last_response.body, 'Known commands: /new, /model, /theme, /trifecta.'
+      assert_includes last_response.body, 'Known commands: /new, /model, /theme, /thinking, /trifecta.'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do
       set_cookie 'theme=neon'
       get_live
       assert_includes last_response.body, 'data-theme="dark"'
+    end
+
+    # D_details_per_block: the blocks arrive as `<details open>` and the
+    # browser resolves them, so this attribute is what transcript.js reads.
+    context 'the reasoning-disclosure default' do
+      it 'renders the configured default with no cookie' do
+        get_live
+        assert_includes last_response.body, 'data-thinking="expanded"'
+      end
+
+      context 'when the config file asked for collapsed' do
+        let(:show_thinking) { false }
+
+        it 'renders that instead — the file is what a browser with no preference sees' do
+          get_live
+          assert_includes last_response.body, 'data-thinking="collapsed"'
+        end
+
+        it 'still lets a cookie outrank it (D_ui_cookie_over_config)' do
+          set_cookie 'thinking=expanded'
+          get_live
+          assert_includes last_response.body, 'data-thinking="expanded"'
+        end
+      end
+
+      it 'honours a collapsed cookie over the configured default' do
+        set_cookie 'thinking=collapsed'
+        get_live
+        assert_includes last_response.body, 'data-thinking="collapsed"'
+      end
+
+      it 'falls back to the configured default for an unknown cookie value' do
+        set_cookie 'thinking=sideways'
+        get_live
+        assert_includes last_response.body, 'data-thinking="expanded"'
+      end
+
+      it 'offers both states in the picker the command opens' do
+        get_live
+        assert_includes last_response.body, '<template id="tpl-thinking">'
+        assert_includes last_response.body, 'data-thinking="expanded">Expanded<'
+        assert_includes last_response.body, 'data-thinking="collapsed">Collapsed<'
+      end
     end
 
     # Nothing is gated on busy any more: a turn queues rather than being

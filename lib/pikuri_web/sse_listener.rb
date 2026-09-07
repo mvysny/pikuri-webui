@@ -206,11 +206,39 @@ module PikuriWeb
     # @param html [String] rendered/escaped HTML
     # @return [void]
     def add_block(kind, html)
+      html = disclose(kind, html)
       @lock.run do
         block = @transcript.add(kind: kind, html: html)
         @broadcaster.broadcast(event: :block, data: { id: block.id, kind: kind, html: html },
                                conversation: @conversation)
       end
+    end
+
+    # Wrap a +:thinking+ block in the disclosure the browser collapses, and
+    # pass every other kind through untouched:
+    #
+    #   disclose(:thinking, "<p>The user wants…</p>")
+    #   # => "<details open><summary>thinking</summary><p>The user wants…</p></details>"
+    #
+    # The collapsed summary row is both the "reasoning happened here" signal
+    # and the way in, which is why it replaces the TUI's decision to draw
+    # nothing at all (`D_details_per_block`). +:thinking+ is the only kind that
+    # gets one: a notice behind a triangle is a notice nobody reads.
+    #
+    # +open+ is in the markup unconditionally because this listener *cannot*
+    # know the preference — it is per-conversation and shared by every tab
+    # reading it, while collapsing is per-browser. So this renders the pre-JS
+    # state and +transcript.js+ resolves it per tab; expanded is the state
+    # chosen for it so that the default configuration never flashes, and so
+    # that a browser running no script at all still shows everything.
+    #
+    # @param kind [Symbol] block kind
+    # @param html [String] the block's rendered HTML
+    # @return [String] +html+, wrapped when it is reasoning
+    def disclose(kind, html)
+      return html unless kind == :thinking
+
+      "<details open><summary>thinking</summary>#{html}</details>"
     end
 
     # Open a streamed block: an empty transcript block claims the id and
@@ -233,6 +261,7 @@ module PikuriWeb
     #   no-op append path can't race)
     # @return [void]
     def push_stream(kind, message, html)
+      html = disclose(kind, html)
       @lock.run do
         @transcript.update(message.id, html)
         @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },

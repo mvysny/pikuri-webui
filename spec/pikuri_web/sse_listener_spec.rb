@@ -101,6 +101,49 @@ RSpec.describe PikuriWeb::SseListener do
     end
   end
 
+  # D_details_per_block. `open` is unconditional because the listener is shared
+  # by every tab reading the conversation and cannot know a per-browser
+  # preference; transcript.js resolves it.
+  context 'reasoning disclosure' do
+    it 'wraps a non-streamed thinking block in an open disclosure' do
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'I should read the config.'))
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, '<details open><summary>thinking</summary>'
+      assert_includes html, 'I should read the config.'
+    end
+
+    # The common path: the bookend finalizes a stream rather than standing
+    # alone, and it goes through push_stream instead of add_block.
+    it 'wraps a streamed thinking block on every delta and on the bookend' do
+      listener.on_event(Pikuri::Agent::Event::ThinkingDelta.new(content: 'Two '))
+      assert_includes transcript.to_a.fetch(0).html, '<summary>thinking</summary>'
+
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'Two entries.'))
+      html = transcript.to_a.fetch(0).html
+      assert_includes html, '<details open><summary>thinking</summary>'
+      assert_includes html, 'Two entries.'
+    end
+
+    # A notice behind a triangle is a notice nobody reads, so :thinking is the
+    # only kind that gets one.
+    it 'wraps no other kind' do
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'Two.'))
+      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'read', arguments: { path: 'x' }))
+      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: 'ok'))
+      listener.on_event(Pikuri::Agent::Event::FallbackNotice.new(reason: 'retrying'))
+      listener.on_event(Pikuri::Agent::Event::Cancelled.new)
+
+      transcript.to_a.each { |block| refute_includes block.html, '<details' }
+    end
+
+    it 'sends the disclosure over SSE, not only into the transcript' do
+      queue # subscribe before the event
+      listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'hm'))
+      assert_includes drain_frames(queue).join, '<summary>thinking</summary>'
+    end
+  end
+
   context 'mid-stream interruptions' do
     it 'wipes an unfinished assistant preview when a ToolCall arrives' do
       queue # subscribe before the events

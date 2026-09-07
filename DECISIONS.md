@@ -53,6 +53,188 @@ replacement fresh.
 
 ---
 
+## D_details_per_block — Reasoning gets a disclosure per block; the config sets its default, not its visibility
+
+**Status:** Accepted, shipped. `SseListener#disclose` wraps a
+`:thinking` block, `style.css` styles the row, `transcript.js` resolves
+it, `/thinking` picks the default.
+
+**Context.** pikuri-tui hides reasoning behind one flag: `[ui]
+show_thinking` sets the starting value and a toggle flips the whole pane,
+drawing *nothing* where a hidden block was (its `D_no_hidden_marker` —
+grey filler earns nothing, and a terminal has no cheap per-block
+affordance). Porting that shape was the obvious move.
+
+**Decision.** Each `:thinking` block renders as its own
+`<details open><summary>thinking</summary>`, and the preference sets
+whether blocks start **open or closed** — never whether they exist. The
+collapsed row is both the "reasoning happened here" signal and the way
+in: short feedback that thinking occurred, subtle enough not to disturb
+the conversation.
+
+**So pikuri-tui's `D_no_hidden_marker` inverts here, on its own argument.** The TUI
+rejected a marker because a line you cannot click is filler. A browser
+makes that same row clickable, which turns it from filler into the
+affordance — it pays for its line twice. The preference also keeps one
+meaning in both shells ("do I want reasoning by default"), expressed as
+each chrome can afford: the TUI omits, the browser collapses.
+
+`:thinking` is the **only** kind that gets one. A notice behind a
+triangle is a notice nobody reads, and a disclosure is an inviting
+pattern to reach for.
+
+**Rejected: the straight port — one hide/show flip, no marker.** One CSS
+rule, and it throws away the affordance the terminal lacked. "That answer
+looks wrong, show me *that* step's reasoning" is the case that matters,
+and a global switch cannot express it.
+
+**Rejected: a server-side visibility gate** (the shape pikuri-tui's
+`D_kinded_regions` register serves). It would put a display preference in
+server state, which is per-browser by decision — two tabs with different
+preferences would fight over one transcript. The TUI needed that register
+because a hidden region's text had to be *recomputed*; every block here is
+already complete HTML in the DOM, so none of the machinery has an
+equivalent and {Transcript} gained nothing.
+
+**Rejected: dropping `ThinkingDelta` while collapsed**, the TUI's
+pikuri-tui's `D_drop_deltas_while_hidden`. The server cannot drop a delta for one tab
+and keep it for another without a per-connection filter, and
+`D_server_authoritative_transcript` says the transcript is one picture.
+The TUI dropped deltas to avoid *rendering* work on a hidden pane; the
+cost here is SSE bytes on localhost. **The server always renders and
+always broadcasts; the browser decides what it shows** — which is also
+strictly better than the TUI, where a cancel mid-thinking while hidden
+left only what had streamed revealable. Nothing is ever lost here.
+
+**Rejected: brightening an open block's `<summary>`.** Tried, and
+reverted after looking at it: the label then competes with the assistant
+prose beneath it, inverting the hierarchy the muted reasoning tone exists
+to establish. The rotated marker already says which state the block is
+in.
+
+**Consequences.**
+
+- `open` is in the markup unconditionally, and that is not a default
+  masquerading as one: the listener is per-*conversation* and shared by
+  every tab reading it, while collapsing is per-*browser*, so it renders
+  the pre-JS state and `transcript.js` resolves it. Expanded is the state
+  chosen for it so the default configuration never flashes, and so a
+  browser running no script still shows everything.
+- **The runtime toggle is collapse-all / expand-all**, not
+  default-for-future-blocks-only: `/thinking` drops every per-block
+  override and moves the whole transcript. The alternative leaves the
+  transcript in a mixed state nobody chose and stops the command feeling
+  like a density control.
+- **Nothing touches the scroll**, deliberately. Every disclosure change
+  moves the document height — a global toggle by a lot — so a pinned pane
+  can unpin and a scrolled-up reader's view can shift; tuile gave the TUI
+  this free via `set_region_text`'s clamping. No equivalent was built
+  because the right feel differs per case: yanking the view to the bottom
+  after a deliberate click is plausibly worse than leaving it, and
+  guessing means feel-code no spec can justify. Revisit if the pane stops
+  following a stream while pinned, or a collapse leaves the reader
+  staring at whitespace.
+- The block-kind contract is **two** places for a change like this, not
+  the three `AGENTS.md` names: a kind's markup travels inside the html
+  payload, and `index.erb` and `transcript.js` wrap that payload in an
+  identical div. Only the listener and `style.css` moved.
+
+## D_disclosure_state_on_the_block_div — Which reasoning blocks are open lives on the block div, outside the html the server rewrites
+
+**Status:** Accepted, shipped in `transcript.js` alongside
+`D_details_per_block`.
+
+**Context.** `upsert` replaces a block's `innerHTML` on every streaming
+delta (`D_rerender_and_replace`), and pikuri coalesces those at 15 fps.
+A `<details>` inside that payload is therefore destroyed and rebuilt
+about every 67 ms while reasoning streams.
+
+**Decision.** The open state lives as `data-disclosure` on the **block
+div** — which `upsert` reuses and never rebuilds — and an *absent*
+attribute means "follow the default". `transcript.js` re-applies it to
+the freshly-written `<details>` after each rewrite.
+
+This is required rather than an optimization, because a collapsed
+default puts the likeliest first action straight on the broken path: the
+user sees `▸ thinking`, clicks to peek mid-turn, and the next delta would
+slam it shut. Open-by-default has the mirror problem, where only
+*collapsing* fights the rewrite.
+
+**The trap, which is why this is written down.** `el.innerHTML = html`
+looks like it can carry the state, and moving the attribute inside the
+payload leaves everything working *except* mid-turn expansion — a case no
+spec in this repo can catch, since there is no JS runtime here
+(`D_no_js_build_step`). Verified instead in a real browser against the
+real module: a click survived 19 consecutive rewrites, in both
+directions, with a no-override sibling still following the default.
+
+**Rejected: replacing only an inner `.thinking-body`** so the
+`<details>` is never rebuilt. It works, and it requires the script to
+know that `:thinking` blocks have a body slot — markup knowledge in JS,
+which is the half of `D_no_js_build_step` that is not negotiable.
+
+**Rejected: a state map keyed by block id.** The stable div already *is*
+the map, and a side table would need its own eviction on `#remove` /
+`#reset`. State dying with the element is a feature: a reopened
+conversation starts fresh.
+
+**Rejected: recording the override from the `toggle` event with a
+"programmatic" flag.** `<details>`'s toggle event fires
+*asynchronously*, so a flag set around `details.open = …` is already
+false when the handler runs. What ships instead writes an override only
+when the element disagrees with what the default would have set — true of
+a user's click, false of our own write. The event also does not bubble,
+hence the capture-phase listener.
+
+**Consequence.** The server-rendered snapshot never passes through
+`upsert`, so `transcript.js` also resolves the blocks already in the page
+at mount. Without it a collapsed-preference reader watches reasoning they
+asked to hide until the SSE catch-up arrives — a whole round trip, not a
+frame.
+
+## D_ui_cookie_over_config — A `[ui]` preference is a per-browser cookie over a config default, and that is not the precedence rule the config decision forbids
+
+**Status:** Accepted, shipped as the `thinking` cookie resolved against
+`Config#show_thinking` in `GET /c/:id`.
+
+**Context.** `D_schema_complete_config` states it flatly: "anything the
+file has a home for comes from the file and nowhere else — no flag, no
+`ENV`, no project-local overlay — so there is never a precedence rule
+between an override, the file and a conversation's saved model."
+`[ui] show_thinking` is a key the file has a home for. A cookie that
+outranks it looks exactly like the thing that sentence forbids.
+
+**Decision.** The file supplies the **starting value**; a `/thinking`
+pick writes a cookie that outranks it from then on, per browser. The
+resolving distinction, and the reason this needed writing down rather
+than assuming: **`D_schema_complete_config` governs the server's
+configuration** — a connection, a key, a switch the agent runs on. A
+density preference is *view state*, which `AGENTS.md` already partitions
+to the browser ("each browser owns its own view state"). The file says
+what a browser that has never expressed a preference sees; nothing about
+the agent changes, and no two sources ever describe one connection.
+
+This is also the shape pikuri-tui's `D_config_default` already has — file
+sets the default, the runtime toggle overrides and is never written back
+— with the cookie standing in for the TUI's session.
+
+**Rejected: a session cookie** (no `max-age`, dying with the browser
+session). It maps *exactly* onto the TUI's never-written-back override
+and sidesteps the argument above entirely. Passed over because it would
+make this cookie behave differently from the `theme` cookie beside it,
+which someone will later "fix" without reading this — and a web app
+remembering a display preference across restarts is the less surprising
+behaviour.
+
+**Rejected: parsing `[ui]` for schema completeness and ignoring it.** A
+`show_thinking = false` honored in the TUI and silently dropped in the
+browser is worse than either consistent answer, and it makes the shared
+config file a half-truth.
+
+**Rejected: the file as the only source, no runtime pick.** A preference
+you cannot change without an editor and a restart is not a density
+control.
+
 ## D_released_pikuri_gems — Released `pikuri-core` / `pikuri-pdf` from RubyGems, pinned to one minor
 
 **Status:** Accepted, shipped. Supersedes `D_track_pikuri_master`, whose
@@ -1558,10 +1740,23 @@ cookie is deliberately *outside* {Transcript} and stays presentational,
 which is what lets "the transcript is server-authoritative" keep meaning
 what it says rather than becoming "…except theme".
 
-**Consequences.** The theme is the one piece of per-browser state in the
+**Consequences.** The theme was the one piece of per-browser state in the
 project, and it is the precedent a future per-browser preference should
 follow. A new themed colour means adding it to both palettes *and* both
 mappings; nothing outside `style.css` may read a raw colour.
+
+**Amended: it is no longer the only presentational cookie.**
+`D_details_per_block` added `thinking`, and it followed this precedent
+almost exactly — cookie as the store, resolved server-side into a `:root`
+attribute so the first paint is right, app.js rewriting both in place, an
+unknown value falling back. The one place it *had* to differ is worth
+knowing before a third one is written: `thinking`'s fallback is a
+**config value** (`[ui] show_thinking`) rather than a constant, because
+that key exists in the shared config file and a shell that ignored it
+would be lying about honoring the file. So "presentational cookie" now
+has two shapes — one with a default nobody can configure, one whose
+default the file owns — and the difference is whether pikuri's own config
+schema has a home for the preference.
 
 `--send` / `--send-fg` are the procedure's first exercise —
 the phone composer's yellow ↑ (`D_one_shell_two_layouts`). Two tokens

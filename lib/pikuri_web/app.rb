@@ -58,6 +58,22 @@ module PikuriWeb
     THEMES = %w[dark light].freeze
     DEFAULT_THEME = 'dark'
 
+    # The two reasoning-disclosure states style.css and transcript.js know
+    # about, carried by the `thinking` cookie the same way `theme` is carried
+    # and validated the same way — app.js is the only writer, the user can
+    # still edit it, so an unknown value falls back.
+    #
+    # The fallback is the configured `[ui] show_thinking` rather than a
+    # constant: the config file says what a browser that has never expressed a
+    # preference sees (`D_ui_cookie_over_config`).
+    THINKING = %w[expanded collapsed].freeze
+
+    # Whether reasoning starts expanded for a browser with no `thinking`
+    # cookie — the host sets it from `Config#show_thinking`. Defaults to the
+    # config default rather than to nothing, so a spec that injects no setting
+    # still renders a legal page.
+    set :show_thinking, true
+
     # No page of its own: there is no "current" conversation any more, only the
     # one a tab has open, so a bare +/+ picks the newest and hands over a real
     # URL to sit on.
@@ -80,6 +96,7 @@ module PikuriWeb
     # SSE reconnect for a color change.
     get '/c/:id' do
       cookie = request.cookies['theme']
+      thinking = request.cookies['thinking']
       # One task, so the page is an untorn read: the blocks, the status bar
       # and the sidebar rows come from the same instant, never straddling a
       # transition. The blocks are immutable and the rest plain data, so the
@@ -100,6 +117,7 @@ module PikuriWeb
       end
       erb :index, locals: snapshot.merge(
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
+        thinking: THINKING.include?(thinking) ? thinking : default_thinking,
         commands: SlashCommand.catalog(connections: settings.models.size),
         models: settings.models
       )
@@ -234,6 +252,9 @@ module PikuriWeb
     end
 
     private
+
+    # @return [String] the {THINKING} state a browser with no cookie gets.
+    def default_thinking = settings.show_thinking ? 'expanded' : 'collapsed'
 
     # Resolve an id and open it, 404ing on anything not listed — which is what
     # keeps user input from ever becoming a path.

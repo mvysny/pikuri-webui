@@ -127,6 +127,7 @@ or just tap a row, which is the point on a phone: `/t`, tap.
 | `/new` | start a fresh conversation, as the sidebar button does |
 | `/model` | put this conversation on another `[[llm]]` connection |
 | `/theme` | pick the dark or light theme |
+| `/thinking` | whether reasoning blocks start expanded or collapsed |
 | `/trifecta` | show this agent's lethal-trifecta report — the same map the boot banner prints |
 
 `/model` only appears when you have more than one `[[llm]]` — with a single
@@ -141,6 +142,27 @@ with a space in it is never read as a command, so `/usr/share/foo is
 missing` sends normally. A slash-word that matches no command is not sent
 at all; you get a dialog naming the commands there are, and your text
 stays where you typed it.
+
+### Reasoning blocks
+
+Models that think out loud get a `▸ thinking` row for each stretch of
+reasoning. Click it to read that stretch, click again to fold it away — one
+block at a time, so you can open the step that produced a wrong answer
+without wading through the rest.
+
+`/thinking` sets whether they *start* open or folded, and moves everything
+already on screen to match. Reasoning is never thrown away: folding it only
+folds it, and reopening a saved conversation gets it back either way.
+
+Which way they start also comes from the config file, shared with pikuri-tui:
+
+```toml
+[ui]
+show_thinking = false      # start every reasoning block folded
+```
+
+`/thinking` overrides that in the browser you clicked it in, and remembers.
+Clear your cookies and the file's value is what you get back.
 
 ## Conversations
 
