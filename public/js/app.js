@@ -66,6 +66,23 @@ const openThinkingPicker = () => {
   });
 };
 
+// The same cookie-is-the-store shape again, and the cheapest of the three:
+// every tool block already carries both forms, so the attribute *is* the
+// switch — no walk, nothing for transcript.js to do.
+const applyTools = (form) => {
+  document.documentElement.dataset.tools = form;
+  document.cookie = `tools=${form}; path=/; max-age=31536000; samesite=lax`;
+};
+
+const openToolLinesPicker = () => {
+  const dialog = openDialog('Tool lines', cloneTemplate('tpl-toollines'));
+  const current = document.documentElement.dataset.tools;
+  dialog.querySelectorAll('[data-tools]').forEach((option) => {
+    if (option.dataset.tools === current) option.setAttribute('aria-current', 'true');
+    option.addEventListener('click', () => { applyTools(option.dataset.tools); dialog.close(); });
+  });
+};
+
 const openThemePicker = () => {
   const dialog = openDialog('Theme', cloneTemplate('tpl-theme'));
   const current = document.documentElement.dataset.theme;
@@ -117,6 +134,7 @@ initComposer({
     '/model': openModelPicker,
     '/theme': openThemePicker,
     '/thinking': openThinkingPicker,
+    '/toollines': openToolLinesPicker,
     '/trifecta': () => openDialog('Lethal-trifecta report', cloneTemplate('tpl-trifecta')),
   },
 });

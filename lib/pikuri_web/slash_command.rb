@@ -35,7 +35,14 @@ module PikuriWeb
     # +/theme+ is one command with a picker rather than +/dark+ and +/light+, so
     # the catalog does not grow a row per value of every future setting. It
     # leaves +/t+ ambiguous with +/trifecta+, which is precisely the case the
-    # palette exists for. There is no +/clear+: the TUI's wipes a conversation's
+    # palette exists for.
+    #
+    # +/toollines+ is deliberately not +/tools+, ugly as the longer name is: a
+    # user who types +/tools+ expects to be told which tools the agent has, and
+    # a display density squatting that name would leave the listing, if one is
+    # ever built, with the worse one.
+    #
+    # There is no +/clear+: the TUI's wipes a conversation's
     # context in place, and here conversations are separate objects, so +/new+ is
     # what that means.
     #
@@ -46,6 +53,7 @@ module PikuriWeb
       new(name: '/model', description: 'put this conversation on another connection'),
       new(name: '/theme', description: 'switch between the dark and light theme'),
       new(name: '/thinking', description: 'start reasoning blocks expanded or collapsed'),
+      new(name: '/toollines', description: 'show tool calls short or in full'),
       new(name: '/trifecta', description: 'lethal-trifecta report for this agent')
     ].freeze
 

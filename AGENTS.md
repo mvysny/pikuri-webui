@@ -41,8 +41,9 @@ the alternatives that were rejected, live one entry per slug in
 - **The seam: no `Pikuri::*` type reaches what the browser sees.**
   Pikuri-free: {Transcript}, {Broadcaster}, {StreamingMessage},
   {MarkdownRenderer}, {ConversationRegistry}, {Config}, {App}. Pikuri
-  types used freely: `bin/pikuri-web-chat`, {SseListener}, {AgentRunner},
-  {HistoryReplay}, {ModelCatalog}, {ConversationStore#save}. The catalog
+  types used freely: `bin/pikuri-web-chat`, {SseListener}, {ToolLine},
+  {AgentRunner}, {HistoryReplay}, {ModelCatalog},
+  {ConversationStore#save}. The catalog
   crosses as names and `[model, server]` pairs, never a `ChatTransport`.
   See `D_pikuri_free_core`.
 
@@ -197,6 +198,16 @@ the alternatives that were rejected, live one entry per slug in
   touches the scroll.
   See `D_details_per_block`, `D_disclosure_state_on_the_block_div`.
 
+- **A tool block carries the short line and the raw one both; CSS picks.**
+  {ToolLine} renders the pair as two spans and `:root[data-tools]` shows
+  one, so `/toollines` is an attribute write plus a cookie — never a
+  server-held mode, never a form chosen at render time, and never a
+  `<details>` (that stays `:thinking`'s alone). Both forms sanitize, the
+  argument dump included: the TUI's `inspect` carve-out does not port.
+  The short form is `CamelCase(first argument)` over what came back, and
+  a result short enough to read is shown rather than measured.
+  See `D_both_forms_in_the_block`.
+
 - **Theme is a presentational cookie, not transcript state.** Eleven
   semantic tokens, two palettes, both in `public/style.css`; `GET /`
   renders `data-theme` and app.js rewrites the cookie in place. A new
@@ -270,6 +281,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/big_app_lock.rb` — `PikuriWeb::BigAppLock`, the
   serialization domain: run-to-completion tasks over one re-entrant
   monitor, `assert!` enforcement.
+- `lib/pikuri_web/tool_line.rb` — `PikuriWeb::ToolLine`, one tool event as
+  its short and verbose lines plus the two-span markup CSS picks between.
 - `lib/pikuri_web/sse_listener.rb` — `PikuriWeb::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
@@ -381,14 +394,16 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   SseListener, index.erb and style.css — adding one means touching
   all three. Changing how an *existing* kind renders is only two of
   them: a kind's markup rides inside the html payload, and index.erb and
-  transcript.js wrap that payload in the same `div.block.<kind>`, so the
-  listener and style.css are the pair that move (`D_details_per_block`).
+  transcript.js wrap that payload in the same `div.block.<kind>`, so
+  whoever built that payload and style.css are the pair that move
+  (`D_details_per_block`) — the listener for most kinds, {ToolLine} for
+  the two tool ones.
 - Attacker-influenced text that reaches a block as **plain text** goes
   through `Pikuri::Sanitizer` *before* `MarkdownRenderer.escape` —
   escaping stops markup, not a bidi override that reorders a filename or
   a zero-width character hiding in one, and `inspect` covers only the
   `ESC` that escaping already made inert. Today that means the tool
-  lines ({SseListener}`#neutralize`). Markdown-rendered prose
+  lines, both forms of them ({ToolLine}). Markdown-rendered prose
   (`:assistant`, `:thinking`) is the known exemption: sanitizing the
   source would mangle the Markdown, and kramdown's output is the block.
 - Slash commands are the same shape of contract, in three places:

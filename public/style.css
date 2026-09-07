@@ -366,6 +366,25 @@ body {
   color: var(--tool);
 }
 
+/* Both forms of every tool line ship in the block and this picks one
+   (D_both_forms_in_the_block), so /toollines is an attribute write on <html>
+   and nothing re-renders. `display: none` rather than visibility: the hidden
+   form must take no space and reach no screen reader. */
+:root[data-tools='short'] .tool-verbose,
+:root[data-tools='verbose'] .tool-short { display: none; }
+
+/* The pair is one thought — a call and what it answered — so the result sits
+   under its call and the gap between them closes. :has() rather than a rule on
+   every tool_call, so a call still waiting on its result keeps normal spacing
+   instead of hugging whatever arrives next (a cancel marker, the next answer). */
+.block.tool_result { margin-left: 1.2rem; }
+.block.tool_call:has(+ .block.tool_result) { margin-bottom: 0.15rem; }
+
+/* A failed tool reads as a failure. The kind stays :tool_result — this is the
+   error *colour* on an error, not a block kind's colour spent on something
+   else. */
+.block.tool_result .tool-error { color: var(--error); }
+
 .block.notice { color: var(--notice); }
 .block.error  { color: var(--error); }
 

@@ -41,10 +41,10 @@ module PikuriWeb
   #   content (deltas are preview-only). Reasoning gets the disclosure
   #   {#disclose} wraps it in; the +thinking+ block kind is the CSS hook
   #   that does the TUI's grayscale job.
-  # - +ToolCall+ / +ToolResult+ each render as one plain-text line: the name
-  #   with its inspected arguments, then the capped observation. Both are
-  #   attacker-influenced and neither is Markdown, so both go through
-  #   {#neutralize} before the HTML escape.
+  # - +ToolCall+ / +ToolResult+ each render as one {ToolLine}, which carries
+  #   the short form and the raw one both and leaves CSS to pick
+  #   (+D_both_forms_in_the_block+). That class owns the sanitizing and the
+  #   escaping those lines need, so nothing here touches them.
   # - +SystemInjected+ (reference text the host injected — a loaded skill,
   #   recalled memory) collapses to a one-line +notice+; see
   #   {#render_system_injection}.
@@ -62,11 +62,6 @@ module PikuriWeb
   #   on the replay path — +History::Message+ does record +model_id+ — and
   #   two derivations of one block disagree eventually.
   class SseListener < Pikuri::Agent::Listener::Base
-    # Cap, in characters, applied to tool-result content before it lands
-    # in the transcript. Mirrors the TUI / terminal listeners' cap so the
-    # renderers stay visually consistent.
-    MAX_TOOL_RESULT_CHARS = 200
-
     # @param transcript [Transcript] this conversation's block store
     # @param broadcaster [Broadcaster] SSE fan-out to connected browsers
     # @param conversation [String, nil] id every frame is addressed to, so it
@@ -126,12 +121,11 @@ module PikuriWeb
       in Pikuri::Agent::Event::ToolCall(name:, arguments:)
         flush_assistant(:wipe)
         release_thinking
-        args = arguments.map { |k, v| "#{k}=#{neutralize(v.inspect)}" }.join(', ')
-        add_block(:tool_call, MarkdownRenderer.escape("→ #{neutralize(name)}(#{args})"))
+        add_block(:tool_call, ToolLine.for_call(name: name, arguments: arguments).to_html)
       in Pikuri::Agent::Event::ToolResult(content:)
         flush_assistant(:wipe)
         release_thinking
-        add_block(:tool_result, MarkdownRenderer.escape("= #{truncate_tool_result(content)}"))
+        add_block(:tool_result, ToolLine.for_result(content: content).to_html)
       in Pikuri::Agent::Event::SystemInjected(content:)
         flush_assistant(:wipe)
         release_thinking
@@ -297,44 +291,5 @@ module PikuriWeb
       @thinking = nil
     end
 
-    # Neutralize, flatten whitespace and cap to {MAX_TOOL_RESULT_CHARS}. Long
-    # results (rendered HTML, PDF text) would otherwise drown the transcript;
-    # the byte-count suffix distinguishes "tool returned exactly this" from
-    # "tool returned much more" and counts the *original* bytes, before
-    # neutralizing grew any of them.
-    #
-    # {#neutralize} runs first, so the cap measures what the browser will
-    # show and cannot cut an escape in half. One visible consequence: a tab
-    # survives the flatten as a literal +\t+ rather than collapsing to a
-    # space.
-    #
-    # @param content [String] tool observation
-    # @return [String] single-line display form, possibly truncated
-    def truncate_tool_result(content)
-      original_bytes = content.to_s.bytesize
-      flattened = neutralize(content).gsub(/\s+/, ' ').strip
-      return flattened if flattened.length <= MAX_TOOL_RESULT_CHARS
-
-      "#{flattened[0, MAX_TOOL_RESULT_CHARS]}… (#{original_bytes} bytes total)"
-    end
-
-    # Make attacker-influenced text safe to *read* — what HTML-escaping, which
-    # only makes it safe to *place*, does not do:
-    #
-    #   neutralize("safe\u{202e}gnp.exe")   # => 'safe\u{202e}gnp.exe'
-    #
-    # A browser honors that bidi override exactly as a terminal does: raw, the
-    # filename *displays* as +safeexe.png+ while really ending in +.exe+. So
-    # both passes run, this one first, then {MarkdownRenderer.escape}.
-    # +inspect+ is not a substitute — it escapes the +ESC+ that escaping
-    # already renders inert, and passes bidi, zero-width and homoglyphs
-    # straight through.
-    #
-    # Warnings are dropped: nothing in this shell gates a tool on them, and a
-    # chat transcript has no confirmation prompt to hang them off.
-    #
-    # @param text [String] model-composed or tool-returned text
-    # @return [String] the same text with dangerous codepoints made visible
-    def neutralize(text) = Pikuri::Sanitizer.sanitize(text.to_s).text
   end
 end

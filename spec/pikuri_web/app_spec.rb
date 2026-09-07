@@ -139,6 +139,9 @@ RSpec.describe PikuriWeb::App do
   let(:registry) { FakeRegistry.new([live], lock: lock) }
   # What `[ui] show_thinking` resolved to at boot; the config default.
   let(:show_thinking) { true }
+  # Ditto `[ui] tool_lines`, which unlike show_thinking is not validated
+  # against this shell's vocabulary — so a nonsense value has to reach here.
+  let(:tool_lines) { :short }
 
   # The runner GET /c/:id would open for the default conversation.
   let(:runner) { registry.open(live) }
@@ -156,6 +159,7 @@ RSpec.describe PikuriWeb::App do
     # Class-level and therefore sticky across examples: set every time, or an
     # example that overrides it leaks into the next.
     described_class.set :show_thinking, show_thinking
+    described_class.set :tool_lines, tool_lines
   end
 
   def get_live = get("/c/#{live.id}")
@@ -293,7 +297,8 @@ RSpec.describe PikuriWeb::App do
 
     it 'names the known commands in the unknown-command dialog' do
       get_live
-      assert_includes last_response.body, 'Known commands: /new, /model, /theme, /thinking, /trifecta.'
+      assert_includes last_response.body,
+                      'Known commands: /new, /model, /theme, /thinking, /toollines, /trifecta.'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do
@@ -342,6 +347,61 @@ RSpec.describe PikuriWeb::App do
         assert_includes last_response.body, '<template id="tpl-thinking">'
         assert_includes last_response.body, 'data-thinking="expanded">Expanded<'
         assert_includes last_response.body, 'data-thinking="collapsed">Collapsed<'
+      end
+    end
+
+    # D_both_forms_in_the_block: every tool block ships both forms and this
+    # attribute is what style.css picks by, so it is the whole of the flip.
+    context 'the tool-line form' do
+      it 'renders the configured default with no cookie' do
+        get_live
+        assert_includes last_response.body, 'data-tools="short"'
+      end
+
+      context 'when the config file asked for the raw form' do
+        let(:tool_lines) { :verbose }
+
+        it 'renders that instead' do
+          get_live
+          assert_includes last_response.body, 'data-tools="verbose"'
+        end
+
+        it 'still lets a cookie outrank it (D_ui_cookie_over_config)' do
+          set_cookie 'tools=short'
+          get_live
+          assert_includes last_response.body, 'data-tools="short"'
+        end
+      end
+
+      it 'honours a verbose cookie over the configured default' do
+        set_cookie 'tools=verbose'
+        get_live
+        assert_includes last_response.body, 'data-tools="verbose"'
+      end
+
+      it 'falls back to the configured default for an unknown cookie value' do
+        set_cookie 'tools=terse'
+        get_live
+        assert_includes last_response.body, 'data-tools="short"'
+      end
+
+      # `Config.validate_ui!` checks this key's shape and not its vocabulary
+      # on purpose, so the reader is the only thing between a typo in the
+      # shared config file and an unstyled page showing both forms at once.
+      context 'when the config file named a form this shell cannot render' do
+        let(:tool_lines) { :terse }
+
+        it 'falls back to short rather than rendering it' do
+          get_live
+          assert_includes last_response.body, 'data-tools="short"'
+        end
+      end
+
+      it 'offers both forms in the picker the command opens' do
+        get_live
+        assert_includes last_response.body, '<template id="tpl-toollines">'
+        assert_includes last_response.body, 'data-tools="short">Short<'
+        assert_includes last_response.body, 'data-tools="verbose">Verbose<'
       end
     end
 

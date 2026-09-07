@@ -29,9 +29,10 @@ module PikuriWeb
   #   tool_lines    = "verbose" # start on the raw argument dump
   #
   # Transcript density, one table for every pikuri shell because the
-  # preference is per *person* far more than per shell. Parsed and exposed
-  # ({#show_thinking} / {#tool_lines}) but wired to nothing here yet — this
-  # shell renders reasoning and the verbose tool line unconditionally.
+  # preference is per *person* far more than per shell. Both keys are read
+  # here, as the *starting* value a browser with no preference of its own
+  # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
+  # the file from then on (+D_ui_cookie_over_config+).
   #
   # == Precedence
   #
@@ -50,8 +51,8 @@ module PikuriWeb
   # == Implementation details
   #
   # The schema is the *whole* pikuri-shell schema, not the subset this host
-  # reads — {#sandbox}, {#confirm}, {#mcp}, {#show_thinking} and
-  # {#tool_lines} are validated and exposed with nothing wired to them.
+  # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
+  # with nothing wired to them.
   # Trimming it would break the file: pikuri-tui writes +[code]+ /
   # +[[code.mcp]]+ / +[ui]+ into the same path, and {.load} raises on an
   # unknown top-level key.

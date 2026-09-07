@@ -28,8 +28,13 @@
      server-rendered value means it never has to wait for a cookie read.
      A per-block override lives on the block div; see public/js/transcript.js
      and DECISIONS.md D_details_per_block. -->
+<!-- `data-tools` is the resolved tool-line form — "short" or "verbose". Every
+     tool block carries both forms and style.css shows the one this attribute
+     names, so a flip is a single attribute write and no block re-renders;
+     there is no JS behind it beyond that write. See DECISIONS.md
+     D_both_forms_in_the_block. -->
 <html lang="en" data-theme="<%= theme %>" data-thinking="<%= thinking %>"
-      data-conversation="<%= conversation %>">
+      data-tools="<%= tools %>" data-conversation="<%= conversation %>">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
@@ -214,6 +219,19 @@
     </ul>
     <p class="dialog-detail">Reasoning is always kept — this is only whether it
       starts open. Any block can be opened or closed on its own.</p>
+  </template>
+
+  <!-- Which row is current is app.js's, as in the pickers above. This one
+       needs no transcript walk to go with it: both forms are already in every
+       tool block, so the attribute this writes is the whole change. -->
+  <template id="tpl-toollines">
+    <ul class="picker">
+      <li><button type="button" class="picker-option" data-tools="short">Short</button></li>
+      <li><button type="button" class="picker-option" data-tools="verbose">Verbose</button></li>
+    </ul>
+    <p class="dialog-detail">Short names the tool and its first argument, then
+      what came back. Verbose is the raw argument dump and the observation
+      itself.</p>
   </template>
 
   <template id="tpl-unknown-command">

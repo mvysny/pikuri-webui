@@ -53,6 +53,94 @@ replacement fresh.
 
 ---
 
+## D_both_forms_in_the_block — A tool block carries the short line and the raw one both, and CSS picks
+
+**Status:** Accepted, shipped. {ToolLine} renders both,
+`:root[data-tools]` shows one, `/toollines` writes the cookie.
+
+**Context.** pikuri-tui shortens tool lines to
+`WebSearch(rails 8 credentials)` / `OK, 4.2 kB` and keeps the raw form a
+keypress away — its `D_verbose_toggle` for the reachability argument,
+`D_kinded_regions` for the machinery: a register of kinded blocks plus
+`#rerender(kind:)` redraws every tool line on a flip, because a terminal
+block is text that has to be recomputed. This shell rendered the verbose
+form only.
+
+**Decision.** {ToolLine} renders **both** forms into every tool block —
+two spans, `tool-short` and `tool-verbose` — and
+`:root[data-tools='short'|'verbose']` shows one. The flip is one
+attribute write plus a cookie: nothing re-renders, the server holds no
+display preference, and a tab that flips disturbs no other tab.
+
+**Rejected: `O_verbose_in_a_details`** — the short line as a
+`<summary>`, the raw dump as the body. Tempting to the point of being the
+obvious move, because `D_details_per_block` had just shipped the whole
+mechanism, `data-disclosure` included. Three reasons it loses, and the
+first is the one a future reader would not reconstruct: that entry
+shipped with `:thinking` is the **only** kind that gets a disclosure, on
+the argument that a disclosure is an inviting pattern to reach for — this
+is exactly the reach it was written to stop, and reaching would leave the
+rule meaning nothing. Then: the pair is *two* blocks, so a disclosure on
+the call cannot carry the result's form and the mode would ship anyway;
+and `transcript.js` would have to grow past its `.block.thinking`
+selectors, which is markup knowledge in JS (`D_no_js_build_step`). The
+deeper mismatch is that verbose is not *more detail about the same
+thing*, which is what progressive disclosure is for — it is a second
+rendering of identical data, and a mode is what a debugging session
+wants.
+
+**Rejected: `O_server_mode`** — the server holds one mode and re-renders
+tool blocks on a flip. A display preference in server state, shared
+across tabs; the objection `D_details_per_block` already makes to a
+server-side visibility gate.
+
+**Rejected: `O_mode_at_render_time`** — pick a form as the block is
+created, no toggle. The one option that cannot be changed later without
+touching the transcript, and it leaves the raw form reachable only
+through git.
+
+**Rejected: one `/view` dialog holding both view settings** (the TUI's
+`u` submenu). Passed over for `/thinking` already: two independent live
+toggles in a dialog that must not close on a click is a widget this app
+does not have.
+
+**Rejected: a drawer-footer button beside `#theme-toggle`.** Three
+toggles there is a settings bar, and the drawer is about conversations.
+
+**Consequences.**
+
+- **The default look changes**, verbose → short: `Config#tool_lines`
+  already resolved to `:short` with nothing reading it, and honouring the
+  shared file means honouring that. Said out loud in `README.md` rather
+  than left to be discovered.
+- **The short result line diverges from pikuri-tui on purpose**: a result
+  short enough to read whole is shown rather than measured, because this
+  shell's `calculator` answers in one token and `OK, 1 B` is not the
+  answer. The TUI always measures.
+- **Both forms sanitize, with no `inspect` carve-out** — the TUI exempts
+  its verbose argument dump on the grounds that `inspect` escapes what
+  matters, which is true of the terminal threat only: measured against
+  Ruby, `inspect` passes bidi overrides, zero-width characters and
+  homoglyphs straight through, and escapes exactly the `ESC` that
+  HTML-escaping already renders inert. {ToolLine}'s header holds the
+  order the two passes run in.
+- **`transcript.js` is untouched**, unlike Part 1 — no walk, no override,
+  no mount-time resolve, because both forms are already in the DOM. The
+  whole client side is one attribute write in `app.js`.
+- The third presentational cookie, and the **second** of `D_theme_cookie`'s
+  config-backed shape. One wrinkle `thinking` did not have: `show_thinking`
+  is a boolean and cannot be nonsense, while `Config.validate_ui!` checks
+  `tool_lines`'s shape and not its vocabulary, so `App.default_tool_lines`
+  is the only thing between a typo in the shared file and a page showing
+  both forms at once.
+- The command is `/toollines`, not `/tools`; {SlashCommand}`::CATALOG`
+  holds why.
+- **v2 retires half of {ToolLine}**: when pikuri's `ToolCall` carries
+  `display_name:` / `argument:` and `ToolResult` a `summary:`, the
+  CamelCase helper, the first-value pick and the `Error:` heuristic go,
+  and no pixel changes but the result line's wording. The v1 look was
+  chosen for that.
+
 ## D_details_per_block — Reasoning gets a disclosure per block; the config sets its default, not its visibility
 
 **Status:** Accepted, shipped. `SseListener#disclose` wraps a
@@ -1749,14 +1837,20 @@ mappings; nothing outside `style.css` may read a raw colour.
 `D_details_per_block` added `thinking`, and it followed this precedent
 almost exactly — cookie as the store, resolved server-side into a `:root`
 attribute so the first paint is right, app.js rewriting both in place, an
-unknown value falling back. The one place it *had* to differ is worth
-knowing before a third one is written: `thinking`'s fallback is a
-**config value** (`[ui] show_thinking`) rather than a constant, because
-that key exists in the shared config file and a shell that ignored it
-would be lying about honoring the file. So "presentational cookie" now
-has two shapes — one with a default nobody can configure, one whose
-default the file owns — and the difference is whether pikuri's own config
-schema has a home for the preference.
+unknown value falling back. The one place it *had* to differ: `thinking`'s
+fallback is a **config value** (`[ui] show_thinking`) rather than a
+constant, because that key exists in the shared config file and a shell
+that ignored it would be lying about honoring the file. So
+"presentational cookie" has two shapes — one with a default nobody can
+configure, one whose default the file owns — and the difference is
+whether pikuri's own config schema has a home for the preference.
+
+`D_both_forms_in_the_block` added the third, `tools`, in the
+config-backed shape. It also found the shape's sharp edge: a
+config-backed fallback is only as good as the file's validation, and
+`[ui] tool_lines` is validated for shape and not for vocabulary, so the
+*reader* has to fall back too. A fourth one whose config key carries a
+vocabulary owes the same double fallback.
 
 `--send` / `--send-fg` are the procedure's first exercise —
 the phone composer's yellow ↑ (`D_one_shell_two_layouts`). Two tokens

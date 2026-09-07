@@ -264,9 +264,11 @@ PikuriWeb::App.set :registry, registry
 # Names, model ids and window sizes — no transport crosses this line. Also what
 # gates /model out of the palette when there is only one connection.
 PikuriWeb::App.set :models, catalog.rows
-# What a browser with no `thinking` cookie sees. The file supplies only this
-# starting value; the cookie a /thinking pick writes outranks it from then on.
+# What a browser with no `thinking` / `tools` cookie sees. The file supplies
+# only these starting values; the cookie a /thinking or /toollines pick writes
+# outranks it from then on.
 PikuriWeb::App.set :show_thinking, config.show_thinking
+PikuriWeb::App.set :tool_lines, config.tool_lines
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
 # neither mode: the agent, its listener stack and the runner's worker

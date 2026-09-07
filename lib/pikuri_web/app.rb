@@ -70,6 +70,17 @@ module PikuriWeb
     # page.
     set :show_thinking, true
 
+    # The two tool-line forms style.css can show, carried by the `tools`
+    # cookie — every block ships both and CSS picks
+    # (`D_both_forms_in_the_block`). Same shape as {THINKING}, one wrinkle
+    # deeper: `show_thinking` is a boolean and cannot be nonsense, while
+    # `[ui] tool_lines` is validated for shape and not for vocabulary, so it
+    # can name a form nothing here renders. Hence {#default_tool_lines}.
+    TOOL_LINES = %w[short verbose].freeze
+
+    # {TOOL_LINES} fallback, set by the host from `Config#tool_lines`.
+    set :tool_lines, :short
+
     # No page of its own: there is no "current" conversation any more, only the
     # one a tab has open, so a bare +/+ picks the newest and hands over a real
     # URL to sit on.
@@ -93,6 +104,7 @@ module PikuriWeb
     get '/c/:id' do
       cookie = request.cookies['theme']
       thinking = request.cookies['thinking']
+      tools = request.cookies['tools']
       # One task, so the page is an untorn read: the blocks, the status bar
       # and the sidebar rows come from the same instant, never straddling a
       # transition. The blocks are immutable and the rest plain data, so the
@@ -114,6 +126,7 @@ module PikuriWeb
       erb :index, locals: snapshot.merge(
         theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
         thinking: THINKING.include?(thinking) ? thinking : default_thinking,
+        tools: TOOL_LINES.include?(tools) ? tools : default_tool_lines,
         commands: SlashCommand.catalog(connections: settings.models.size),
         models: settings.models
       )
@@ -251,6 +264,14 @@ module PikuriWeb
 
     # @return [String] the {THINKING} state a browser with no cookie gets.
     def default_thinking = settings.show_thinking ? 'expanded' : 'collapsed'
+
+    # @return [String] the {TOOL_LINES} form a browser with no cookie gets:
+    #   the config file's, or `short` when the file named a form this shell
+    #   has no renderer for.
+    def default_tool_lines
+      configured = settings.tool_lines.to_s
+      TOOL_LINES.include?(configured) ? configured : 'short'
+    end
 
     # Resolve an id and open it, 404ing on anything not listed — which is what
     # keeps user input from ever becoming a path.

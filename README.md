@@ -128,6 +128,7 @@ or just tap a row, which is the point on a phone: `/t`, tap.
 | `/model` | put this conversation on another `[[llm]]` connection |
 | `/theme` | pick the dark or light theme |
 | `/thinking` | whether reasoning blocks start expanded or collapsed |
+| `/toollines` | show tool calls short, or in full |
 | `/trifecta` | show this agent's lethal-trifecta report — the same map the boot banner prints |
 
 `/model` only appears when you have more than one `[[llm]]` — with a single
@@ -163,6 +164,46 @@ show_thinking = false      # start every reasoning block folded
 
 `/thinking` overrides that in the browser you clicked it in, and remembers.
 Clear your cookies and the file's value is what you get back.
+
+### Tool lines
+
+When the agent reaches for a tool, the transcript says so in two lines —
+what it called, and what came back:
+
+```
+WebSearch(rails 8 credentials)
+  OK, 4.2 kB
+Calculator(4212 / 1024)
+  4.11328125
+Fetch(https://example.org/missing)
+  Error: 404 Not Found
+```
+
+The name is the tool's, tidied up, and the argument is the one that says
+what was asked for. What came back is measured rather than printed once
+it is too long to read at a glance — but a short answer *is* printed,
+because the size of `4` is not the interesting thing about it. A failure
+says so in red.
+
+`/toollines` switches to the raw form, which is the same two lines with
+nothing left out:
+
+```
+→ web_search(query="rails 8 credentials")
+= Results for rails 8 credentials: the master key lives in config/master.key…
+```
+
+That is worth reaching for when a tool did something surprising and you
+want the arguments exactly as the model wrote them. Both forms are always
+in the page, so the switch is instant and changes nothing on the server —
+the tab beside you keeps whichever form it was on.
+
+Which form you start on comes from the same shared config file:
+
+```toml
+[ui]
+tool_lines = "verbose"     # start on the raw form; "short" is the default
+```
 
 ## Conversations
 
