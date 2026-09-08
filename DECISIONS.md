@@ -53,13 +53,103 @@ replacement fresh.
 
 ---
 
+## D_max_concurrent_requests — A `[[server]]` table sizes the permits; `--turns` retires
+
+**Status:** Accepted, shipped. **Refines `D_upstream_request_throttle`**, whose
+`--turns` flag this deletes and whose "why size explicitly" argument no longer
+holds. `Config::Server(id, url, api_key, max_concurrent_requests)` is the
+schema; boot calls `ServerPermits.limit(s.url, s.max_concurrent_requests)` for
+each server that names one.
+
+**Context.** Two pressures arrived together.
+
+The schema was authored in pikuri-tui
+(`../pikuri-tui`, `Shared::Config`) and lands here by
+`D_schema_complete_config`'s standing obligation, not by our choice: every
+`[[llm]]` used to repeat its whole connection, so four models on one provider
+meant the same URL and the same key written four times. The box and the model
+are now separate tables, joined by an `id`.
+
+Independently, pikuri fixed the thing `--turns` existed for. That flag's
+remaining duty was the permit count, justified by *"an `[[llm]]` carrying an
+explicit `context_window` skips the `/props` probe, so its server would go
+unsized, and unsized means unlimited."* That premise is now false:
+`../pikuri/DECISIONS.md` `D_probe_when_unknown` skips the probe only when the
+cap is stated **and** the server is already sized. An unsized server always
+gets probed, so it always gets llama.cpp's own `total_slots`.
+
+**Decision.** Take the table, and let `max_concurrent_requests` carry the
+ceiling alone. A server naming none is left to the probe. `--turns`, its `< 1`
+check, and `ModelCatalog#servers` (whose only caller was the boot loop) all
+delete.
+
+**Rejected: keeping `--turns` as an override on top of the file.** The
+precedence rule `D_schema_complete_config` exists to prevent, for a key the
+file now has a home for.
+
+**Rejected: `Shared::RequestPermits` as a class here too.** pikuri-tui extracted
+one because three `App`s install permits; we have one boot script, so the loop
+is six lines in it plus the log line that is the only visible confirmation the
+ceiling took.
+
+**Rejected: a spelling for "explicitly unlimited".** It would suppress the
+probe, and the only server worth typing it against is a cloud endpoint the
+probe already declines to answer for — where unsized already means unlimited.
+
+**Rejected: defaulting an unsized server to 1 ourselves**, rather than letting
+the probe answer. The probe reports what the *box* can do, and that is the
+honest number for a registry keyed on the box; a shell substituting its own
+opinion for the server's own report would be lying to every other consumer of
+`ServerPermits` in the process. The preference for 1 is real (below) but it is
+advice about how to configure a server, so it lives in `README.md` where a
+user reads it, not in a default that silently contradicts `/props`.
+
+**Consequences.**
+
+- **This reverses two published promises, both worth stating.**
+  `D_upstream_request_throttle` rejected *"dropping `--turns` and trusting
+  auto-sizing alone"* on the `context_window` argument above — upstream's fix,
+  not a change of our mind, is what retired it. And
+  `D_schema_complete_config`'s consequence that *"a first run against a stock
+  llama.cpp needs no file at all"* is gone: there is no built-in connection,
+  and `README.md`'s quick start now opens with the file to write.
+- **The default changed, not just the spelling.** `--turns` defaulted to 1 and
+  the loop ran unconditionally, so *every* server was sized at 1. Omitting
+  `max_concurrent_requests` now means probe-sized, and unlimited only against
+  a server that answers no `/props`.
+- **So the recommended value is 1, and the README argues for it** — the one
+  place where losing the old default costs something. A single user reads one
+  conversation at a time, so what they feel is that reply's latency, not the
+  box's throughput. The target hardware is what settles it: decode is
+  memory-bandwidth-bound, and a large MoE is run on an iGPU against system
+  DRAM precisely because what it needs is capacity, so there is no spare
+  bandwidth for a second stream to hide in. MoE compounds it — batching grows
+  the set of experts that must be read, un-skipping the weights the
+  architecture exists to skip, and only pays at batch sizes a chat shell never
+  reaches. `--parallel N` also divides `--ctx-size` by N, which this shell
+  feels early because the whole history moves with the conversation. The probe
+  reports `total_slots`, so a `--parallel 4` server left unsized gets 4 — the
+  behaviour to avoid, reached by omission. Writing 1 also keeps the queue on
+  our side of the wire, where the permit wait is cancellable and ■ lands on a
+  parked turn.
+- The permit key is safe against the two URL spellings: `ServerPermits.key_for`
+  strips a trailing `/` and `/v1`, so `Server#url` as written and
+  `Choice#server` (a normalized `api_base`, `/v1` included) name one server.
+  That is why the loop could move off the catalog and onto the config.
+- Boot now fails on a pre-`[[server]]` file, and the raise *is* the migration:
+  a URL still in `server` earns a paste-ready `[[server]]` block built from it,
+  with a stray `api_key` folded in.
+- `Config.holds_secret?` had to move to `parsed['server']` in the same change,
+  or a file full of plaintext keys would keep passing with the `chmod 600`
+  advisory silently disarmed.
+
 ## D_upstream_request_throttle — pikuri rations the server; this shell only sizes the pool
 
-**Status:** Accepted, shipped. **Supersedes `D_throttle_at_the_request`**,
-whose {ThrottledAdapter} this deletes. `--turns N` is now
-`Pikuri::Agent::ServerPermits.limit(server, N)`, called once per distinct
-server at boot from `ModelCatalog#servers`; the turn executor is still
-`N * 2` and still not a load cap.
+**Status:** Accepted, shipped; **refined by `D_max_concurrent_requests`**,
+which moved the sizing off `--turns` and onto the `[[server]]` table. What
+stands is the split of duties: pikuri rations, this shell only sizes.
+**Supersedes `D_throttle_at_the_request`**, whose {ThrottledAdapter} this
+deletes.
 
 **Context.** `D_throttle_at_the_request` shipped a Faraday adapter as an
 explicit stopgap and named its own retirement condition: the principled home
@@ -87,23 +177,27 @@ also fixes the two things the adapter could not:
   server, so two `[[llm]]` entries written differently share a pool instead
   of silently getting one each. Our own pool keyed on the raw `api_base`.
 
-**Why size explicitly, when pikuri auto-sizes.** The `/props` probe pikuri
-already runs for the context cap now also reports `total_slots` and seeds
-the permit count from it, so a zero-config local llama.cpp throttles
-correctly. This shell still calls `.limit`, because a `[[llm]]` entry
-carrying an explicit `context_window` **skips that probe altogether** — its
-server would go unsized, and unsized means unlimited. `--turns` is
-documented as the operator's word about their own server; an entry that
-opts out of the probe must not silently opt out of the throttle.
+**Why size at all, when pikuri auto-sizes.** The `/props` probe pikuri already
+runs for the context cap also reports `total_slots` and seeds the permit count
+from it, so a zero-config local llama.cpp throttles correctly. Sizing stays
+available as the operator's word about their own server — a ceiling below what
+the box reports, or one for a server the probe cannot reach.
+
+The original argument here was narrower and is now void: an explicit
+`context_window` used to skip the probe altogether, so an entry that opted out
+of the probe would silently opt out of the throttle. `../pikuri/DECISIONS.md`
+`D_probe_when_unknown` fixed that — see `D_max_concurrent_requests`, which is
+what let the flag go.
 
 **Rejected: `ServerPermits.default` rather than `.limit`.** First-writer-wins
 rather than authoritative. Boot runs before any probe so it would win in
 practice today, which is exactly the fragility — the flag would be
 outranking the probe by timing rather than by decision.
 
-**Rejected: dropping `--turns` and trusting auto-sizing alone.** Loses the
-`context_window` case above, and the flag is a documented promise in
-`README.md`.
+**Rejected: dropping `--turns` and trusting auto-sizing alone** — *later
+reversed by `D_max_concurrent_requests`*, once upstream fixed the
+`context_window` case this rejection rested on. At the time: it lost that
+case, and the flag was a documented promise in `README.md`.
 
 **Rejected: keeping {ThrottledAdapter} underneath as a belt.** Two throttles
 in series at N permits each gates nothing the outer one doesn't, and the
@@ -127,8 +221,9 @@ instrumenter's.
 - A retried request holds its permit across ruby_llm's backoff, idling the
   slot for a moment — upstream's deliberate trade, so a re-enqueued request
   cannot pile in behind an original that is still generating.
-- Sizing is per *server*, so `ModelCatalog#servers` exists to dedupe the
-  `[[llm]]` list down to boxes. Everything else about a connection is still
+- Sizing is per *server*, not per `[[llm]]`: two entries running two models on
+  one box share its slots. That is now where `max_concurrent_requests` sits
+  (`D_max_concurrent_requests`); everything else about a connection is still
   per entry.
 
 ## D_path_deps_on_pikuri_master — Back to `path: '../pikuri'`, for a surface that is not released
@@ -918,6 +1013,12 @@ a slow first token.
 - **The mint-time pair is stale against disk by design** — `#save` moves
   `meta.json` on and the Data never follows. Harmless because the factory is
   its only reader, at mint.
+- **The saved `server` is a URL, never a `[[server]]` `id`** — the same
+  renameable-reference argument as the `name`, one step sharper: an id means
+  nothing away from the config file that defines it, so a saved id is a
+  reference whose referent the next edit can delete, where a URL stands on its
+  own. `Config` resolves the reference into `Llm#server` and the id never
+  leaves that class (`D_max_concurrent_requests`).
 - **Half a pair is no pair.** An envelope predating this has a `model` naming
   the *boot* connection and no `server`, so `#row` reads it as having nothing
   saved and it opens on the default. No migration, no `SCHEMA` bump.
@@ -1546,7 +1647,7 @@ is `call(env)` — middleware is request-scoped by construction and has no
 purchase on a graph that outlives a request — so there is no Sinatra
 answer to adopt. The primitive is already in the bundle: an owner queue is
 a `Concurrent::SingleThreadExecutor`, from the gem the `Gemfile` already
-justifies for `FixedThreadPool`. Candidates in ascending cost: an atomic
+justifies for the turn executor. Candidates in ascending cost: an atomic
 helper per seam; one global `Monitor`; a true owner thread. Vaadin's
 `UI.access()` is the middle one and Tuile is the last, as the entry above
 already notes.
@@ -1640,17 +1741,37 @@ tabs alone; server-side last-viewed is this decision reversed.
   detached conversation. Probably not, but it is pikuri's class — check
   whether a listener stack can be rebuilt mid-life before assuming.
 
-## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count
+## D_serial_turn_executor — Turns run on one shared executor, and its size is not a load cap
 
-**Status:** **Superseded in part by `D_upstream_request_throttle`** — the
-half that made the pool size the server's load cap. The executor itself
-stands: one shared `Concurrent::FixedThreadPool` injected into every
-{AgentRunner}, sized `--turns * 2`, still the admission gate that reports
-`:queued`. What the server may run at once is now pikuri's `ServerPermits`
-count, so the paragraph below beginning "The pool size caps
-concurrent turns" describes a job this pool no longer has. Everything here
-about single-writer safety living in the partition rather than the number
-is untouched, and load-bearing for the `2N` sizing.
+**Status:** **Superseded in part by `D_upstream_request_throttle`**, then
+amended to drop sizing altogether. The executor itself stands: one shared
+pool injected into every {AgentRunner}, still the admission gate that
+reports `:queued`. Two things below no longer describe the code.
+
+*The pool is unbounded* — `Concurrent::CachedThreadPool`, not
+`FixedThreadPool.new(turns * 2)`. `2N` was the compromise between two
+wrong answers, and once the permit moved to the request it stopped buying
+anything: a turn holds a thread for its whole `run_loop` but a permit only
+per HTTP request, so **any** number tied to the server's capacity strands
+conversations behind turns that are off in a tool using no slot. Doubling
+it just moved the stranding threshold. The bound that matters was already
+there and is not a number: a conversation admits one turn at a time, so
+turns in flight cannot exceed the conversations opened. Unbounded also
+retires a deadlock a bounded pool would hit the day a tool spawns a
+sub-agent posting back to the same executor.
+
+*`:queued` is no longer where a turn waits for the server.* It is now the
+posting-to-running gap, effectively instant; the wait for a slot is
+pikuri's permit, taken inside `run_loop`, and a turn parked on one reports
+`:running`. So the status bar can say "thinking" for a turn that is queued
+behind another conversation's completion — accepted, because the count that
+would fix it (`ServerPermits.for(base).available`) is upstream's and no
+event carries it. The paragraph below beginning "The pool size caps
+concurrent turns" describes a job this pool no longer has.
+
+Everything here about single-writer safety living in the partition rather
+than in the number is untouched, and is what makes an unbounded pool safe
+rather than merely convenient.
 
 **Context.** A turn blocks on the LLM for minutes, so it cannot run on a
 Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations
@@ -2222,11 +2343,17 @@ a three-way question ("I booted `--model Z`, then opened an old
 conversation — what am I talking to?"). Removing the flags deletes the
 question rather than documenting it. Consequences: pointing the shell at
 a different server now requires writing `~/.config/pikuri/config.toml`,
-which is a handful of lines and a thing the user does once; the built-in
-`Config.default_llm` still covers the zero-config case on the defaults,
-so a first run against a stock llama.cpp needs no file at all.
+which is a handful of lines and a thing the user does once.
 `Config.load(overrides:)` survives for `:sandbox` / `:confirm`, which a
 sibling shell may wire (`D_chat_only_entry_point`).
+
+**Amended: there is no zero-config case any more.** This entry used to
+close by noting that `Config.default_llm` covered the defaults, "so a first
+run against a stock llama.cpp needs no file at all". That built-in was a
+second, invisible connection source — the very thing dropping the flags was
+meant to end — and it went with the `[[server]]` port. No file, or a file
+with no `[[llm]]`, now raises with `EXAMPLE_CONFIG` and the path to write it
+to. See `D_max_concurrent_requests`.
 
 **Rejected as an alternative to dropping them: keeping the flags and
 writing the precedence down** (saved wins on reopen; the flag is the
@@ -2234,11 +2361,11 @@ default for new conversations). It costs no code, but it leaves a shell
 whose behaviour needs a paragraph to explain — complexity *plus*
 documentation of that complexity, where removal leaves neither.
 
-**Noted divergence from pikuri-tui**, whose three shells still take
-`--server` / `--model`. Accepted: a TUI is invoked ad-hoc many times a
-day, where a flag is genuinely the fastest path; pikuri-web is started
-once and lives, so the flag buys almost nothing and the ambiguity costs
-the same as anywhere. The intent is for the TUI to follow.
+**No longer a divergence from pikuri-tui.** This shell dropped the flags
+first, on the argument that a TUI invoked ad-hoc many times a day gets real
+value from one where a long-lived server does not. The TUI followed: none of
+its three bins takes `--server` / `--model` now, and the file is the single
+source in both projects.
 
 **Amended: the schema drifted and broke boot, so strictness is now
 asymmetric.** pikuri-tui added a `[ui]` transcript-density table

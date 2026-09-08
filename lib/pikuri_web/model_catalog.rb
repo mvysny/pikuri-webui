@@ -102,11 +102,6 @@ module PikuriWeb
     #   when the one it saved is no longer in the config file
     def resolve(model:, server:) = @by_key[[model, server]]
 
-    # @return [Array<String>] every distinct inference server, declaration
-    #   order — one entry per box, not per +[[llm]]+, since two entries running
-    #   two models on one server contend for its slots
-    def servers = @choices.map(&:server).uniq
-
     # @param transport [Pikuri::Agent::ChatTransport]
     # @return [String] its display name, or the raw model id when the
     #   transport came from outside this catalog

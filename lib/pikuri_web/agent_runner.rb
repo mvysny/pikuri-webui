@@ -36,15 +36,21 @@ module PikuriWeb
   #
   # == Idle, queued, running
   #
-  # The executor is shared and its pool size caps how many conversations run a
-  # turn at once, so a turn submitted while that many are already working waits
-  # for a slot. That wait is visible — +:queued+ is not +:running+ — because a
-  # conversation showing "thinking" when nothing is being thought is a lie the
-  # status bar should not tell.
+  # +:queued+ is the gap between +#submit+ posting the job and the job taking a
+  # thread — instant under an unbounded executor, real under a bounded one, so
+  # the state stays modelled either way.
+  #
+  # It is *not* where a turn waits for the server. That wait is pikuri's
+  # per-server permit, taken inside +run_loop+ for the length of one HTTP
+  # request (+D_upstream_request_throttle+), and a turn parked on one reads
+  # +:running+ here — so "thinking" can mean "queued behind another
+  # conversation's completion", and nothing in this class can tell the
+  # difference.
   #
   # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
   # entry whether it was cancelled while waiting and returns without starting.
-  # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop.
+  # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop — a
+  # turn parked on a permit included, because that wait polls it too.
   #
   # == Which model, and when
   #

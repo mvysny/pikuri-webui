@@ -41,7 +41,6 @@ require 'pikuri_web'
 # state (`D_schema_complete_config`).
 port = 4567
 bind = '127.0.0.1'
-turns = 1
 dev = false
 
 parser = OptionParser.new do |opts|
@@ -50,10 +49,6 @@ parser = OptionParser.new do |opts|
   opts.separator 'Options:'
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
-  opts.on('--turns N', Integer,
-          "Completions in flight per inference server (default: #{turns}; " \
-          "match your server's parallel slots). Twice this many conversations " \
-          'may hold a turn, so one waiting on a tool does not idle the server.') { |v| turns = v }
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -66,11 +61,6 @@ begin
 rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
   warn e.message
   warn parser
-  exit 2
-end
-
-if turns < 1
-  warn "--turns must be at least 1, got #{turns}"
   exit 2
 end
 
@@ -95,12 +85,18 @@ end
 # nothing saved starts.
 catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
 
-# Sized explicitly rather than left to the auto-sizing pikuri does from the
-# server's own /props slot count: an [[llm]] entry carrying an explicit
-# context_window skips that probe altogether, and an unsized server is an
-# unlimited one. `--turns` is the operator's word about their own server
-# (`D_upstream_request_throttle`).
-catalog.servers.each { |server| Pikuri::Agent::ServerPermits.limit(server, turns) }
+# A [[server]] naming no ceiling is left alone, so pikuri's /props probe sizes
+# it from the box's own total_slots (`D_max_concurrent_requests`). `.limit`
+# wins by decision rather than by ordering: ServerPermits marks an explicit
+# size and refuses to let a probe's `.default` overwrite it, so this may run
+# before or after the agent is built.
+config.servers.each do |server|
+  permits = server.max_concurrent_requests
+  next if permits.nil?
+
+  Pikuri::Agent::ServerPermits.limit(server.url, permits)
+  PikuriWeb.logger.info("permits: #{server.id} at most #{permits} concurrent request(s) → #{server.url}")
+end
 
 Pikuri::Extractors::PDF.register
 
@@ -133,24 +129,23 @@ system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 # Turns run here rather than on a Sinatra request thread, and every
 # conversation shares this one executor.
 #
-# Deliberately *twice* the server's slot count, because this pool does not
-# ration the server — pikuri's ServerPermits does, per request
-# (`D_upstream_request_throttle`). A turn holds a thread here across its whole
-# run_loop, tool execution included, so sizing this at the slot count would
-# leave the server idle for the length of a web_search with nobody able to use
-# it. At 2N, a turn blocked in a tool has released its permit and a second
-# conversation can be mid-completion. It stays bounded rather than unbounded so
-# a runaway cannot spawn threads without limit; nothing breaks at a larger
-# factor, it just stops buying anything.
+# Unbounded (grows on demand, reaps after 60s idle), and deliberately not
+# derived from the server's slot count. A turn holds a thread here across its
+# whole run_loop, tool execution included, but holds a server permit only for
+# each HTTP request (`D_upstream_request_throttle`) — so any size tied to the
+# server's capacity strands conversations behind turns that are off in a
+# web_search using no slot. A bounded pool would also deadlock the day a tool
+# spawns a sub-agent posting back here; a chat shell has no such tool
+# (`D_chat_only_entry_point`), a sibling OS or code shell would.
 #
-# Nothing in this process needs either number to be 1. Per-conversation state is
-# single-writer at any size, because the partition is per conversation and a
-# conversation admits one turn at a time (AgentRunner#submit injects rather than
-# starting a second) — two turns are two transcripts, two listeners, two agents,
-# and two disjoint conversation folders. The tool constants below are shared
-# across every agent by pikuri's own contract, not by this number. What scales
-# with it is the process-wide search limiter noted at the tool wiring.
-turn_executor = Concurrent::FixedThreadPool.new(turns * 2)
+# The real bound is the resident runners: a conversation admits one turn at a
+# time (AgentRunner#submit injects rather than starting a second), so turns in
+# flight cannot exceed the conversations opened. Single-writer safety holds at
+# any size regardless, because the partition is per conversation — two turns
+# are two transcripts, two listeners, two agents, two disjoint folders. What
+# does scale with concurrency is the process-wide search limiter noted at the
+# tool wiring.
+turn_executor = Concurrent::CachedThreadPool.new
 
 # The serialization domain (`D_global_monitor`): route bodies and the turn
 # job's bookkeeping brackets run as tasks on this one lock. Minted here and
@@ -221,10 +216,13 @@ conversation_factory = lambda do |conversation|
     # class-level per-provider limiters, so a per-agent instance would throttle
     # no differently.
     #
-    # The consequence of --turns > 1 here is latency, not corruption: the
-    # search limiter holds its mutex across the HTTP call, so two agents
-    # searching at once serialize, and one tripping a provider's circuit
-    # breaker cools down the other.
+    # The consequence of two conversations running at once is latency, not
+    # corruption: the search limiter holds its mutex across the HTTP call, so
+    # two agents searching at once serialize, and one tripping a provider's
+    # circuit breaker cools down the other. Note this is not gated by
+    # max_concurrent_requests — a tool call holds no server permit, so any two
+    # open conversations can be in a search together however small the
+    # server's slot count.
     c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
     c.add_tool Pikuri::Tool::CALCULATOR
     c.add_tool Pikuri::Tool::WEB_SCRAPE
