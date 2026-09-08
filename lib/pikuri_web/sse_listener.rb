@@ -11,7 +11,7 @@ module PikuriWeb
   # +Pikuri::Agent::Event+ is.
   #
   # Each logical block — user turn, streamed reasoning, streamed assistant
-  # answer, tool call, tool result, fallback notice, cancellation marker —
+  # answer, tool call, tool result, injected reference, cancellation marker —
   # lives in its own transcript block, mirroring the TUI's
   # region-per-block model: the "wipe an unfinished preview" path is
   # +Transcript#remove+ plus an SSE +remove+ event, and "preserve the
@@ -118,22 +118,19 @@ module PikuriWeb
         else
           add_block(:assistant, MarkdownRenderer.render(content))
         end
-      in Pikuri::Agent::Event::ToolCall(name:, arguments:)
+      in Pikuri::Agent::Event::ToolCall(name:, arguments:, display_name:, argument:)
         flush_assistant(:wipe)
         release_thinking
-        add_block(:tool_call, ToolLine.for_call(name: name, arguments: arguments).to_html)
-      in Pikuri::Agent::Event::ToolResult(content:)
+        add_block(:tool_call, ToolLine.for_call(name: name, arguments: arguments,
+                                                display_name: display_name, argument: argument).to_html)
+      in Pikuri::Agent::Event::ToolResult(content:, summary:)
         flush_assistant(:wipe)
         release_thinking
-        add_block(:tool_result, ToolLine.for_result(content: content).to_html)
+        add_block(:tool_result, ToolLine.for_result(content: content, summary: summary).to_html)
       in Pikuri::Agent::Event::SystemInjected(content:)
         flush_assistant(:wipe)
         release_thinking
         render_system_injection(content)
-      in Pikuri::Agent::Event::FallbackNotice(reason:)
-        flush_assistant(:wipe)
-        release_thinking
-        add_block(:notice, MarkdownRenderer.escape("! #{reason}"))
       in Pikuri::Agent::Event::Cancelled
         flush_assistant(:preserve)
         release_thinking

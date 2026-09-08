@@ -6,18 +6,24 @@ module PikuriWeb
   # One tool event as the two lines a transcript block carries — the short form
   # and the raw one — plus the markup that lets CSS pick between them:
   #
-  #   line = ToolLine.for_call(name: 'web_search', arguments: { query: 'rails 8 credentials' })
+  #   line = ToolLine.for_call(name: 'web_search', arguments: { query: 'rails 8 credentials' },
+  #                            display_name: 'WebSearch', argument: 'rails 8 credentials')
   #   line.short     # => 'WebSearch(rails 8 credentials)'
   #   line.verbose   # => '→ web_search(query="rails 8 credentials")'
   #   line.to_html   # => '<span class="tool-short">WebSearch(…)</span><span class="tool-verbose">…'
   #
-  #   ToolLine.for_result(content: 'x' * 4213).short      # => 'OK, 4.2 kB'
-  #   ToolLine.for_result(content: '4').short             # => '4'
-  #   ToolLine.for_result(content: 'Error: exit 1').error # => true
+  #   ToolLine.for_result(content: page, summary: 'Scraped 4.2 kB').short  # => 'Scraped 4.2 kB'
+  #   ToolLine.for_result(content: 'Error: exit 1', summary: 'Error: exit 1').error # => true
   #
   # A block carries both forms and +:root[data-tools]+ shows one, so a flip
   # re-renders nothing and the server holds no display preference
   # (+D_both_forms_in_the_block+).
+  #
+  # The short form is the *tool's*: +display_name+, +argument+ and +summary+
+  # arrive on the event, composed upstream (+../pikuri+ +D_tool_summary_lines+).
+  # Defanging them and capping them to a width only a renderer knows are the two
+  # jobs left here. The verbose form is ours end to end, off the raw +name+ /
+  # +arguments+ / +content+ beside them.
   #
   # == Implementation details
   #
@@ -27,8 +33,10 @@ module PikuriWeb
   # no substitute — it escapes the +ESC+ that escaping already renders inert
   # and passes bidi, zero-width and homoglyphs straight through, which is why
   # pikuri-tui's "verbose arguments are safe on +inspect+ alone" carve-out
-  # does not port. Sanitize, then flatten, then cap, in that order, so a cut
-  # cannot land inside an escaped +\u{202e}+ token.
+  # does not port. A tool's own display strings are no exception — composed
+  # *from* model text, by a tool that cannot know what chrome will show them.
+  # Sanitize, then flatten, then cap, in that order, so a cut cannot land
+  # inside an escaped +\u{202e}+ token.
   #
   # @!attribute [r] short
   #   @return [String] the toned-down form: +Fetch(https://example.org)+.
@@ -42,61 +50,55 @@ module PikuriWeb
     # prompt text cannot push the line past a screen.
     ARGUMENT_MAX_CHARS = 60
 
-    # Cap on the raw result line, and on the one line a failure is shown as.
+    # Cap on the raw result line, and on the short line a tool composed.
     # A rendered page or a PDF's text would otherwise drown the transcript.
     RESULT_MAX_CHARS = 200
 
-    # A result this short is shown instead of measured; see {.for_result}.
-    RESULT_INLINE_MAX_CHARS = 60
-
     # The two forms for a +ToolCall+.
     #
-    #   ToolLine.for_call(name: 'mcp__github__list_prs', arguments: { repo: 'a/b' })
-    #   # short: 'McpGithubListPrs(a/b)'
-    #   ToolLine.for_call(name: 'enter_plan_mode', arguments: {})
+    #   ToolLine.for_call(name: 'mcp__github__list_prs', arguments: { repo: 'a/b' },
+    #                     display_name: 'Github::ListPrs', argument: 'a/b')
+    #   # short: 'Github::ListPrs(a/b)'
+    #   ToolLine.for_call(name: 'enter_plan_mode', arguments: {},
+    #                     display_name: 'EnterPlanMode', argument: '')
     #   # short: 'EnterPlanMode'          — no argument, so no parentheses
     #
-    # The first *value* of +arguments+ stands in for the primary parameter:
-    # models emit keys in schema order and the first schema parameter is the
-    # primary one for every tool this shell wires (+query+, +url+,
-    # +expression+). The event carries no schema, so there is nothing better
-    # to pick by until pikuri's own summaries carry the choice.
+    # An empty +argument+ is a tool saying there is nothing worth showing, not
+    # a value we failed to find.
     #
-    # @param name [String] the registered tool name.
-    # @param arguments [Hash] the tool-call arguments.
+    # @param name [String] the registered tool name, for the raw form.
+    # @param arguments [Hash] the tool-call arguments, for the raw form.
+    # @param display_name [String] the tool's name for itself.
+    # @param argument [String] the one argument it wants shown; +""+ renders
+    #   the call bare.
     # @return [ToolLine]
-    def self.for_call(name:, arguments:)
-      called = display_name(name)
-      argument = display_argument(arguments)
-      new(short: argument.empty? ? called : "#{called}(#{argument})",
+    def self.for_call(name:, arguments:, display_name:, argument:)
+      called = flatten(display_name.to_s)
+      shown = cap(flatten(argument.to_s), ARGUMENT_MAX_CHARS)
+      new(short: shown.empty? ? called : "#{called}(#{shown})",
           verbose: verbose_call(name, arguments), error: false)
     end
 
     # The two forms for a +ToolResult+.
     #
-    #   ToolLine.for_result(content: page)   # a 4213-byte scrape
-    #   # short: 'OK, 4.2 kB', verbose: '= Results for rails 8: the master key…'
-    #   ToolLine.for_result(content: '4')
-    #   # short: '4'          — short enough to read, so it is not measured
+    #   ToolLine.for_result(content: page, summary: 'Scraped 4.2 kB')
+    #   # short: 'Scraped 4.2 kB', verbose: '= Results for rails 8: the master key…'
+    #   ToolLine.for_result(content: '4', summary: '4')
+    #   # short: '4'          — the calculator's answer *is* its status line
     #
-    # That last case is a deliberate divergence from pikuri-tui, which always
-    # measures: this shell's +calculator+ answers in one token, and +OK, 1 B+
-    # is not the answer. The size still earns its place on everything longer,
-    # where it separates a +fetch+ that returned nothing from one that
-    # returned plenty.
+    # Failure is read off +content+'s +Error:+ prefix — the same test
+    # +Pikuri::Tool::Result#error?+ applies, since +Tool#run+ returns a
+    # recoverable failure as an +"Error: …"+ observation while a genuine raise
+    # aborts the turn before any +ToolResult+. Not off +summary+: an error's
+    # summary carries the prefix too, but only by +Result.error+'s convention.
     #
-    # Failure is read off the +Error:+ prefix, because pikuri's +Tool#run+
-    # returns recoverable failures as +"Error: …"+ strings while a genuine
-    # raise aborts the turn without ever reaching a +ToolResult+. Still a
-    # heuristic — a +web_scrape+ of a page that opens that way misreports —
-    # and one pikuri's summaries will retire.
-    #
-    # @param content [String] the tool observation.
+    # @param content [String] the tool observation, for the raw form.
+    # @param summary [String] the tool's own one-line display form.
     # @return [ToolLine]
-    def self.for_result(content:)
+    def self.for_result(content:, summary:)
       text = content.to_s
-      error = text.start_with?('Error:')
-      new(short: short_result(text, error), verbose: "= #{truncate(text)}", error: error)
+      new(short: cap(flatten(summary.to_s), RESULT_MAX_CHARS),
+          verbose: "= #{truncate(text)}", error: text.start_with?('Error:'))
     end
 
     # Both forms as one line of markup, escaped, with no whitespace between
@@ -110,45 +112,12 @@ module PikuriWeb
         "<span class=\"tool-verbose\">#{MarkdownRenderer.escape(verbose)}</span>"
     end
 
-    # @param text [String] the observation.
-    # @param error [Boolean] whether it carries pikuri's +Error:+ prefix.
-    # @return [String] the short result line.
-    def self.short_result(text, error)
-      return cap(flatten(text.lines.first.to_s), RESULT_MAX_CHARS) if error
-
-      flat = flatten(text)
-      return "OK, #{format_size(text.bytesize)}" if flat.empty? || flat.length > RESULT_INLINE_MAX_CHARS
-
-      flat
-    end
-
     # @param name [String]
     # @param arguments [Hash]
     # @return [String] the raw call line, +→ web_search(query="…")+.
     def self.verbose_call(name, arguments)
       args = arguments.map { |key, value| "#{key}=#{neutralize(value.inspect)}" }.join(', ')
       "→ #{neutralize(name)}(#{args})"
-    end
-
-    # +web_search+ → +WebSearch+, +mcp__github__list_prs+ → +McpGithubListPrs+,
-    # +EnterPlanMode+ → unchanged.
-    #
-    # Any run of non-alphanumerics is a word break, which is what makes an MCP
-    # name readable.
-    #
-    # @param name [String] the registered tool name.
-    # @return [String]
-    def self.display_name(name)
-      words = name.to_s.scan(/[[:alnum:]]+/)
-      words.empty? ? flatten(name.to_s) : words.map { |word| word.sub(/\A./, &:upcase) }.join
-    end
-
-    # @param arguments [Hash] the tool-call arguments.
-    # @return [String] the first value as one capped line, or +""+ for a tool
-    #   called with none.
-    def self.display_argument(arguments)
-      value = arguments.values.first
-      value.nil? ? '' : cap(flatten(value.to_s), ARGUMENT_MAX_CHARS)
     end
 
     # Flatten and cap, with the *original* byte count as the suffix so a
@@ -168,16 +137,6 @@ module PikuriWeb
     # @return [String] +text+ elided to +limit+ characters, ellipsis included.
     def self.cap(text, limit) = text.length <= limit ? text : "#{text[0, limit - 1]}…"
 
-    # @param bytes [Integer]
-    # @return [String] +"340 B"+ / +"4.9 kB"+ / +"1.2 MB"+ — SI, so a kB is
-    #   1000 bytes rather than the common-but-wrong 1024.
-    def self.format_size(bytes)
-      return "#{bytes} B" if bytes < 1000
-      return format('%.1f kB', bytes / 1000.0) if bytes < 1_000_000
-
-      format('%.1f MB', bytes / 1_000_000.0)
-    end
-
     # Make dangerous codepoints visible: a filename a browser *displays* as
     # +safeexe.png+ comes out spelling the bidi override that reordered it,
     # +.exe+ and all. See the class header for why both forms run through it.
@@ -193,7 +152,6 @@ module PikuriWeb
     # @return [String] sanitized, then collapsed to one line.
     def self.flatten(text) = neutralize(text).gsub(/\s+/, ' ').strip
 
-    private_class_method :short_result, :verbose_call, :display_name, :display_argument,
-                         :truncate, :cap, :format_size, :neutralize, :flatten
+    private_class_method :verbose_call, :truncate, :cap, :neutralize, :flatten
   end
 end

@@ -1,3 +1,18 @@
+PATH
+  remote: ../pikuri
+  specs:
+    pikuri-core (0.1.0)
+      faraday (~> 2.9)
+      nokogiri (~> 1.19)
+      rainbow (~> 3.1)
+      reverse_markdown (~> 3.0)
+      ruby-readability (~> 0.7)
+      ruby_llm (~> 1.16)
+      zeitwerk (~> 2.7)
+    pikuri-pdf (0.1.0)
+      pdf-reader (~> 2.15)
+      pikuri-core (= 0.1.0)
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -57,17 +72,6 @@ GEM
       afm (>= 0.2.1, < 2)
       hashery (~> 2.0)
       ttfunk
-    pikuri-core (0.1.0)
-      faraday (~> 2.9)
-      nokogiri (~> 1.19)
-      rainbow (~> 3.1)
-      reverse_markdown (~> 3.0)
-      ruby-readability (~> 0.7)
-      ruby_llm (~> 1.16)
-      zeitwerk (~> 2.7)
-    pikuri-pdf (0.1.0)
-      pdf-reader (~> 2.15)
-      pikuri-core (= 0.1.0)
     prism (1.9.0)
     puma (8.0.2)
       nio4r (~> 2.0)
@@ -136,8 +140,8 @@ DEPENDENCIES
   kramdown (~> 2.5)
   kramdown-parser-gfm (~> 1.1)
   minitest (~> 6.0)
-  pikuri-core (~> 0.1.0)
-  pikuri-pdf (~> 0.1.0)
+  pikuri-core!
+  pikuri-pdf!
   puma (~> 8.0)
   rack-test (~> 2.1)
   rackup (~> 2.2)
@@ -182,8 +186,8 @@ CHECKSUMS
   nokogiri (1.19.4-x86_64-linux-gnu) sha256=379fae440b28915e3f19d752ce2dcf8465ed2b2fbefd2a7ca0dd497bc981a06a
   nokogiri (1.19.4-x86_64-linux-musl) sha256=17dfb7c1fa194ae02fbf7c51a7afc8d278045ab3fdacfd86f91d02d7b274470b
   pdf-reader (2.16.0) sha256=bf1b5564c085264d8279bde3cf1467778b75841494d20c0fe7da3dad475f3732
-  pikuri-core (0.1.0) sha256=bf314185e77e5c59cf3bd564f9bafc41cf42cc4df34a96857fe55dacebf0686a
-  pikuri-pdf (0.1.0) sha256=ae817ce108c9b54c02a92b5bc24bb741e950372841e8ce4971f4221bc059b233
+  pikuri-core (0.1.0)
+  pikuri-pdf (0.1.0)
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb
   racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f

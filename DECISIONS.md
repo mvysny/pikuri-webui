@@ -53,11 +53,135 @@ replacement fresh.
 
 ---
 
+## D_upstream_request_throttle — pikuri rations the server; this shell only sizes the pool
+
+**Status:** Accepted, shipped. **Supersedes `D_throttle_at_the_request`**,
+whose {ThrottledAdapter} this deletes. `--turns N` is now
+`Pikuri::Agent::ServerPermits.limit(server, N)`, called once per distinct
+server at boot from `ModelCatalog#servers`; the turn executor is still
+`N * 2` and still not a load cap.
+
+**Context.** `D_throttle_at_the_request` shipped a Faraday adapter as an
+explicit stopgap and named its own retirement condition: the principled home
+for a throttle is a control on the agent loop, that home is pikuri's, and
+"when it lands, this entry is superseded and {ThrottledAdapter} retires". It
+landed — `Agent::ServerPermits` (a process-wide per-server permit registry)
+plus `Agent::RequestThrottle` (the acquire site, in ruby_llm's `instrumenter`
+slot on the agent's own `RubyLLM::Context`). See `../pikuri/DECISIONS.md`
+`D_llm_request_throttle` for the upstream argument and its measurements.
+
+**Decision.** Delete the adapter and take upstream's. Sizing is all this
+shell does, and it does it explicitly.
+
+Upstream keeps the two properties the adapter was kept for: the permit's
+scope is exactly one HTTP request (so a parent cannot deadlock against the
+sub-agent its tool spawns), and it spans the whole streamed response. It
+also fixes the two things the adapter could not:
+
+- **The wait is cancellable.** `ServerPermits::Semaphore#take` polls a
+  `Control::Cancellable` on `SLICE_SECONDS`, so ■ lands on a turn parked in
+  the queue instead of after the server finally answers it. That is
+  precisely the consequence `D_throttle_at_the_request` logged as accepted
+  and unfixable from an adapter.
+- **The key is normalized.** `http://x:8080`, `.../v1` and `.../v1/` are one
+  server, so two `[[llm]]` entries written differently share a pool instead
+  of silently getting one each. Our own pool keyed on the raw `api_base`.
+
+**Why size explicitly, when pikuri auto-sizes.** The `/props` probe pikuri
+already runs for the context cap now also reports `total_slots` and seeds
+the permit count from it, so a zero-config local llama.cpp throttles
+correctly. This shell still calls `.limit`, because a `[[llm]]` entry
+carrying an explicit `context_window` **skips that probe altogether** — its
+server would go unsized, and unsized means unlimited. `--turns` is
+documented as the operator's word about their own server; an entry that
+opts out of the probe must not silently opt out of the throttle.
+
+**Rejected: `ServerPermits.default` rather than `.limit`.** First-writer-wins
+rather than authoritative. Boot runs before any probe so it would win in
+practice today, which is exactly the fragility — the flag would be
+outranking the probe by timing rather than by decision.
+
+**Rejected: dropping `--turns` and trusting auto-sizing alone.** Loses the
+`context_window` case above, and the flag is a documented promise in
+`README.md`.
+
+**Rejected: keeping {ThrottledAdapter} underneath as a belt.** Two throttles
+in series at N permits each gates nothing the outer one doesn't, and the
+adapter's `/chat/completions` path test is a narrower net than the
+instrumenter's.
+
+**Consequences.**
+
+- **This reverses `D_throttle_at_the_request`'s "rejected: a process-global
+  registry keyed by server URL".** That rejection was `D_global_monitor`'s
+  rule — process-global mutable state either joins the domain or argues for
+  its own lock — and the adapter dodged it with a subclass. The registry now
+  arrives with its own `Mutex`, from a library whose thread-safety is its
+  own contract, and it is touched only from the turn worker inside
+  `run_loop`, never from a {BigAppLock} task. The rule is satisfied the way
+  {Broadcaster} satisfies it, not waived.
+- **The `faraday_adapter` seam stops being load-bearing in production**,
+  back to `Pikuri::Testing`'s use of it alone.
+- `:queued` still means two things, both honest: no executor thread, or no
+  permit. The status bar does not distinguish them.
+- A retried request holds its permit across ruby_llm's backoff, idling the
+  slot for a moment — upstream's deliberate trade, so a re-enqueued request
+  cannot pile in behind an original that is still generating.
+- Sizing is per *server*, so `ModelCatalog#servers` exists to dedupe the
+  `[[llm]]` list down to boxes. Everything else about a connection is still
+  per entry.
+
+## D_path_deps_on_pikuri_master — Back to `path: '../pikuri'`, for a surface that is not released
+
+**Status:** Accepted, shipped. **Supersedes `D_released_pikuri_gems`**,
+whose one-minor pin this removes; the CI clone step comes back with it.
+
+**Context.** `D_upstream_request_throttle` needs `Agent::ServerPermits`,
+which exists only on pikuri master — nothing on the 0.1 line has it. The pin
+`D_released_pikuri_gems` argued for was sound and is simply out of date: it
+rested on "pikuri 0.1.0 ships everything this shell needs", which stopped
+being true the moment the throttle landed upstream instead of here.
+
+**Decision.** `gem 'pikuri-core', path: '../pikuri'` and the same for
+`pikuri-pdf`, both on the sibling checkout; `.woodpecker.yml` clones it at
+depth 1 before bundling. Upgrades are whatever master says, verified by
+`rake check`.
+
+**Rejected: waiting for pikuri 0.2.0.** The honest version of "wait" is
+"block this change on a release cut to unblock it", between two repos with
+one author. Master is what this shell validates against in any case.
+
+**Rejected: a per-machine `bundle config local.pikuri-core` with the Gemfile
+still pinned** — `D_released_pikuri_gems`' own suggestion, read in reverse.
+It works for a *convenience* (editing both repos together); it does not work
+for a dependency the committed code requires, because the committed Gemfile
+would then describe a build that cannot run and both a fresh clone and CI
+would fail.
+
+**Rejected: vendoring `ServerPermits` / `RequestThrottle` into `lib/`.** A
+third copy of a throttle, in the one area `AGENTS.md`'s reuse rule reserves
+for pikuri.
+
+**Consequences.**
+
+- CI clones `../pikuri` again, and `Gemfile.lock` carries no checksum for
+  the two gems that matter most. Both are what the pin bought; both are back
+  on the bill.
+- **Master can break this shell on any `bundle install`.** `rake check` is
+  what catches it and pikuri's `CHANGELOG.md` `**Breaking:**` entries carry
+  the migration — which is how this change also paid for master's tool-event
+  reshape (`D_both_forms_in_the_block`'s consequences) and the step-limit
+  removal.
+- **Revisit at the next pikuri release.** Nothing here argues against a pin
+  in principle, so when a release carries this surface, going back to
+  `D_released_pikuri_gems`' shape is a one-line change and a good one.
+
 ## D_throttle_at_the_request — The server's slots are rationed per completion, by a Faraday adapter, not by the turn pool
 
-**Status:** Accepted, shipped as {ThrottledAdapter}, one permit pool per
-`api_base` minted in `ModelCatalog.from_llms(permits:)`. `--turns N` is now
-N permits; the turn executor is `N * 2`.
+**Status:** **Superseded by `D_upstream_request_throttle`.** Held while
+pikuri had no throttle of its own; pikuri master shipped one, and
+{ThrottledAdapter} is deleted. The reasoning below is why this shell built
+its own in the meantime, and which properties the replacement had to keep.
 
 **Context.** `--turns` was the executor's pool size, and a turn holds its
 thread across the whole `run_loop` — tool execution included. So a turn off
@@ -216,10 +340,17 @@ toggles there is a settings bar, and the drawer is about conversations.
   already resolved to `:short` with nothing reading it, and honouring the
   shared file means honouring that. Said out loud in `README.md` rather
   than left to be discovered.
-- **The short result line diverges from pikuri-tui on purpose**: a result
-  short enough to read whole is shown rather than measured, because this
-  shell's `calculator` answers in one token and `OK, 1 B` is not the
-  answer. The TUI always measures.
+- **The short form is the tool's, not ours.** It shipped as a guess —
+  `CamelCase(first argument)` over the call, a measurement or the whole
+  string over the result — because the event carried nothing better. It now
+  arrives on the event: pikuri's `Tool#display_name` / `#describe_call` /
+  `Result#summary`, composed where the structure still exists
+  (`../pikuri/DECISIONS.md` `D_tool_summary_lines`), which retired both
+  guesses and the divergence from pikuri-tui the first version of this entry
+  argued for — a calculator's `4` reads as `4` because pikuri's calculator
+  says so, not because {ToolLine} measures its length. What is left here is
+  what only a renderer can do: defang the strings, and cap them to a width
+  it alone knows.
 - **Both forms sanitize, with no `inspect` carve-out** — the TUI exempts
   its verbose argument dump on the grounds that `inspect` escapes what
   matters, which is true of the terminal threat only: measured against
@@ -428,9 +559,11 @@ control.
 
 ## D_released_pikuri_gems — Released `pikuri-core` / `pikuri-pdf` from RubyGems, pinned to one minor
 
-**Status:** Accepted, shipped. Supersedes `D_track_pikuri_master`, whose
-path dependencies on `../pikuri` this removes; the CI clone step went
-with them.
+**Status:** **Superseded by `D_path_deps_on_pikuri_master`.** Held while
+pikuri 0.1.0 shipped everything this shell needed; `Agent::ServerPermits`
+did not make that release, and the path dependencies are back. The argument
+below is not wrong, only out of date — it is the case to re-make at the next
+pikuri release.
 
 **Context.** The path dependencies bought one thing: master's unreleased
 surface — the boot-time trifecta report, `Interloper#on_change`,
@@ -1509,12 +1642,12 @@ tabs alone; server-side last-viewed is this decision reversed.
 
 ## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count
 
-**Status:** **Superseded in part by `D_throttle_at_the_request`** — the
+**Status:** **Superseded in part by `D_upstream_request_throttle`** — the
 half that made the pool size the server's load cap. The executor itself
 stands: one shared `Concurrent::FixedThreadPool` injected into every
 {AgentRunner}, sized `--turns * 2`, still the admission gate that reports
-`:queued`. What the server may run at once is now {ThrottledAdapter}'s
-permit count, so the paragraph below beginning "The pool size caps
+`:queued`. What the server may run at once is now pikuri's `ServerPermits`
+count, so the paragraph below beginning "The pool size caps
 concurrent turns" describes a job this pool no longer has. Everything here
 about single-writer safety living in the partition rather than the number
 is untouched, and load-bearing for the `2N` sizing.
@@ -1836,8 +1969,8 @@ Same output, one more place block kinds are decided — the
 SseListener / `index.erb` / `style.css` trifecta would stop being one.
 
 **Consequences.** Only messages are stored, so what never became one is
-gone on reload: `! cancelled` and run-loop failure blocks,
-`FallbackNotice` lines, and the partial assistant text a cancel
+gone on reload: `! cancelled` and run-loop failure blocks, and the
+partial assistant text a cancel
 deliberately preserves (it raises out of `Chat#ask` before the message
 lands) — a cancelled turn reloads as a user message with no reply under
 it. Two couplings are the price of re-deriving: the replay must emit
@@ -2299,9 +2432,9 @@ a list of classes**, when {ConversationStore#save} took over writing
 was never the invariant — "translation happens at named boundaries, and
 nowhere else" is — and the list of names had begun to read as the rule.
 
-**Context.** This project follows pikuri's releases closely
-(`D_released_pikuri_gems`), and pikuri is pre-1.0, so its surface moves
-under this shell by design. What that costs depends
+**Context.** This project tracks pikuri closely
+(`D_path_deps_on_pikuri_master`), and pikuri is pre-1.0, so its surface
+moves under this shell by design. What that costs depends
 entirely on *where* the types are: a pikuri type in the rendering path
 prices an upgrade at a sweep of every file the browser's state flows
 through, while one in a disk utility prices it at that utility.

@@ -93,7 +93,14 @@ end
 # Every [[llm]], as transports. A conversation is minted on the one it saved
 # and can be moved to any of the others (/model); the first is where one with
 # nothing saved starts.
-catalog = PikuriWeb::ModelCatalog.from_llms(config.llms, permits: turns)
+catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
+
+# Sized explicitly rather than left to the auto-sizing pikuri does from the
+# server's own /props slot count: an [[llm]] entry carrying an explicit
+# context_window skips that probe altogether, and an unsized server is an
+# unlimited one. `--turns` is the operator's word about their own server
+# (`D_upstream_request_throttle`).
+catalog.servers.each { |server| Pikuri::Agent::ServerPermits.limit(server, turns) }
 
 Pikuri::Extractors::PDF.register
 
@@ -126,9 +133,9 @@ system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 # Turns run here rather than on a Sinatra request thread, and every
 # conversation shares this one executor.
 #
-# Deliberately *twice* the server's slot count, because this pool no longer
-# rations the server — ThrottledAdapter does, per completion request
-# (`D_throttle_at_the_request`). A turn holds a thread here across its whole
+# Deliberately *twice* the server's slot count, because this pool does not
+# ration the server — pikuri's ServerPermits does, per request
+# (`D_upstream_request_throttle`). A turn holds a thread here across its whole
 # run_loop, tool execution included, so sizing this at the slot count would
 # leave the server idle for the length of a web_search with nobody able to use
 # it. At 2N, a turn blocked in a tool has released its permit and a second
@@ -198,7 +205,6 @@ conversation_factory = lambda do |conversation|
   agent = Pikuri::Agent.new(
     transport: choice.transport,
     system_prompt: system_prompt,
-    step_limit: Pikuri::Agent::Control::StepLimit.new(max: 20),
     cancellable: cancel_flag,
     interloper: interloper,
     streaming: true

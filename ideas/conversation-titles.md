@@ -145,6 +145,9 @@ channel — no `params:`, no thinking knob, and its `@chat` has no reader. Where
   its middleware-order coupling; the ask is *general* (`enable_thinking` is not Qwen-specific
   plumbing once spelled as a params passthrough). No longer blocks anything, so it does not collide
   with the one-minor pin (`D_released_pikuri_gems`).
+  **Stale (`D_path_deps_on_pikuri_master`):** there is no pin any more — this shell is back on
+  `../pikuri` master by path, so an upstream feature request is now a same-day change, not a
+  release away. That makes this option cheaper than the adapter, not merely a nicety.
 - **Raw `RubyLLM::Chat` off the transport's fields.** Now pointless — the adapter reaches the same
   wire format without this project owning LLM transport wiring, and without replicating
   `Agent#build_context` (~10 lines, `openai_use_system_role = true` included).
@@ -184,6 +187,16 @@ mean the feature isn't only for new conversations.
   a sweep there would delay the listen. After Puma is up, on the titler's own thread.
 
 ## Plumbing, once the fork is closed
+
+> **Stale, and inverted, by `D_upstream_request_throttle`.** The whole
+> `Q_titler_executor` argument below rests on the executor's pool size being what caps load on the
+> inference server. It is not, and has not been since `D_throttle_at_the_request`; it is now
+> pikuri's `ServerPermits`, one permit per HTTP *request*. So: a titler on its own executor is
+> **not** "a request the cap cannot see" — it takes a permit like anything else, and at `--turns 1`
+> it queues behind the user's turn instead of racing it. And "Not reachable: filling the tool-call
+> gaps" is now exactly what the throttle buys — a turn off running `web_search` holds no permit, so
+> a queued title *can* use that window without `--turns 2`. Re-decide `Q_titler_executor` from
+> scratch; the head-of-line consequence recorded below is the part that no longer follows.
 
 - **`Q_titler_executor`: titles run on `turn_executor`, like everything else.** The earlier plan gave
   the titler its own single-thread executor "so a title does not consume a turn slot". That reasoning
