@@ -47,9 +47,9 @@ the alternatives that were rejected, live one entry per slug in
   types used freely: `bin/pikuri-web-chat`, {Web::SseListener},
   {Web::TrifectaView}, {Agents::Runner}, {Conversations::HistoryReplay},
   {Agents::ModelCatalog}, {Agents::Titler},
-  {Agents::RequestParams}, {Conversations::Store#save}. A title crosses as a
+  {Conversations::Store#save}. A title crosses as a
   `String`; {Config} carries an `[[llm]]`'s `params` as a plain `Hash`
-  and {Agents::ModelCatalog} is where it becomes a transport's adapter. The catalog
+  and {Agents::ModelCatalog} is where it rides a `ChatTransport`. The catalog
   crosses as names and `[model, server]` pairs, never a `ChatTransport`.
   {Web::ToolLine} is on neither list: it takes Strings and Hashes and only
   *calls* `Pikuri::Sanitizer`, which is a text function, not a type crossing.
@@ -235,16 +235,19 @@ the alternatives that were rejected, live one entry per slug in
 - **An `[[llm]]`'s `params` reaches the server verbatim, and the caps on a
   title are load-bearing.** `params` is a passthrough — never a
   `thinking = false` boolean, whose wire spelling differs per provider
-  *and* per chat template — installed as a {Agents::RequestParams} adapter at
+  *and* per chat template — handed to pikuri's `ChatTransport#params` at
   `Agents::ModelCatalog.from_llms`, the one place a `Config::Llm` becomes a
-  transport, so any connection can declare it. It is a stopgap for
-  pikuri's missing params channel; the TOML spelling is what must survive
-  it. Every way it can rot leaves the request *untouched*, so a parameter
-  is silently not applied rather than a request broken — which is why
+  transport, so any connection can declare it. The TOML spelling is our
+  contract; what carries it to the wire is pikuri's
+  (`D_opaque_request_params` there), and no Faraday adapter of ours is
+  ever coming back. A server may accept a parameter and ignore it, so a
+  short title is never *assumed* — which is why
   {Agents::Titler}'s word and character caps and its `</think>` strip stay: a
   thinking model has been measured putting ~4000 characters of reasoning
   where a title belongs. `thinking_tokens > 0` is watched for exactly
-  that, and is diagnostic only — it never discards a title.
+  that, and is diagnostic only — it never discards a title. A table naming
+  `messages`, `tools` or `stream` breaks the turn instead of configuring
+  it; that edge is pikuri's documented one, not ours to guard.
   See `D_llm_params_passthrough`, `D_canary_severity`.
 
 - **`[model, api_base]` is not unique, and the first `[[llm]]` declared
@@ -399,10 +402,8 @@ object injected at `bin/pikuri-web-chat`.
   as a 3–7 word title: a throwaway toolless agent per call, the caps, and
   the reasoning canary.
 - `lib/pikuri_web/agents/model_catalog.rb` — `Agents::ModelCatalog`, the
-  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport.
-- `lib/pikuri_web/agents/request_params.rb` — `Agents::RequestParams`, an
-  `[[llm]]`'s `params` table as the Faraday adapter that merges it on;
-  stopgap until pikuri carries params itself.
+  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport,
+  each carrying its entry's `params`.
 
 `Conversations` — the conversation set, saved / resident / replayed:
 

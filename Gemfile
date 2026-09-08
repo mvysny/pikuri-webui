@@ -30,8 +30,10 @@ gem 'zeitwerk', '~> 2.7'
 # A path dependency on the sibling checkout, not a released version: this
 # shell is back on pikuri master for its unreleased surface — Agent::
 # ServerPermits, the per-server LLM request throttle that replaced this
-# project's own Faraday adapter, and the tool display strings the
-# transcript's tool lines now render (`D_upstream_request_throttle`).
+# project's own Faraday adapter (`D_upstream_request_throttle`);
+# ChatTransport's `params`, which replaced the second one
+# (`D_llm_params_passthrough`); and the tool display strings the
+# transcript's tool lines now render.
 # pikuri-pdf rides the same checkout because its gemspec pins
 # `pikuri-core = <exact version>` in lockstep — a released pikuri-pdf
 # would refuse the moment master bumps core's version.
@@ -77,17 +79,6 @@ gem 'tomlrb', '~> 2.0'
 # MIT, zero runtime dependencies of its own, and a de-facto Ruby standard
 # (ActiveSupport depends on it).
 gem 'concurrent-ruby', '~> 1.3'
-
-# Already in the bundle under ruby_llm, declared because PikuriWeb::
-# RequestParams subclasses Faraday::Adapter::NetHttp directly: an
-# [[llm]]'s `params` table has to reach the wire, and pikuri's
-# ChatTransport carries no params channel — only `faraday_adapter`, the
-# generic HTTP seam. An undeclared transitive dependency we compile
-# against would break on a ruby_llm bump that drops it.
-#
-# Temporary by intent: the day pikuri grows a real `params:`, this gem
-# and request_params.rb go together.
-gem 'faraday', '~> 2.14'
 
 # ERB engine Tilt picks over stdlib ERB. Needed for Sinatra's
 # +erb, escape_html: true+ auto-escaping and the +<%==+ raw-output tag

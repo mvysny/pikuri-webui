@@ -2,8 +2,8 @@
 
 module PikuriWeb
   # Running an LLM turn: a conversation's agent and its lifecycle ({Runner}),
-  # the connections it can run on ({ModelCatalog}, {RequestParams}), and the
-  # throwaway agent that names a conversation ({Titler}).
+  # the connections it can run on ({ModelCatalog}), and the throwaway agent
+  # that names a conversation ({Titler}).
   #
   # Nothing here knows a conversation is a folder on disk — that is
   # {Conversations} — and nothing here may name anything under {Web}; see that

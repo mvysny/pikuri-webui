@@ -173,11 +173,18 @@ to come from somewhere, and picking it for a conversation is a legitimate thing
 to want — a conversation that does not think. The cost of leaving it visible is
 `D_shadowed_identity_pair`.
 
-## D_llm_params_passthrough — An `[[llm]]`'s `params` table goes to the server verbatim, through a Faraday adapter
+## D_llm_params_passthrough — An `[[llm]]`'s `params` table goes to the server verbatim
 
-**Status:** Accepted, shipped, and the adapter half is explicitly temporary.
-`Config::Llm#params` is any TOML table; `Agents::ModelCatalog.from_llms` turns a
-non-empty one into a `Agents::RequestParams` adapter on that connection's transport.
+**Status:** Accepted and shipped; the config spelling outlived the mechanism
+that first carried it, exactly as planned. `Config::Llm#params` is any TOML
+table, and `Agents::ModelCatalog.from_llms` hands it to
+`Pikuri::Agent::ChatTransport#params`, which pikuri deep-merges into every
+request on that connection. The Faraday adapter this project shipped first
+(`Agents::RequestParams`) is **deleted**, along with our `faraday` dependency:
+pikuri grew the params channel this entry deferred asking for, so the
+alternative logged below as "rejected: asking pikuri first" is now simply what
+happened. What a parameter *means* stays nobody's business here — see pikuri's
+`D_opaque_request_params` for the upstream fork.
 
 **Context.** Titling on the local 35B needs reasoning off, and that is not a
 detail: matched benchmark, same eight openers and the same agent, only the
@@ -190,13 +197,14 @@ did not catch it. Only `chat_template_kwargs: {enable_thinking: false}`
 suppresses it, and `Pikuri::Agent` exposes no channel for an extra request
 parameter.
 
-**Decision.** Carry the parameter in the config as an opaque table, and get it
-onto the wire through `ChatTransport#faraday_adapter` — pikuri's documented
-generic HTTP seam. ruby_llm registers `faraday.request :json` *before* the
-adapter (`RubyLLM::Connection#setup_middleware`), so the adapter sees a
-serialized body it can parse, merge and re-serialize. The config spelling is
-the part meant to last: when pikuri grows a real `params:`, the file does not
-change and `request_params.rb` is deleted.
+**Decision.** Carry the parameter in the config as an opaque table keyed by the
+*wire* spelling, and let the connection carry it to the server. The config
+spelling was declared the part meant to last, and it was: `params = {
+chat_template_kwargs = { enable_thinking = false } }` reads today exactly as it
+did when a hand-rolled Faraday adapter was doing the merging, because pikuri's
+`ChatTransport#params` took the same shape. Nothing in this repo parses,
+validates or translates the table — `from_llms` passes it through and that is
+the whole implementation.
 
 **Rejected: `thinking = false` as the config key.** The obvious option, and the
 one originally asked for. The wire spelling is not one thing — llama.cpp+Qwen
@@ -233,17 +241,22 @@ each alias is its own process, and a swap-on-demand router does not help when
 what you want is a title *during* a turn. The recipe stays available to anyone
 with the VRAM; `params` is what works on one box.
 
-**Rejected: reaching past pikuri to `RubyLLM::Chat#with_params`.** Would make
-this project own LLM transport wiring and replicate `Agent#build_context`,
-`openai_use_system_role = true` included, for a result the adapter already
-reaches.
+**Rejected: reaching past pikuri to `RubyLLM::Chat#with_params` from here.**
+Would make this project own LLM transport wiring and replicate
+`Agent#build_context`, `openai_use_system_role = true` included, for a result
+the adapter already reached. Note what this rejection was *not*: an argument
+against `with_params` itself, which is precisely what pikuri now calls — the
+objection was to this shell reaching around pikuri to call it.
 
-**Rejected: asking pikuri for the params channel first.** Still the right
-long-term home, and cheap now that this shell is on `../pikuri` master by path
-(`D_path_deps_on_pikuri_master`). Deferred deliberately: doing it upstream first
-spends a pikuri change *and* a pikuri-tui change on a design not yet run against
-a real server, and the config file — the expensive half to change later — is
-identical either way.
+**Deferred, then done: asking pikuri for the params channel.** Always the right
+long-term home; deferred deliberately, because doing it upstream first would
+spend a pikuri change *and* a pikuri-tui change on a design not yet run against
+a real server, and the config file — the expensive half to change later — was
+identical either way. Once the design had a live server behind it the deferral
+expired, and the upstream change turned out to be a field plus one
+`with_params` call. Keep the lesson, not the deferral: validate the config
+spelling against a real server *before* spending a change in the library that
+two shells depend on.
 
 **Consequence — pikuri-tui stops booting until its allowlists widen.** Both
 shells' parsers are strict over the one shared file, so `[titler]` and `params`
@@ -254,11 +267,20 @@ and reads nothing from — the standing obligation of
 project-local overlay or an `ENV` override is exactly what that decision
 forbids.
 
-**Consequence — every rot path degrades to "not applied", never "broken".** A
-middleware reorder, a body that is no longer JSON, a request that is not a chat
-completion: each leaves the request untouched. That is what makes the coupling
-to ruby_llm's middleware order acceptable, and what `D_canary_severity` watches
-for.
+**Consequence — the silent failure is the *server's* now, and it is the one the
+canary still watches.** The adapter's rot paths (a middleware reorder, a body
+that is no longer JSON, a request that is not a chat completion) are gone with
+the adapter; a well-formed table is merged before serialization, and a table
+naming `messages` / `tools` / `stream` breaks the turn loudly instead. What
+survives untouched is the failure that motivated `D_canary_severity`: a server
+may accept a parameter and ignore it — `reasoning_effort` did exactly that — so
+a short title is still never *assumed*, and {Agents::Titler}'s caps and
+`</think>` strip stay load-bearing.
+
+**Consequence — `faraday` left the Gemfile.** It was declared only because
+`Agents::RequestParams` subclassed `Faraday::Adapter::NetHttp`; nothing in this
+repo compiles against Faraday any more, so the shell is back to naming no HTTP
+library at all.
 
 ## D_shadowed_identity_pair — Two `[[llm]]`s on one `[model, server]` pair: the first declared wins
 

@@ -37,19 +37,31 @@ RSpec.describe PikuriWeb::Agents::ModelCatalog do
       assert_equal 'http://localhost:8080/v1', one.primary.transport.api_base
     end
 
-    # Rationing the server is pikuri's now, and nothing rides the transport to
-    # do it (`D_upstream_request_throttle`) — so only a `params` table puts an
-    # adapter there.
-    it 'leaves a connection with no params carrying no adapter' do
-      assert_nil catalog.find('local').transport.faraday_adapter
+    it 'leaves a connection with no params carrying an empty table' do
+      assert_empty catalog.find('local').transport.params
     end
 
-    it 'rides a params table onto the transport as a RequestParams adapter' do
+    # pikuri symbolizes on the way in, so the TOML spelling and what the
+    # transport carries differ by key type. The expectation is not a typo.
+    it 'rides a params table onto the transport' do
       one = described_class.from_llms(
         [llm('titler', server: 'http://localhost:8080',
                        params: { 'chat_template_kwargs' => { 'enable_thinking' => false } })]
       )
-      assert_operator one.primary.transport.faraday_adapter, :<, Faraday::Adapter::NetHttp
+      assert_equal({ chat_template_kwargs: { enable_thinking: false } },
+                   one.primary.transport.params)
+    end
+
+    # The seam has to stay free for `Pikuri::Testing`'s scripted adapter: it is
+    # one slot, so anything this repo parks there costs the ability to fake a
+    # connection's HTTP. Rationing is pikuri's (`D_upstream_request_throttle`)
+    # and params have their own field, so nothing here needs it.
+    it 'installs no Faraday adapter, whatever the connection carries' do
+      one = described_class.from_llms(
+        [llm('titler', server: 'http://localhost:8080', params: { 'min_p' => 0.05 })]
+      )
+      assert_nil catalog.find('local').transport.faraday_adapter
+      assert_nil one.primary.transport.faraday_adapter
     end
   end
 
@@ -68,7 +80,9 @@ RSpec.describe PikuriWeb::Agents::ModelCatalog do
     it 'resolves the pair to the first entry declared, not the last' do
       choice = shadowing.resolve(model: 'qwen3.6', server: 'http://localhost:8080/v1')
       assert_equal 'Local Qwen 3.6', choice.name
-      assert_nil choice.transport.faraday_adapter
+      # The winner is the thinking one — a reopen must not inherit the titler's
+      # params along with the pair.
+      assert_empty choice.transport.params
     end
 
     it 'names the first entry for a transport carrying the pair' do
@@ -77,7 +91,7 @@ RSpec.describe PikuriWeb::Agents::ModelCatalog do
 
     it 'keeps the shadowed entry pickable and listed' do
       assert_equal %w[Local\ Qwen\ 3.6 qwen-titler], shadowing.rows.map { |r| r[:name] }
-      refute_nil shadowing.find('qwen-titler').transport.faraday_adapter
+      refute_empty shadowing.find('qwen-titler').transport.params
     end
   end
 

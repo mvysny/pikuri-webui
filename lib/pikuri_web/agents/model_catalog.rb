@@ -66,9 +66,11 @@ module PikuriWeb
       # on the server rather than on anything a transport carries
       # (+D_upstream_request_throttle+).
       #
-      # An entry's +params+ rides its transport as a {RequestParams} adapter, so
-      # a connection configured non-thinking stays non-thinking wherever its
-      # transport travels.
+      # An entry's +params+ rides its transport, so a connection configured
+      # non-thinking stays non-thinking wherever that transport goes — a model
+      # switch mid-conversation, a conversation reopened onto it. The table
+      # reaches the server as written; this shell never interprets a key
+      # (+D_llm_params_passthrough+).
       #
       # @param llms [Array<Config::Llm>] every configured connection, in
       #   declaration order
@@ -76,15 +78,16 @@ module PikuriWeb
       def self.from_llms(llms)
         new(choices: llms.map do |llm|
           key = llm.api_key.to_s.strip
-          transport = Pikuri::Agent::ChatTransport.from_openai_server(
-            server: llm.server,
-            model: llm.model,
-            api_key: key.empty? ? 'not-needed' : key,
-            context_window: llm.context_window
+          Choice.new(
+            name: llm.name,
+            transport: Pikuri::Agent::ChatTransport.from_openai_server(
+              server: llm.server,
+              model: llm.model,
+              api_key: key.empty? ? 'not-needed' : key,
+              context_window: llm.context_window,
+              params: llm.params
+            )
           )
-          adapter = RequestParams.adapter_for(llm.params)
-          transport = transport.with(faraday_adapter: adapter) if adapter
-          Choice.new(name: llm.name, transport: transport)
         end)
       end
 
