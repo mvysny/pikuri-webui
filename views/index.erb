@@ -122,7 +122,7 @@
            textarea and tracks its auto-grow with no geometry in JS.
 
            Every name here needs an arm in app.js's `commands` map; see
-           PikuriWeb::SlashCommand. -->
+           PikuriWeb::Web::SlashCommand. -->
       <ul id="slash-menu" role="listbox" aria-label="Commands" hidden>
         <% commands.each do |command| %>
         <li id="slash-<%= command.name.delete_prefix('/') %>" role="option"

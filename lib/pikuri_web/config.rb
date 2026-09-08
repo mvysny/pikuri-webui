@@ -390,7 +390,7 @@ module PikuriWeb
     attr_reader :show_thinking
     # @return [Symbol] the tool-line form to start on (+[ui]+ > default) —
     #   whatever the file said, symbolized, so an unrecognized form arrives
-    #   here unresolved. **The reader falls back**, as {App} does for an
+    #   here unresolved. **The reader falls back**, as {Web::App} does for an
     #   unknown +theme+ cookie; the vocabulary belongs to whoever renders it.
     attr_reader :tool_lines
     # @return [Llm, nil] the connection conversation titles are written on

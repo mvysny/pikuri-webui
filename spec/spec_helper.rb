@@ -47,7 +47,7 @@ class Guarded
   end
 end
 
-# @param object [Object] a guarded instance (AgentRunner, Transcript, …)
+# @param object [Object] a guarded instance (Agents::Runner, Web::Transcript, …)
 # @param lock [PikuriWeb::BigAppLock] the domain it is guarded by
 # @return [Guarded]
 def guard(object, lock) = Guarded.new(object, lock)

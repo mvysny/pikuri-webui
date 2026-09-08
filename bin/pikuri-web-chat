@@ -83,7 +83,7 @@ end
 # Every [[llm]], as transports. A conversation is minted on the one it saved
 # and can be moved to any of the others (/model); the first is where one with
 # nothing saved starts.
-catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
+catalog = PikuriWeb::Agents::ModelCatalog.from_llms(config.llms)
 
 # Conversation titles, when [titler] names one of those connections. One
 # instance for the process: it keeps no per-conversation state, building a
@@ -99,7 +99,7 @@ titler =
       "titler: #{titler_llm.name.inspect} — #{choice.model} @ #{choice.server}" \
       "#{titler_llm.params.empty? ? ' (no params; expect slow titles from a thinking model)' : ''}"
     )
-    PikuriWeb::Titler.new(transport: choice.transport, params_declared: !titler_llm.params.empty?)
+    PikuriWeb::Agents::Titler.new(transport: choice.transport, params_declared: !titler_llm.params.empty?)
   end
 
 # A [[server]] naming no ceiling is left alone, so pikuri's /props probe sizes
@@ -119,7 +119,7 @@ Pikuri::Extractors::PDF.register
 
 # — the Pikuri-free plumbing —
 
-broadcaster = PikuriWeb::Broadcaster.new
+broadcaster = PikuriWeb::Web::Broadcaster.new
 
 # Everything this shell persists lives under one folder named after the
 # script, inside pikuri's own state root — so `rm -r` on it is a complete
@@ -129,7 +129,7 @@ broadcaster = PikuriWeb::Broadcaster.new
 state_root = Pikuri::Paths.state / 'pikuri-web-chat'
 
 # Saved conversations fill the sidebar; opening one mints its agent.
-conversations = PikuriWeb::ConversationStore.new(
+conversations = PikuriWeb::Conversations::Store.new(
   root: state_root / 'conversations',
   shell: 'pikuri-web-chat'
 )
@@ -156,7 +156,7 @@ system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 # (`D_chat_only_entry_point`), a sibling OS or code shell would.
 #
 # The real bound is the resident runners: a conversation admits one turn at a
-# time (AgentRunner#submit injects rather than starting a second), so turns in
+# time (Agents::Runner#submit injects rather than starting a second), so turns in
 # flight cannot exceed the conversations opened. Single-writer safety holds at
 # any size regardless, because the partition is per conversation — two turns
 # are two transcripts, two listeners, two agents, two disjoint folders. What
@@ -187,12 +187,12 @@ conversation_factory = lambda do |conversation|
 
   cancel_flag = Pikuri::Agent::Control::Cancellable.new
   interloper = Pikuri::Agent::Control::Interloper.new
-  # Constructed up front so the Agent's ListenerList and the AgentRunner (for
+  # Constructed up front so the Agent's ListenerList and the Agents::Runner (for
   # the status bar's token readout) see the same TokenLog instance.
   token_log = Pikuri::Agent::Listener::TokenLog.new
 
-  transcript = PikuriWeb::Transcript.new(lock: big_app_lock)
-  sse_listener = PikuriWeb::SseListener.new(
+  transcript = PikuriWeb::Web::Transcript.new(lock: big_app_lock)
+  sse_listener = PikuriWeb::Web::SseListener.new(
     transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
     lock: big_app_lock
   )
@@ -246,7 +246,7 @@ conversation_factory = lambda do |conversation|
     c.add_tool Pikuri::Tool::FETCH
   end
 
-  PikuriWeb::AgentRunner.new(
+  PikuriWeb::Agents::Runner.new(
     conversation: conversation,
     agent: agent,
     interloper: interloper,
@@ -264,7 +264,7 @@ conversation_factory = lambda do |conversation|
   )
 end
 
-registry = PikuriWeb::ConversationRegistry.new(store: conversations, factory: conversation_factory,
+registry = PikuriWeb::Conversations::Registry.new(store: conversations, factory: conversation_factory,
                                                lock: big_app_lock)
 
 # The advisory lethal-trifecta map, printed once at boot: which of private
@@ -287,26 +287,26 @@ Thread.new do
   end
 end
 
-PikuriWeb::App.set :big_app_lock, big_app_lock
-PikuriWeb::App.set :broadcaster, broadcaster
-PikuriWeb::App.set :registry, registry
+PikuriWeb::Web::App.set :big_app_lock, big_app_lock
+PikuriWeb::Web::App.set :broadcaster, broadcaster
+PikuriWeb::Web::App.set :registry, registry
 # Names, model ids and window sizes — no transport crosses this line. Also what
 # gates /model out of the palette when there is only one connection.
-PikuriWeb::App.set :models, catalog.rows
+PikuriWeb::Web::App.set :models, catalog.rows
 # What a browser with no `thinking` / `tools` cookie sees. The file supplies
 # only these starting values; the cookie a /thinking or /toollines pick writes
 # outranks it from then on.
-PikuriWeb::App.set :show_thinking, config.show_thinking
-PikuriWeb::App.set :tool_lines, config.tool_lines
+PikuriWeb::Web::App.set :show_thinking, config.show_thinking
+PikuriWeb::Web::App.set :tool_lines, config.tool_lines
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
 # neither mode: the agent, its listener stack and the runner's worker
 # thread are long-lived instances wired above, so a class change needs a
 # fresh process — see README, "Develop".
-PikuriWeb::App.set :environment, dev ? :development : :production
-PikuriWeb::App.set :show_exceptions, dev
-PikuriWeb::App.set :bind, bind
-PikuriWeb::App.set :port, port
+PikuriWeb::Web::App.set :environment, dev ? :development : :production
+PikuriWeb::Web::App.set :show_exceptions, dev
+PikuriWeb::Web::App.set :bind, bind
+PikuriWeb::Web::App.set :port, port
 
 # Ctrl+C hangs without this hook. Every open EventSource parks one Puma
 # thread in the /events drain loop; Puma's graceful stop then waits for
@@ -324,13 +324,13 @@ puma_events.register(:state) do |state|
   # #shutdown, never #wait_for_termination: waiting for an in-flight turn here
   # would park this hook in front of Puma's graceful wait — the same bug the
   # broadcaster close above exists to prevent. An unfinished turn is lost, which
-  # is the accepted trade (saves land at turn end; see AgentRunner). Nothing in
+  # is the accepted trade (saves land at turn end; see Agents::Runner). Nothing in
   # this hook may enter the BigAppLock either — a wedged domain must not block
   # the exit.
   turn_executor.shutdown
 end
 
-PikuriWeb::App.set :server_settings, {
+PikuriWeb::Web::App.set :server_settings, {
   # Each connected EventSource parks one Puma thread in the /events
   # drain loop; leave headroom over the default pool for a few tabs.
   min_threads: 0,
@@ -341,9 +341,9 @@ PikuriWeb::App.set :server_settings, {
   # hook that a future Puma renames out from under us.
   force_shutdown_after: 5
 }
-PikuriWeb::App.set :server, :puma
+PikuriWeb::Web::App.set :server, :puma
 
-PikuriWeb::App.run! do
+PikuriWeb::Web::App.run! do
   primary = catalog.primary
   puts "pikuri-web listening on http://#{bind}:#{port} " \
        "(default connection: #{primary.model} @ #{primary.server}; #{catalog.choices.size} configured)"
