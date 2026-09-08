@@ -11,17 +11,17 @@ require 'tmpdir'
 RSpec.describe 'conversations end to end' do
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
-  let(:broadcaster) { PikuriWeb::Broadcaster.new }
+  let(:broadcaster) { PikuriWeb::Web::Broadcaster.new }
   let(:store) do
-    PikuriWeb::ConversationStore.new(root: @root, shell: 'pikuri-web-chat')
+    PikuriWeb::Conversations::Store.new(root: @root, shell: 'pikuri-web-chat')
   end
 
   # One connection, named after the scripted transport every conversation gets:
   # the catalog keys on [model, api_base], so each factory-built transport
   # resolves to this entry despite carrying its own scripted adapter.
   let(:catalog) do
-    PikuriWeb::ModelCatalog.new(
-      choices: [PikuriWeb::ModelCatalog::Choice.new(name: 'fake', transport: Pikuri::Testing.fake_transport)]
+    PikuriWeb::Agents::ModelCatalog.new(
+      choices: [PikuriWeb::Agents::ModelCatalog::Choice.new(name: 'fake', transport: Pikuri::Testing.fake_transport)]
     )
   end
 
@@ -48,8 +48,8 @@ RSpec.describe 'conversations end to end' do
     lambda do |conversation|
       interloper = Pikuri::Agent::Control::Interloper.new
       cancellable = Pikuri::Agent::Control::Cancellable.new
-      transcript = PikuriWeb::Transcript.new(lock: lock)
-      listener = PikuriWeb::SseListener.new(
+      transcript = PikuriWeb::Web::Transcript.new(lock: lock)
+      listener = PikuriWeb::Web::SseListener.new(
         transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
         lock: lock
       )
@@ -70,7 +70,7 @@ RSpec.describe 'conversations end to end' do
       end
       agents << agent
 
-      PikuriWeb::AgentRunner.new(
+      PikuriWeb::Agents::Runner.new(
         conversation: conversation, agent: agent, interloper: interloper,
         cancellable: cancellable, broadcaster: broadcaster, conversations: store,
         transcript: transcript, listener: listener, executor: executor, catalog: catalog,
@@ -81,7 +81,7 @@ RSpec.describe 'conversations end to end' do
 
   let(:agents) { [] }
   let(:registry) do
-    guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock), lock)
+    guard(PikuriWeb::Conversations::Registry.new(store: store, factory: factory, lock: lock), lock)
   end
   let(:runner) { guard(registry.create, lock) }
   let(:transcript) { guard(runner.transcript, lock) }
@@ -160,7 +160,7 @@ RSpec.describe 'conversations end to end' do
       produced = rendered(transcript)
 
       # A second registry over the same folder: what a restarted process sees.
-      reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock),
+      reopened = guard(PikuriWeb::Conversations::Registry.new(store: store, factory: factory, lock: lock),
                        lock).open_id(conversation.id)
 
       assert_equal produced, rendered(reopened.transcript)
@@ -174,7 +174,7 @@ RSpec.describe 'conversations end to end' do
         runner.submit('What is 2 + 2?')
         produced = rendered(transcript)
 
-        reopened = guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock),
+        reopened = guard(PikuriWeb::Conversations::Registry.new(store: store, factory: factory, lock: lock),
                          lock).open_id(conversation.id)
 
         assert_includes produced.map(&:last).join, 'loaded skill: writing-rdoc'
@@ -190,7 +190,7 @@ RSpec.describe 'conversations end to end' do
       runner.submit('What is 2 + 2?')
       before = (dir / 'history.json').read
 
-      guard(PikuriWeb::ConversationRegistry.new(store: store, factory: factory, lock: lock), lock)
+      guard(PikuriWeb::Conversations::Registry.new(store: store, factory: factory, lock: lock), lock)
         .open_id(runner.conversation.id)
       agents.last.export_history.save(dir)
 

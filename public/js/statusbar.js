@@ -46,7 +46,7 @@ export const initStatusBar = ({ conversation }) => {
 
   return {
     /**
-     * Renders one status frame, as {AgentRunner#status_data} shapes it.
+     * Renders one status frame, as {Agents::Runner#status_data} shapes it.
      *
      * `queued` is spelled out because it means the turn was accepted and
      * another conversation holds the executor — saying so beats showing "busy"

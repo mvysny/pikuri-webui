@@ -55,7 +55,7 @@ RSpec.describe 'the client/server contract' do
     paths = client_js.scan(/(?:fetch|new EventSource)\(\s*['"`](\/[^'"`?${]*)/).flatten.uniq
     refute_empty paths, 'the route scan found nothing — the client changed shape, fix the pattern'
 
-    patterns = PikuriWeb::App.routes.values.flatten(1).map(&:first)
+    patterns = PikuriWeb::Web::App.routes.values.flatten(1).map(&:first)
     missing = paths.reject { |path| patterns.any? { |pattern| pattern.match(path) } }
     assert_equal [], missing, "the client calls #{missing.join(', ')}; App has no route matching"
   end
@@ -110,6 +110,6 @@ RSpec.describe 'the client/server contract' do
   # the map app.js hands the composer exactly as it is.
   it 'arms every catalogued command in the composer it configures, and none besides' do
     arms = client_js.scan(/^\s*'(\/[\w-]+)':/).flatten
-    assert_equal PikuriWeb::SlashCommand::CATALOG.map(&:name).sort, arms.sort
+    assert_equal PikuriWeb::Web::SlashCommand::CATALOG.map(&:name).sort, arms.sort
   end
 end

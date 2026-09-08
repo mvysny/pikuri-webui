@@ -53,6 +53,79 @@ replacement fresh.
 
 ---
 
+## D_namespaces — Four namespaces cut by what a class *does*, and service never names `Web`
+
+**Status:** Accepted, shipped. `PikuriWeb::Web`, `::Agents`, `::Conversations`,
+`::Util`; `Config`, `BigAppLock` and `VERSION` stay at the root.
+
+**Context.** Nineteen classes sat flat under `PikuriWeb`. Coupling was already
+low — the wiring lives in `bin/pikuri-web-chat`, and most classes named one or
+two neighbours — so the question was purely where to draw lines, not how to
+untangle.
+
+**Decision.** Membership is decided by **what a class produces**, the SOA
+frontend/service reading:
+
+- `Web` — everything whose output is what the browser sees.
+- `Agents` — running an LLM turn.
+- `Conversations` — the conversation set: saved, resident, replayed.
+- `Util` — knows nothing about this app.
+
+`Config` and `BigAppLock` stay at the root because neither belongs to a half:
+`Config` is read before anything else exists and carries the whole cross-shell
+file schema (`D_schema_complete_config`), and `BigAppLock` is *the* one global
+mechanism (`D_global_monitor`) that every namespace asserts into. Filing either
+under a namespace would assert an ownership that does not exist.
+
+**The one-way rule is the load-bearing half.** `Web` may name anything under
+`PikuriWeb`; nothing under `Agents` or `Conversations` may name anything under
+`Web`. A component reaching *down* into a service — or into pikuri — is the
+sanctioned shape, so the permissive direction costs nothing; the closed
+direction is what keeps a renderer from being summoned from inside the agent
+loop. It held on the first pass but for one method, and the fix was an
+improvement on its own: `Agents::Runner#trifecta_html` became
+`Web::App` calling `Web::TrifectaView.render(runner.trifecta)`, so the runner
+hands out the report and renders nothing. Today every crossing is an object
+injected at `bin/pikuri-web-chat` and held duck-typed, which makes the rule
+greppable: no constant under `agents/` or `conversations/` names one under
+`web/`.
+
+**Rejected: cutting along `Pikuri::`.** The first proposal, and it is the
+tempting one — the seam is already documented (`D_pikuri_free_core`) and a
+grep would enforce it exactly. It is a *layering* cut, which is the thing
+component-oriented design overrules: whether a class imports pikuri says
+nothing about what it is for. It also put `Web::SseListener` — whose entire
+output is HTML — on the service side, which is backwards. The seam survives as
+what it always was, a rule about types reaching the browser, not a folder.
+
+**Rejected: one `Service` namespace instead of `Agents` + `Conversations`.**
+`Service` names a layer, not a subject. The split is also real: nothing in
+`Agents` knows a conversation is a folder on disk, and nothing in
+`Conversations` touches a transport.
+
+**Rejected: folding `Util` into `Web`.** Two members is thin, and the risk is
+that it becomes the drawer for whatever has no home. It earns its place by
+having an admission test sharp enough to fail things — no block kinds, no
+conversation, no route, no `Pikuri::` type, the same test `public/js/dom.js`
+passes. `Web::ToolLine` and `Web::SlashCommand` are the classes that look small
+enough to belong there and do not.
+
+**Singular `Agent` was never on the table.** It would shadow `Pikuri::Agent`
+for every file in the tree.
+
+**Consequences.**
+
+- **`Web` is not a thread boundary.** `Web::SseListener`, `Web::Transcript` and
+  `Web::Broadcaster` are all touched from the turn worker under `BigAppLock`.
+  Reading the namespace as "request thread only" is how an `assert!` guard gets
+  dropped as redundant, so each namespace module states its own contract.
+- **`Web::App`'s `:root` is three levels up**, not two. Sinatra derives `views/`
+  and `public/` from it, and the move silently repointed it at `lib/`.
+- **`Conversations::Store::Conversation`** stays nested where it was rather than
+  being promoted; `Conversations::Conversation` would stutter for nothing.
+
+---
+
 ## D_titler_connection — `[titler]` names an `[[llm]]`, and no `[titler]` means no titling
 
 **Status:** Accepted, shipped. `Config#titler_llm` resolves `[titler] llm` against the
@@ -95,7 +168,7 @@ the table is top-level.
 **Rejected: a flat `titler = "name"`.** A table gives a later word cap or
 explicit off-switch a home without a second top-level key.
 
-**Rejected: excluding the titler entry from `ModelCatalog`.** Its transport has
+**Rejected: excluding the titler entry from `Agents::ModelCatalog`.** Its transport has
 to come from somewhere, and picking it for a conversation is a legitimate thing
 to want — a conversation that does not think. The cost of leaving it visible is
 `D_shadowed_identity_pair`.
@@ -103,8 +176,8 @@ to want — a conversation that does not think. The cost of leaving it visible i
 ## D_llm_params_passthrough — An `[[llm]]`'s `params` table goes to the server verbatim, through a Faraday adapter
 
 **Status:** Accepted, shipped, and the adapter half is explicitly temporary.
-`Config::Llm#params` is any TOML table; `ModelCatalog.from_llms` turns a
-non-empty one into a `RequestParams` adapter on that connection's transport.
+`Config::Llm#params` is any TOML table; `Agents::ModelCatalog.from_llms` turns a
+non-empty one into a `Agents::RequestParams` adapter on that connection's transport.
 
 **Context.** Titling on the local 35B needs reasoning off, and that is not a
 detail: matched benchmark, same eight openers and the same agent, only the
@@ -189,7 +262,7 @@ for.
 
 ## D_shadowed_identity_pair — Two `[[llm]]`s on one `[model, server]` pair: the first declared wins
 
-**Status:** Accepted, shipped. `ModelCatalog#initialize` folds `@by_key` over
+**Status:** Accepted, shipped. `Agents::ModelCatalog#initialize` folds `@by_key` over
 `choices.reverse`, so `#resolve` and `#name_for` answer with the earliest entry;
 boot logs the shadowed names.
 
@@ -223,7 +296,7 @@ behaviour on config file ordering, which nothing states or checks.
 
 ## D_canary_severity — Reasoning tokens on a title are diagnostic only, and the level follows declared intent
 
-**Status:** Accepted, shipped. `Titler` reads `thinking_tokens` off
+**Status:** Accepted, shipped. `Agents::Titler` reads `thinking_tokens` off
 `Event::Tokens` and logs at most once per process.
 
 **Context.** The degradation mode of a thinking-off parameter is *silently not
@@ -256,7 +329,7 @@ costs one spurious line in a config that set `params` for something else.
 
 ## D_lazy_retro_titling — A stored conversation is titled when it is opened, never by a sweep
 
-**Status:** Accepted, shipped. `AgentRunner#restore!` posts the titling job for
+**Status:** Accepted, shipped. `Agents::Runner#restore!` posts the titling job for
 a stored conversation still carrying its start stamp.
 
 **Context.** Titling only new conversations leaves every conversation from
@@ -267,7 +340,7 @@ load its history — which, done in bulk, means reading every history on disk.
 **Decision.** Title on open, off the `History` `#restore!` has already replayed.
 That makes the per-conversation cost exactly zero until someone opens it, needs
 no second disk read, and reaches precisely the conversations a person looks at.
-"Is this still stamp-titled" is `ConversationStore#stamp_titled?`, comparing
+"Is this still stamp-titled" is `Conversations::Store#stamp_titled?`, comparing
 against `stamp_title(created_at)`.
 
 **Rejected: a bulk sweep after Puma binds.** Priced, and affordable — 100
@@ -289,7 +362,7 @@ a person chose. Rename is not built, so the key would carry nothing today, and
 the stamp-shape test costs one line. **Revisit when rename lands:** the regex is
 not enough then, and existing conversations need the key backfilled.
 
-**Consequence — the opener is capped at `Titler::MAX_OPENER_CHARS`.** This path
+**Consequence — the opener is capped at `Agents::Titler::MAX_OPENER_CHARS`.** This path
 forced it: a conversation from months ago can open with a pasted stack trace or
 a whole file, where a title still comes out of the first sentence or two.
 Applies to new conversations too.
@@ -326,7 +399,7 @@ gets probed, so it always gets llama.cpp's own `total_slots`.
 
 **Decision.** Take the table, and let `max_concurrent_requests` carry the
 ceiling alone. A server naming none is left to the probe. `--turns`, its `< 1`
-check, and `ModelCatalog#servers` (whose only caller was the boot loop) all
+check, and `Agents::ModelCatalog#servers` (whose only caller was the boot loop) all
 delete.
 
 **Rejected: keeping `--turns` as an override on top of the file.** The
@@ -459,7 +532,7 @@ instrumenter's.
   arrives with its own `Mutex`, from a library whose thread-safety is its
   own contract, and it is touched only from the turn worker inside
   `run_loop`, never from a {BigAppLock} task. The rule is satisfied the way
-  {Broadcaster} satisfies it, not waived.
+  {Web::Broadcaster} satisfies it, not waived.
 - **The `faraday_adapter` seam stops being load-bearing in production**,
   back to `Pikuri::Testing`'s use of it alone.
 - `:queued` still means two things, both honest: no executor thread, or no
@@ -623,7 +696,7 @@ the server at all, which is the one thing the number was for.
 
 ## D_both_forms_in_the_block — A tool block carries the short line and the raw one both, and CSS picks
 
-**Status:** Accepted, shipped. {ToolLine} renders both,
+**Status:** Accepted, shipped. {Web::ToolLine} renders both,
 `:root[data-tools]` shows one, `/toollines` writes the cookie.
 
 **Context.** pikuri-tui shortens tool lines to
@@ -634,7 +707,7 @@ keypress away — its `D_verbose_toggle` for the reachability argument,
 block is text that has to be recomputed. This shell rendered the verbose
 form only.
 
-**Decision.** {ToolLine} renders **both** forms into every tool block —
+**Decision.** {Web::ToolLine} renders **both** forms into every tool block —
 two spans, `tool-short` and `tool-verbose` — and
 `:root[data-tools='short'|'verbose']` shows one. The flip is one
 attribute write plus a cookie: nothing re-renders, the server holds no
@@ -689,7 +762,7 @@ toggles there is a settings bar, and the drawer is about conversations.
   (`../pikuri/DECISIONS.md` `D_tool_summary_lines`), which retired both
   guesses and the divergence from pikuri-tui the first version of this entry
   argued for — a calculator's `4` reads as `4` because pikuri's calculator
-  says so, not because {ToolLine} measures its length. What is left here is
+  says so, not because {Web::ToolLine} measures its length. What is left here is
   what only a renderer can do: defang the strings, and cap them to a width
   it alone knows.
 - **Both forms sanitize, with no `inspect` carve-out** — the TUI exempts
@@ -697,7 +770,7 @@ toggles there is a settings bar, and the drawer is about conversations.
   matters, which is true of the terminal threat only: measured against
   Ruby, `inspect` passes bidi overrides, zero-width characters and
   homoglyphs straight through, and escapes exactly the `ESC` that
-  HTML-escaping already renders inert. {ToolLine}'s header holds the
+  HTML-escaping already renders inert. {Web::ToolLine}'s header holds the
   order the two passes run in.
 - **`transcript.js` is untouched**, unlike Part 1 — no walk, no override,
   no mount-time resolve, because both forms are already in the DOM. The
@@ -705,20 +778,20 @@ toggles there is a settings bar, and the drawer is about conversations.
 - The third presentational cookie, and the **second** of `D_theme_cookie`'s
   config-backed shape. One wrinkle `thinking` did not have: `show_thinking`
   is a boolean and cannot be nonsense, while `Config.validate_ui!` checks
-  `tool_lines`'s shape and not its vocabulary, so `App.default_tool_lines`
+  `tool_lines`'s shape and not its vocabulary, so `Web::App.default_tool_lines`
   is the only thing between a typo in the shared file and a page showing
   both forms at once.
-- The command is `/toollines`, not `/tools`; {SlashCommand}`::CATALOG`
+- The command is `/toollines`, not `/tools`; {Web::SlashCommand}`::CATALOG`
   holds why.
 - **What the event's arrival did *not* retire is the `Error:` check.** The
   CamelCase helper and the first-value pick went the day pikuri composed
   those strings, but failure is still read off `content`'s prefix rather
-  than off `summary` — {ToolLine}`.for_result`'s rdoc holds why — and so is
+  than off `summary` — {Web::ToolLine}`.for_result`'s rdoc holds why — and so is
   the cap, because a width is the renderer's alone to know.
 
 ## D_details_per_block — Reasoning gets a disclosure per block; the config sets its default, not its visibility
 
-**Status:** Accepted, shipped. `SseListener#disclose` wraps a
+**Status:** Accepted, shipped. `Web::SseListener#disclose` wraps a
 `:thinking` block, `style.css` styles the row, `transcript.js` resolves
 it, `/thinking` picks the default.
 
@@ -757,7 +830,7 @@ server state, which is per-browser by decision — two tabs with different
 preferences would fight over one transcript. The TUI needed that register
 because a hidden region's text had to be *recomputed*; every block here is
 already complete HTML in the DOM, so none of the machinery has an
-equivalent and {Transcript} gained nothing.
+equivalent and {Web::Transcript} gained nothing.
 
 **Rejected: dropping `ThinkingDelta` while collapsed**, the TUI's
 pikuri-tui's `D_drop_deltas_while_hidden`. The server cannot drop a delta for one tab
@@ -945,8 +1018,8 @@ version constraints plus `bundle update pikuri-core pikuri-pdf`.
 
 ## D_subscribe_then_snapshot — `GET /events` subscribes first and opens with the transcript, so the page-render-to-connect window loses nothing
 
-**Status:** Accepted, shipped in `App#GET /events` + `App#catch_up_frames`
-and `Broadcaster#frame`.
+**Status:** Accepted, shipped in `Web::App#GET /events` + `Web::App#catch_up_frames`
+and `Web::Broadcaster#frame`.
 
 **Context.** Loading a conversation takes two requests: `GET /c/:id`
 renders the transcript at T1, and the browser opens `GET /events` at T2 —
@@ -965,11 +1038,11 @@ re-sends the whole accumulated source under one id
 opened the page to watch.
 
 **Decision. Subscribe first, snapshot second, and let the duplicate
-absorb the race.** The route registers with the {Broadcaster}, *then*
-reads {Transcript}`#to_a`, then writes that snapshot onto the connection
+absorb the race.** The route registers with the {Web::Broadcaster}, *then*
+reads {Web::Transcript}`#to_a`, then writes that snapshot onto the connection
 ahead of the drain loop. A block landing between the two is now delivered
 **twice** rather than not at all, and a repeat costs nothing: the browser
-upserts blocks by id, and {Transcript#clear} deliberately keeps its id
+upserts blocks by id, and {Web::Transcript#clear} deliberately keeps its id
 counter so an id is never reused. A miss is permanent; a repeat is a
 no-op. The seam closes on *ordering*, with no lock and no new mechanism.
 
@@ -979,8 +1052,8 @@ otherwise keep showing blocks the server has forgotten.
 
 **Rejected: a lock shared by the writer and the subscriber**, so that
 append-and-broadcast and snapshot-and-subscribe are each atomic. It works
-and it is what the seam looks like it needs — but it puts {Transcript}
-and {Broadcaster} behind one lock, which `D_no_event_queue` keeps the
+and it is what the seam looks like it needs — but it puts {Web::Transcript}
+and {Web::Broadcaster} behind one lock, which `D_no_event_queue` keeps the
 broadcaster out of on purpose, and it buys nothing that ordering does not.
 
 **Rejected: sequence numbers plus a replay buffer**, with SSE `id:` fields
@@ -1005,7 +1078,7 @@ lands right back in this same window.
   the refinement, if it ever matters, is for the page to pass its last
   block id and the route to send only the tail — which stays correct under
   the same ordering argument.
-- **{Broadcaster#frame} is public**, because the route writes catch-up
+- **{Web::Broadcaster#frame} is public**, because the route writes catch-up
   straight onto its own connection and one place still has to own the wire
   format.
 - **A conversation nobody has resident gets no catch-up** — there is no
@@ -1107,7 +1180,7 @@ the other consumer. Revisit if two features ever want the same short name.
 
 **Status:** Accepted, shipped in `public/images/` (`kuri.svg`,
 `favicon.svg`, the five PNGs), `public/manifest.webmanifest`,
-`views/index.erb` and `App`'s `mime_type :webmanifest`. Generated by
+`views/index.erb` and `Web::App`'s `mime_type :webmanifest`. Generated by
 `bin/regen-icons`.
 
 **Context.** *Who* the icon is was decided upstream — Kuri the pika in
@@ -1180,7 +1253,7 @@ callbacks, tools and controls, and `apply_transport!` is *private*, so the
 kwarg is the only way in. That is deliberate upstream: the chat is
 single-thread-confined, and a background thread mutating the connection
 mid-completion would tear an in-flight stream. The library cannot know
-nothing is in flight; `AgentRunner`'s state machine can. The pending-slot
+nothing is in flight; `Agents::Runner`'s state machine can. The pending-slot
 shape was therefore **forced, not chosen** — the open question was only where
 the *selection* lives and when it is written.
 
@@ -1189,7 +1262,7 @@ the *selection* lives and when it is written.
 *Identity is the `[model, api_base]` pair* — never a name (one config edit
 from changing, and not recoverable from a transport) and never a model id
 alone (two `[[llm]]` entries may run one model on two servers). This is
-pikuri-tui's `Shared::Model::Choice.key` ported into `ModelCatalog`, including
+pikuri-tui's `Shared::Model::Choice.key` ported into `Agents::ModelCatalog`, including
 its fall back to the raw model id for a transport from outside the catalog.
 
 *It lives in `meta.json`, written at turn end from the agent's own transport.*
@@ -1231,10 +1304,10 @@ pending slot set on every reopen stops meaning "picked and not yet landed",
 which is the meaning the status bar's arrow and the dialog's marker need.
 
 **Rejected: a transcript block for a switch.** It would survive a reopen —
-`History::Message#model_id` lets `HistoryReplay` derive a switch boundary —
+`History::Message#model_id` lets `Conversations::HistoryReplay` derive a switch boundary —
 but that means two producers of one block, and two derivations disagree
 eventually, so a reload would silently rewrite the transcript. The status bar
-carries the model instead, leaving `SseListener`'s `ModelSwitched` arm silent.
+carries the model instead, leaving `Web::SseListener`'s `ModelSwitched` arm silent.
 
 **Rejected: a synthetic bare turn to apply a pick early** — costs a round-trip
 and raises `EmptyTurnError` against a prompt-only conversation on a
@@ -1251,9 +1324,9 @@ a slow first token.
 
 - **Three readers, and they must not collapse into one.**
   `Conversation#model_at_mint` (what disk said at mint; the factory is its only
-  reader), `AgentRunner#model` (intent — `pending || current`, what
+  reader), `Agents::Runner#model` (intent — `pending || current`, what
   `registry.create(from:)` inherits), and `@agent.transport` (reality, read
-  only inside `AgentRunner`). The `_at_mint` suffix and the *absence* of a
+  only inside `Agents::Runner`). The `_at_mint` suffix and the *absence* of a
   runner-level reader for reality are what keep a future convenience accessor
   from merging them.
 - **The mint-time pair is stale against disk by design** — `#save` moves
@@ -1290,7 +1363,7 @@ a slow first token.
 
 **Status:** Accepted, shipped with `/new`, `/theme` and `/trifecta`;
 `/model` joined them (`D_per_conversation_model`) and is the first
-command gated on the config — `SlashCommand.catalog(connections:)` drops
+command gated on the config — `Web::SlashCommand.catalog(connections:)` drops
 it when there is nothing to pick between. The palette's mechanics live in
 `public/js/composer.js` (`D_feature_owns_its_file`).
 
@@ -1303,7 +1376,7 @@ already is.
 
 **Decision, in four parts.**
 
-*The catalog is server-rendered; the dispatch is not.* `SlashCommand::CATALOG`
+*The catalog is server-rendered; the dispatch is not.* `Web::SlashCommand::CATALOG`
 renders whole into `#slash-menu` and the browser filters it by toggling
 `hidden` per row. A command *runs* in the browser because most of them are
 browser-side anyway (a navigation, a cookie, a dialog); `/model`, the one that
@@ -1322,12 +1395,12 @@ gated out of the catalog is simply never rendered a row to reach it by — which
 is how `/model` stays gated in the one place that decides it.
 
 *A command never writes to the transcript.* This is where the TUI's design
-stops porting: its `SlashCommand#callback` returns a String echoed into the
+stops porting: its `Web::SlashCommand#callback` returns a String echoed into the
 conversation pane. Here the client-side form of that is conversation state the
 server does not hold (`D_server_authoritative_transcript`), and the
 server-side form is a block absent from `history.json` that
 `D_replay_from_history`'s replay would silently drop — the line would show now
-and be gone after a reload. So `SlashCommand` carries no callback and no
+and be gone after a reload. So `Web::SlashCommand` carries no callback and no
 outcome String; each command's own visible effect is the feedback.
 
 *Every dialog is a real `<dialog>`, opened through one helper.* `showModal()`
@@ -1369,8 +1442,9 @@ command, so `/usr/share/foo is broken` sends normally.
   dialog names the fix.
 - **`/trifecta` costs no route.** The report is static for the life of the
   process — one factory, one tool set — so it ships pre-rendered in a
-  `<template>`. `App` must not touch a `Pikuri::Trifecta::Report`
-  (`D_pikuri_free_core`), hence `TrifectaView` and `AgentRunner#trifecta_html`.
+  `<template>`, rendered by `Web::TrifectaView` from the unrendered report
+  `Agents::Runner#trifecta` hands over. The rendering sits on the `Web` side
+  because `Agents` may not name anything under `Web` (`D_namespaces`).
 - **The theme picker's current marker is computed on open**, never
   server-rendered: the theme changes in the page after it was served.
 - **Picking a row is a `pointerup`, not a `click`.** The row's `pointerdown`
@@ -1427,7 +1501,7 @@ and handed a *desktop* target the phone fallback.
 one of which is close to sufficient:
 
 - *The block-kind contract triples.* `AGENTS.md` **Conventions** already
-  says a new block kind means touching {SseListener}, `index.erb` and
+  says a new block kind means touching {Web::SseListener}, `index.erb` and
   `style.css`. A second shell makes that four files forever, to buy a
   divergence that is one media query.
 - *The scripts would have to branch.* They reach a dozen elements by id.
@@ -1505,17 +1579,17 @@ with `showModal()` for that is worse than the ten lines it saves.
   `env(safe-area-inset-*)`, and whether an always-visible per-row ✕
   mis-taps in practice (see `D_delete_no_undo`).
 
-## D_no_store_lock — `ConversationStore` gets no lock; the folder is consistent by construction, and the store owns the whole write path
+## D_no_store_lock — `Conversations::Store` gets no lock; the folder is consistent by construction, and the store owns the whole write path
 
 **Status:** Accepted. Nothing to ship *as a lock*: this is a decision
 not to build one. What did ship in the same pass is the thing that made
-the decision honest — {ConversationStore#save} taking the history and
+the decision honest — {Conversations::Store#save} taking the history and
 owning the whole commit — plus the rdoc that stops overclaiming. The
 idea file that argued for the lock across three rewrites is graduated
 into this entry.
 
 **Context.** The store's consistency rested on a *discipline* nobody
-stated: writes went through {AgentRunner}'s mutex, reads ran from
+stated: writes went through {Agents::Runner}'s mutex, reads ran from
 Sinatra request threads, and the class's rdoc said "Thread-safe:
 stateless past its constructor arguments" — a true claim about the
 *object*, sitting exactly where a reader looks for a claim about the
@@ -1528,14 +1602,14 @@ elsewhere:
   writers because a conversation admits one turn at a time. The audit is
   in `D_serial_turn_executor`, and it is why `--turns > 1` shipped
   without a lock.
-- **Reads are already serialized.** Nothing in {App} holds a store;
-  every call goes through {ConversationRegistry}, whose monitor wraps
+- **Reads are already serialized.** Nothing in {Web::App} holds a store;
+  every call goes through {Conversations::Registry}, whose monitor wraps
   `#list`, `#find`, `#create` and `#delete`.
 - **The listing already tolerates concurrency.** `#row` takes a read's
   own `ENOENT` as the answer instead of checking `file?` first, so a scan
   concurrent with a save or a delete is correct with no coordination.
 
-**Decision.** No lock in `ConversationStore`, and no plan for one. What
+**Decision.** No lock in `Conversations::Store`, and no plan for one. What
 holds the folder together is named in the class's `== Thread-safety`
 section: the partition gives one writer per directory, both files are
 written temp-file-and-rename, `#row` absorbs the races a listing can
@@ -1544,7 +1618,7 @@ see, and cross-call sequences are explicitly *not* atomic — `#find` then
 inside it.
 
 **The store owns the whole write path, history included.** Previously
-{AgentRunner#persist} wrote both halves itself — `history.save(dir)`
+{Agents::Runner#persist} wrote both halves itself — `history.save(dir)`
 then `store.write_meta` — which left the store claiming a folder it
 wrote half of. `#save` now creates the directory 0700, calls
 `History#save`, then writes `meta.json` as the commit point, and
@@ -1606,7 +1680,7 @@ Four reasons, past the fact that it fixes nothing:
   cannot be sold as one (`D_no_multi_process_lock`).
 - The one real bug this re-audit turned up was not a store problem at
   all: a request thread holding a runner across a delete could resurrect
-  the conversation, fixed as runner state ({AgentRunner#discard!}) and
+  the conversation, fixed as runner state ({Agents::Runner#discard!}) and
   written up in `D_delete_no_undo`'s consequences. A store lock would not
   have caught it — a lock per method is not a transaction.
 
@@ -1643,7 +1717,7 @@ by a configuration with no reason to exist does not earn a mechanism.
 locked row read-only in the sidebar. It is the *right* shape if the
 collision were worth defending against — a dimmed row with a reason is the
 affordance the busy-refusal already uses — but it puts per-conversation
-lock state in `ConversationStore`, and file locks are the kind of state
+lock state in `Conversations::Store`, and file locks are the kind of state
 that turns a hard kill into "why can't I open my own conversation".
 Permanent cost, hypothetical benefit.
 
@@ -1662,9 +1736,9 @@ default than a warning in the README.
 - The resurrection under `D_delete_no_undo` is now decided rather than
   deferred: it stays, and that entry's pointer resolves here. Its
   *in-process* twin — a request thread holding a runner across a delete —
-  was a separate bug with a separate fix ({AgentRunner#discard!}) and no
+  was a separate bug with a separate fix ({Agents::Runner#discard!}) and no
   bearing on this entry: one process cannot claim another's runner.
-- `ConversationStore` never grows cross-process consistency. Its atomic
+- `Conversations::Store` never grows cross-process consistency. Its atomic
   rename remains all a concurrent reader outside this process gets, and
   the in-process locking question is independent of this entry — settled
   separately in `D_no_store_lock`, and an in-process lock never bought
@@ -1689,7 +1763,7 @@ since been folded into that domain.
 **Context.** The standing plan was to give all mutable state a single
 owner thread, Tuile-style: every other thread posts a command, no locks,
 because one thread touches the state. The complaint driving it was real —
-`Transcript`, `Broadcaster` and `AgentRunner` each held their own lock, and
+`Web::Transcript`, `Web::Broadcaster` and `Agents::Runner` each held their own lock, and
 cross-object consistency rested on a discipline nothing enforced. Three
 options were on the table: **(a)** one lock per object, today's shape;
 **(b)** one coarse lock over the whole state graph, Vaadin minus the
@@ -1697,7 +1771,7 @@ session axis; **(c)** one owner thread plus a queue, Tuile.
 
 `D_conversation_owns_agent` shipped before the question came back, and
 answered most of it: every exhibit that motivated (b) or (c) was audited
-and found already fixed by the partition — the unguarded `SseListener`
+and found already fixed by the partition — the unguarded `Web::SseListener`
 state (one listener per runner now), the `conversation_rows` tear (one
 monitor), two of the three refusal routes (gone), and the claim that an
 owner thread was the precondition for concurrent turns (false, see
@@ -1708,7 +1782,7 @@ owner thread was the precondition for concurrent turns (false, see
 **No owner thread, and no coarse lock either.** The partition does the
 work: one agent, one history, one transcript and one listener per
 conversation, and a conversation admits one turn at a time
-({AgentRunner#submit} injects rather than starting a second). Per-object
+({Agents::Runner#submit} injects rather than starting a second). Per-object
 locks survive where they guard genuinely shared things — the registry's
 monitor over the resident map, the broadcaster's over the subscriber list
 — and each now guards one small thing with a stated owner, which is not
@@ -1729,7 +1803,7 @@ specific and has a famous precedent. Vaadin partitions its lock per
 session because a session there owns a whole component tree; here a
 session owns nothing, so a per-session lock would guard the empty set
 while adding a session concept this app has deliberately refused. The
-`Broadcaster` stays outside whatever is built, in either shape: it is a
+`Web::Broadcaster` stays outside whatever is built, in either shape: it is a
 sink, its lock guards the subscriber list that request threads and the
 `:state, :stop` hook touch, and folding it in would put a new tab's
 subscribe behind a running turn and the shutdown path behind a wedged one
@@ -1772,7 +1846,7 @@ because it is what a reader who knows Vaadin reaches for first.
 
 **Amended: the case that reopens this is *reproducibility*, and a
 defect-shaped trigger could never have caught it.** Found by inspection:
-{AgentRunner#claim_running} moved a turn from `:queued` to `:running`
+{Agents::Runner#claim_running} moved a turn from `:queued` to `:running`
 without broadcasting, so a turn that really waited for an executor slot
 left the status bar reading "waiting for a free slot" until it ended.
 It survived because `#submit` broadcasts *after* posting the job and the
@@ -1802,7 +1876,7 @@ is not — the action bodies are a small enumerable set — but it is still
 discipline nothing enforces, and the realistic breach is not a blocking
 call, which review catches. It is head-of-line stalling behind a packet
 that merely runs *long*, and two are already in hand: kramdown, which
-`D_rerender_and_replace` runs at 15 fps, and {ConversationStore#save} at
+`D_rerender_and_replace` runs at 15 fps, and {Conversations::Store#save} at
 turn end. Both sit on the agent thread today, where a stall costs one
 conversation; behind an owner they cost every conversation at once. But
 the cost is blast radius only, *not* diagnosis — and that asymmetry cuts
@@ -1817,11 +1891,11 @@ tools. The audit that followed this entry found five and closed three
 without a global mechanism: one by putting the broadcast where the
 transition is, one by *ordering* (`D_subscribe_then_snapshot` — a seam
 whose halves are two HTTP requests, which no server-side serialization
-can reach), one with the monitor {ConversationRegistry} already held.
-{Transcript} had already solved a fourth the other way, with an immutable
+can reach), one with the monitor {Conversations::Registry} already held.
+{Web::Transcript} had already solved a fourth the other way, with an immutable
 `Block` snapshot no reader can have rewritten underneath it. What is left
-is {AgentRunner#status_data}: composed off unlocked state and handed to a
-{Broadcaster} that snapshots subscribers under its lock and pushes
+is {Agents::Runner#status_data}: composed off unlocked state and handed to a
+{Web::Broadcaster} that snapshots subscribers under its lock and pushes
 *outside* it, so two threads can compose in one order and push in the
 other, leaving the browser holding the older frame. One remaining site is
 a site to fix, not an architecture — the audit's tally has since been
@@ -1843,9 +1917,9 @@ made** and would otherwise be rediscovered by hitting them:
   what changes is direction — it posts events instead of calling the
   listener stack inline.
 - **Per-connection SSE queues stay.** One slow client must not stall every
-  tab; owner → queue → parked writer is already {Broadcaster}'s shape.
+  tab; owner → queue → parked writer is already {Web::Broadcaster}'s shape.
 - **Every reply path gets a bounded wait and a 503,** or escapes replying
-  altogether by publishing an immutable snapshot — {Transcript}'s trick.
+  altogether by publishing an immutable snapshot — {Web::Transcript}'s trick.
 - **Backpressure is asymmetric:** blocking a request thread is fine,
   blocking the agent thread stalls a turn, and blocking `:state, :stop`
   recreates the bug `D_shutdown_on_state_stop` exists to prevent.
@@ -1860,13 +1934,13 @@ made** and would otherwise be rediscovered by hitting them:
   one cannot work here** — this architecture is good at *hiding* the
   defects that argue against it, so "wait for a live one" waits forever.
   The trigger was **a second site needing atomicity across two objects**,
-  and it fired on the second: {AgentRunner#claim_running}, a state change
-  and its notification, and {AgentRunner#status_data}, a read from one
+  and it fired on the second: {Agents::Runner#claim_running}, a state change
+  and its notification, and {Agents::Runner#status_data}, a read from one
   object and a publish to another. Both found by reading, neither by a
   report. The state-volume triggers never got the chance — more server
   state than the transcript and the resident runners, or a second writer
   to one conversation. Raising `--turns` was never one of them.
-- **The snapshot-read design was taken, minus the queue.** {Transcript}'s
+- **The snapshot-read design was taken, minus the queue.** {Web::Transcript}'s
   `Block` is a `Data`, so `#update` replaces rather than mutates and a
   caller rendering a snapshot cannot have a block rewritten underneath it.
   That was the one piece of the idea that stood on its own.
@@ -1880,7 +1954,7 @@ defects above are the evidence, and both were found by reading the code —
 which is the point, because this architecture cannot *report* them.
 
 **Scoped, because "we need ACID" over-buys.** D is already had:
-{ConversationStore} commits by temp-file-and-rename with `meta.json` as
+{Conversations::Store} commits by temp-file-and-rename with `meta.json` as
 the commit point (`D_no_store_lock`), which is durability enough for a
 single-user shell. C is domain invariants, and the partition holds most of
 them. I is largely had for the same reason — one writer per conversation
@@ -1912,10 +1986,10 @@ language; we would have to get it from review.
 
 ## D_conversation_owns_agent — A conversation owns its agent; a tab owns which conversation it views
 
-**Status:** Accepted, shipped. {ConversationRegistry} holds one
-{AgentRunner} per conversation opened — its own `Agent`, `Interloper`,
-`Cancellable`, `TokenLog`, {Transcript} and {SseListener} — and
-{Broadcaster} addresses frames per conversation.
+**Status:** Accepted, shipped. {Conversations::Registry} holds one
+{Agents::Runner} per conversation opened — its own `Agent`, `Interloper`,
+`Cancellable`, `TokenLog`, {Web::Transcript} and {Web::SseListener} — and
+{Web::Broadcaster} addresses frames per conversation.
 
 **Context.** Everything before this had *one* agent and one transcript, so
 "which conversation is live" was server state and every tab followed it
@@ -1941,7 +2015,7 @@ falls out is worth naming, because it is most of the value:
 throwaway replay.** Cheaper in memory, and it was what shipped one commit
 earlier. Dropped because a tab reading a not-yet-resident conversation
 would then apply frames whose block ids agree with its snapshot only
-because both replay the same events into a fresh {Transcript} — correct by
+because both replay the same events into a fresh {Web::Transcript} — correct by
 an argument spanning two classes, which is the kind of thing this codebase
 keeps trying to delete. Minting on view costs one agent per conversation
 *opened in a session*, which for a single user is nothing.
@@ -1958,16 +2032,16 @@ feature, and a view that follows you between devices is the same
 behaviour wearing a friendlier name. So this is not a cost to be paid
 back later — do not reintroduce global selection state to buy it. If some
 future ask genuinely needs a landing spot better than "the newest
-conversation" ({ConversationRegistry#default}), it is a per-browser
+conversation" ({Conversations::Registry#default}), it is a per-browser
 `last_viewed` cookie on the `D_theme_cookie` precedent, which leaves other
 tabs alone; server-side last-viewed is this decision reversed.
 
 **Consequences.**
 
-- The registry and {ConversationStore} are now the only genuinely shared
+- The registry and {Conversations::Store} are now the only genuinely shared
   mutable state. The registry has a `Monitor`; the folder needs no lock of
   its own, for the reasons in `D_no_store_lock`.
-- `HistoryReplay.snapshot` became dead code and was removed.
+- `Conversations::HistoryReplay.snapshot` became dead code and was removed.
 - Rendering a detached conversation is not optimized: the
   accumulate-don't-render idea only pays at `--turns` > 1, which
   `D_serial_turn_executor` now allows but does not default to. If it is
@@ -1978,7 +2052,7 @@ tabs alone; server-side last-viewed is this decision reversed.
   *Drop the transcript and replay on attach* is cheapest while detached
   but shows a hole where the streaming answer is, because `history.json`
   holds no in-flight partial message. **Accumulate, don't render** wins
-  by keeping the {StreamingMessage} appends and the block structure while
+  by keeping the {Web::StreamingMessage} appends and the block structure while
   skipping the kramdown pass and the broadcast, then rendering once on
   attach — which works because `D_rerender_and_replace` already makes the
   HTML a pure function of the accumulated source, so it defers as easily
@@ -1991,7 +2065,7 @@ tabs alone; server-side last-viewed is this decision reversed.
 
 **Status:** **Superseded in part by `D_upstream_request_throttle`**, then
 amended to drop sizing altogether. The executor itself stands: one shared
-pool injected into every {AgentRunner}, still the admission gate that
+pool injected into every {Agents::Runner}, still the admission gate that
 reports `:queued`. Two things below no longer describe the code.
 
 *The pool is unbounded* — `Concurrent::CachedThreadPool`, not
@@ -2049,7 +2123,7 @@ conversations folder, and pikuri's shared tool constants. Both were audited
 when `--turns` was added, and neither holds.
 
 - **The folder.** Two turn-ends write two *disjoint subdirectories*.
-  {ConversationStore#save} touches only that one conversation's directory —
+  {Conversations::Store#save} touches only that one conversation's directory —
   `history.json` and `meta.json` both, each through a sibling temp file and
   a rename inside it; the shared root is created in the constructor and
   otherwise only enumerated.
@@ -2068,7 +2142,7 @@ when `--turns` was added, and neither holds.
 
 Single-writer safety was never located in the pool size. It comes from the
 *partition*: per-conversation agents (`D_conversation_owns_agent`) plus a
-conversation admitting one turn at a time ({AgentRunner#submit} injects
+conversation admitting one turn at a time ({Agents::Runner#submit} injects
 rather than starting a second). Two turns are two agents, two histories,
 two transcripts, two listeners and two disjoint folders. That property is
 independent of how many turns run at once, which is why `--turns` needed no
@@ -2120,10 +2194,10 @@ owner thread must never block. See `D_no_event_queue`.
 
 ## D_delete_no_undo — Deleting a conversation is irreversible, and the live one rolls onto a fresh conversation
 
-**Status:** Accepted, shipped as `ConversationStore#delete`,
-`AgentRunner#delete_conversation` and `POST /conversations/:id/delete`.
+**Status:** Accepted, shipped as `Conversations::Store#delete`,
+`Agents::Runner#delete_conversation` and `POST /conversations/:id/delete`.
 
-**Context.** `ConversationStore` grew every verb but this one, so
+**Context.** `Conversations::Store` grew every verb but this one, so
 conversations accumulated until the user ran `rm -r`, which is what
 `README.md` told them to do. Three things needed settling before a ✕
 could go on a sidebar row: what confirmation looks like, what happens
@@ -2215,8 +2289,8 @@ deleting.
   recreated the directory, and the conversation the user confirmed away
   came back in the sidebar one turn later, openable, holding its old
   history plus the new turn. `busy?` could not close it: once the runner
-  is out of {ConversationRegistry}'s map, the registry can never see it
-  busy again. The fix is {AgentRunner#discard!} — one atomic
+  is out of {Conversations::Registry}'s map, the registry can never see it
+  busy again. The fix is {Agents::Runner#discard!} — one atomic
   busy-check-and-claim on the *runner's* mutex, called inside the
   registry's monitor, with the runner dropped only if it succeeds. Either
   `#submit` claims the turn first and the delete is refused, or the
@@ -2226,13 +2300,13 @@ deleting.
   resurrection two bullets up, and unlike that one it was reachable by a
   single user with two tabs — which is why it is fixed rather than
   accepted.
-- **Amended: the resurrection had a second door, and {AgentRunner#discard!}
+- **Amended: the resurrection had a second door, and {Agents::Runner#discard!}
   could not reach it.** `discard!` retires the runner that is *already*
   resident when the delete lands. A caller that resolved the conversation a
   moment earlier and opened it *afterwards* minted a fresh runner instead —
   no runner existed for the delete to have retired — and that one came back
   in the sidebar as an unsaved resident, then wrote its folder again at the
-  next turn end. Fixed by {ConversationRegistry#open_id}: resolve and open
+  next turn end. Fixed by {Conversations::Registry#open_id}: resolve and open
   are one step under the monitor `#delete` already holds, so either the
   delete finds a runner to refuse or retire, or the open finds nothing to
   resolve. `#open(conversation)` itself is unguarded still, and is now only
@@ -2298,18 +2372,18 @@ unanswered, and in practice it means testing on whatever is open.
 
 ## D_replay_from_history — Store only pikuri's history; re-derive the transcript by replaying synthesized events
 
-**Status:** Accepted, shipped as {HistoryReplay}.
+**Status:** Accepted, shipped as {Conversations::HistoryReplay}.
 
 **Context.** A saved conversation has two layers: the *model* half
 (messages, tool calls, results, thinking, attachments — `history.json`,
 written by `Pikuri::Agent::History#save`, whose contents we do not get a
-vote on) and the *render* half ({Transcript} blocks: kinds, ids, HTML).
+vote on) and the *render* half ({Web::Transcript} blocks: kinds, ids, HTML).
 Loading a conversation back means producing the second from something on
 disk.
 
 **Decision.** Store nothing beyond `history.json` and our `meta.json`,
 and rebuild the blocks by turning each message back into the
-`Agent::Event`s that produced it, fed through the real {SseListener}. The
+`Agent::Event`s that produced it, fed through the real {Web::SseListener}. The
 transcript is *rebuilt, not swapped*: `Agent#load_history!` emits
 `Event::Reset`, whose existing arm empties the transcript and every open
 tab, and the replay refills it — so there is still exactly one
@@ -2317,14 +2391,14 @@ transcript, one renderer, and one event→kind mapping.
 
 **Rejected: store the rendered blocks** (`blocks.json` beside
 `history.json`). Exact reload, zero replay logic — and HTML strings on
-disk, so a {MarkdownRenderer} or `style.css` fix never reaches an old
+disk, so a {Util::MarkdownRenderer} or `style.css` fix never reaches an old
 conversation, plus two representations of one conversation that can
 disagree. The longer these files live, the worse frozen HTML gets.
 
 **Rejected: append an event log** (`log.jsonl`, source text not HTML)
 and replay it. It keeps the today's-renderer property, but it prices
 persistence on pikuri's *event set*: an `Event ↔ Hash` codec must cover
-every variant {SseListener} matches on and stay in step as pikuri adds
+every variant {Web::SseListener} matches on and stay in step as pikuri adds
 more — and pikuri adds them steadily (`Transient` and `HistoryLoaded`
 both landed in one unreleased cycle). `History` is the opposite: written
 down, `version:`-stamped, additive-only by decision, unknown keys
@@ -2333,7 +2407,7 @@ forecloses adding `log.jsonl` later if the losses below start to matter.
 
 **Rejected: a `History → blocks` builder** instead of synthesized events.
 Same output, one more place block kinds are decided — the
-SseListener / `index.erb` / `style.css` trifecta would stop being one.
+Web::SseListener / `index.erb` / `style.css` trifecta would stop being one.
 
 **Consequences.** Only messages are stored, so what never became one is
 gone on reload: `! cancelled` and run-loop failure blocks, and the
@@ -2365,10 +2439,10 @@ threading rule (`D_worker_thread_agent_loop`) — a design that parks
 serving threads on purpose has to unpark them on purpose too.
 
 **Decision.** The boot script registers on Puma's `:state` event and
-calls `Broadcaster#close` for `:stop` and `:restart`. That event is fired
+calls `Web::Broadcaster#close` for `:stop` and `:restart`. That event is fired
 by the server thread on the line *before* `graceful_shutdown`, which
 makes it the last hook that runs on the near side of the wait.
-`Broadcaster#unsubscribe_all` became `#close`: the same sentinel push,
+`Web::Broadcaster#unsubscribe_all` became `#close`: the same sentinel push,
 idempotent, and it now also refuses *later* subscribers, so a connection
 handed out mid-shutdown cannot re-park a thread. `force_shutdown_after:
 5` stays as the backstop. Measured: two SSE clients attached, SIGINT and
@@ -2385,7 +2459,7 @@ it.
 
 **Consequences.** Nothing in the exit path may rely on `at_exit` or on
 Sinatra's own INT trap; a future cleanup that needs to run before the
-wait belongs in the same `:state` hook. `Broadcaster#close` must stay
+wait belongs in the same `:state` hook. `Web::Broadcaster#close` must stay
 idempotent and must keep refusing new subscribers — the invariant lives
 in its YARD header.
 
@@ -2434,7 +2508,7 @@ flips the attribute and rewrites the cookie in place.
 **Rejected: a `POST /theme` route and server-held theme state.** A round
 trip for a colour change means a reload, and a reload costs an SSE
 reconnect — paying a transcript resync for a presentational toggle. The
-cookie is deliberately *outside* {Transcript} and stays presentational,
+cookie is deliberately *outside* {Web::Transcript} and stays presentational,
 which is what lets "the transcript is server-authoritative" keep meaning
 what it says rather than becoming "…except theme".
 
@@ -2491,7 +2565,7 @@ you can think out loud at it. But pikuri ships `pikuri-os`,
 script carries its shape in its name. Should an OS or code shell grow
 later it lands as a **sibling script** with its own tool set and its own
 boot-time trifecta report, reusing the tool-set-agnostic plumbing
-({AgentRunner}, {SseListener}, {Transcript}, {App}) — never as extra
+({Agents::Runner}, {Web::SseListener}, {Web::Transcript}, {Web::App}) — never as extra
 tools bolted into this one.
 
 **Rejected: attaching the promise to the project, and growing this
@@ -2531,7 +2605,7 @@ future pikuri-tui `/resume` should read the same files.
 `bin/pikuri-web-chat` derives a single `state_root` local and composes
 every path from it, so the next thing worth persisting lands beside
 `conversations/` rather than in a second place. The root is created by
-{ConversationStore} at construction — the folder exists from boot, not
+{Conversations::Store} at construction — the folder exists from boot, not
 from whichever later event happens to save first.
 
 **Rejected: a shared `conversations/` for cross-shell resume.** The
@@ -2637,7 +2711,7 @@ So validation now splits by *who owns the growth*:
   shape-checked and passed through unresolved, the way `search.engines`
   already is. A copy of the form list here would reject a legal file the
   day a third form ships. `Config#tool_lines`'s *reader* falls back on a
-  form it does not recognize — the pattern `App` already uses for the
+  form it does not recognize — the pattern `Web::App` already uses for the
   `theme` cookie.
 
 **Consequences.** Top-level strictness is deliberately *kept*: a brand-new
@@ -2700,7 +2774,7 @@ keybinding and its own CSS to keep them apart.
 
 **Decision.** The transcript shows the LLM conversation only — assistant
 Markdown, reasoning, tool-call lines, tool observations, all driven by
-{SseListener}. Internal diagnostics stay on their default stderr sinks
+{Web::SseListener}. Internal diagnostics stay on their default stderr sinks
 and never reach the page. Never cross the streams.
 
 **Rejected: the in-page log panel** (as shipped). The operator running
@@ -2709,21 +2783,21 @@ capture object, an SSE frame and a DOM node to arrive back in front of
 the same person is machinery bought for nothing, and it is machinery that
 every new block kind and every theme change then has to carry.
 
-**Consequences.** {SseListener} renders *events*, never log lines, and
-`PikuriWeb.logger` must never be pointed at the {Broadcaster}. A future
+**Consequences.** {Web::SseListener} renders *events*, never log lines, and
+`PikuriWeb.logger` must never be pointed at the {Web::Broadcaster}. A future
 "show me what went wrong in the browser" want is a new decision, not a
 resurrection of `LogIO`.
 
 ## D_worker_thread_agent_loop — The agent loop owns a worker thread; thread-safety lives in the sinks
 
-**Status:** Accepted, shipped as {AgentRunner}.
+**Status:** Accepted, shipped as {Agents::Runner}.
 
 **Context.** The agent loop blocks on the LLM for the length of a turn.
 Sinatra hands each request a pooled Puma thread.
 
-**Decision.** {AgentRunner} owns one worker thread and the loop runs
+**Decision.** {Agents::Runner} owns one worker thread and the loop runs
 there, never on a request thread. The listener writes into thread-safe
-sinks ({Transcript}, {Broadcaster}); each `GET /events` connection parks
+sinks ({Web::Transcript}, {Web::Broadcaster}); each `GET /events` connection parks
 *its* serving thread draining one subscribed queue. There is no UI thread
 and no marshaling — thread-safety is a property of the sinks, not an
 obligation on their callers.
@@ -2745,7 +2819,7 @@ must be thread-safe on its own, because no caller synchronizes.
 
 ## D_interloper_mid_loop_input — Mid-loop input goes through `Control::Interloper`, input stays enabled while busy
 
-**Status:** Accepted, shipped in {AgentRunner}; the queued-count push was
+**Status:** Accepted, shipped in {Agents::Runner}; the queued-count push was
 completed with `Interloper#on_change`, and the end-of-turn restart closed
 the stranding window.
 
@@ -2753,7 +2827,7 @@ the stranding window.
 want sharper: the input field is right there while the agent is working,
 and a disabled field is a worse answer in a browser than in a terminal.
 
-**Decision.** {AgentRunner#submit} starts a turn when idle and **injects**
+**Decision.** {Agents::Runner#submit} starts a turn when idle and **injects**
 when busy; the injection renders through the normal listener path as
 `UserTurn(mid_loop: true)`, so nothing about the display is special-cased.
 The input stays enabled while busy and the status bar shows the queued
@@ -2771,11 +2845,11 @@ the queue.
 
 **Decision: a turn that ends holding a queue starts another one.** Only
 `run_loop` drains the Interloper, so an injection accepted in the window
-between the loop's last completion and {AgentRunner}'s state
+between the loop's last completion and {Agents::Runner}'s state
 reset — where `#submit` correctly still reads `:running` — had nothing
 left to deliver it. It sat until the user happened to send again, with
 the status bar promising "1 queued" over a conversation doing nothing.
-{AgentRunner#finish_turn} claims the restart in the same critical section
+{Agents::Runner#finish_turn} claims the restart in the same critical section
 that goes idle, so no `#submit` and no `#discard!` ever observes the gap,
 and the restart is a *bare* turn: `run_loop(user_message: nil)` drains
 before its first completion, which is the entire job.
@@ -2807,8 +2881,8 @@ documented caveat had to be corrected to match.
 ## D_pikuri_free_core — No `Pikuri::*` type reaches what the browser sees; server-side classes use them freely
 
 **Status:** Accepted, shipped as "three adapters plus the boot script";
-widened to include {HistoryReplay}; **restated as a boundary rather than
-a list of classes**, when {ConversationStore#save} took over writing
+widened to include {Conversations::HistoryReplay}; **restated as a boundary rather than
+a list of classes**, when {Conversations::Store#save} took over writing
 `history.json` and therefore took a `Pikuri::Agent::History`. The count
 was never the invariant — "translation happens at named boundaries, and
 nowhere else" is — and the list of names had begun to read as the rule.
@@ -2821,27 +2895,27 @@ prices an upgrade at a sweep of every file the browser's state flows
 through, while one in a disk utility prices it at that utility.
 
 **Decision.** The line is the browser, not a file count. **Nothing that
-reaches what the browser sees speaks a pikuri type:** {Transcript},
-{Broadcaster}, {StreamingMessage}, {MarkdownRenderer},
-{ConversationRegistry}, {Config} and {App} deal in ids, kinds, HTML
+reaches what the browser sees speaks a pikuri type:** {Web::Transcript},
+{Web::Broadcaster}, {Web::StreamingMessage}, {Util::MarkdownRenderer},
+{Conversations::Registry}, {Config} and {Web::App} deal in ids, kinds, HTML
 strings, paths and queues. **Server-side of that line, pikuri types are
-used freely** — `bin/pikuri-web-chat` (boot/wiring), {SseListener},
-{AgentRunner}, {HistoryReplay}, and {ConversationStore#save}.
+used freely** — `bin/pikuri-web-chat` (boot/wiring), {Web::SseListener},
+{Agents::Runner}, {Conversations::HistoryReplay}, and {Conversations::Store#save}.
 
-**Rejected: keeping {ConversationStore} on the Pikuri-free side by taking
+**Rejected: keeping {Conversations::Store} on the Pikuri-free side by taking
 a block** — `store.save(conversation) { |dir| history.save(dir) }`, the
 store yielding a `Pathname` and never holding a `History`. Built first,
 then reverted: it preserved the letter of the old list at the cost of an
 indirection that explained nothing, and the seam it was defending is not
 one the store sits on. What settles it is that the refactor *relocates* a
 pikuri call rather than adding one — `History#save` had exactly one call
-site before ({AgentRunner#persist}) and has exactly one after (the
+site before ({Agents::Runner#persist}) and has exactly one after (the
 store), so the upgrade cost the seam exists to bound did not move at all.
 A utility method that owns a directory is the right owner of what goes
 into it.
 
 **Rejected: letting Pikuri types spread to whatever needs them.** Passing
-a `Pikuri::Agent::Event` into {Transcript} is the shortest path and it
+a `Pikuri::Agent::Event` into {Web::Transcript} is the shortest path and it
 prices every future pikuri upgrade at a full-project sweep. With the seam
 held, a shifted surface costs rewriting the adapters — the same
 fork-or-swap rationale as the TUI's.
@@ -2856,14 +2930,14 @@ they help, it does not require them.
 
 ## D_rerender_and_replace — Re-render the whole message per delta; don't port the TUI's block-cutter
 
-**Status:** Accepted, shipped as {StreamingMessage}.
+**Status:** Accepted, shipped as {Web::StreamingMessage}.
 
 **Context.** pikuri-tui streams assistant output through a
 `StreamingMarkdownBuffer` — a block-cutter with committed-prefix
 machinery, easily the most intricate piece of the TUI's rendering. The
 obvious move for a sibling front-end is to port it.
 
-**Decision.** Don't. {StreamingMessage} accumulates the source and
+**Decision.** Don't. {Web::StreamingMessage} accumulates the source and
 re-renders **all** of it through kramdown per (rate-limited) delta; the
 browser replaces one div's `innerHTML`. What *is* kept is the TUI
 buffer's lifecycle contract, because that part is about correctness
@@ -2889,12 +2963,12 @@ tripwire to watch if this ever changes.
 
 ## D_server_authoritative_transcript — The server holds rendered blocks; SSE carries only deltas
 
-**Status:** Accepted, shipped as {Transcript}.
+**Status:** Accepted, shipped as {Web::Transcript}.
 
 **Context.** A browser front-end has to answer three things at once:
 page reload, a second tab, and `EventSource`'s automatic reconnect.
 
-**Decision.** {Transcript} holds the rendered HTML blocks and is the
+**Decision.** {Web::Transcript} holds the rendered HTML blocks and is the
 single source of truth. `GET /` renders the full snapshot into the page;
 SSE carries only deltas against it, placed by block id. All three cases
 then converge on the same state with no client-side bookkeeping.
@@ -2924,7 +2998,7 @@ per-tab, per-URL concern (`GET /c/:id`), rows are links, and sending into
 a conversation the agent is not on is what makes it live — carrying the
 mid-turn refusal that `POST /conversations/:id/select`, now gone, used to
 carry. A conversation the agent is not on is replayed from history per
-request (`HistoryReplay.snapshot`). SSE remains one undivided feed, so
+request (`Conversations::HistoryReplay.snapshot`). SSE remains one undivided feed, so
 every frame is stamped with the live conversation's id and the client
 drops what is not its own; per-conversation subscriptions arrive with the
 agent-per-conversation work. The paragraphs below are kept for the
@@ -2957,9 +3031,9 @@ input would be confusing in exactly the situation it enabled. Per-URL
 `/c/<id>` is where this goes if background turns ever make the other
 pane genuinely alive.
 
-**Rejected: per-session conversations.** Not a patch — {AgentRunner} owns
-*the* worker thread and {Transcript} owns *the* block list, so sessions
-mean rewriting who owns what, and {Broadcaster}'s fan-out stops being a
+**Rejected: per-session conversations.** Not a patch — {Agents::Runner} owns
+*the* worker thread and {Web::Transcript} owns *the* block list, so sessions
+mean rewriting who owns what, and {Web::Broadcaster}'s fan-out stops being a
 broadcast. Out of scope until there's a concrete need.
 
 **Rejected: shipping auth to make a non-loopback bind safe.** Auth
@@ -3088,21 +3162,21 @@ conversations still stream concurrently, interleaving at task granularity.
 
 The task inventory:
 
-- **Every route body that touches server state is one task** ({App}): the
+- **Every route body that touches server state is one task** ({Web::App}): the
   page snapshot is an untorn read (blocks + status + rows from one
   instant), resolve + act is one step, and `/events`' subscribe +
   catch-up share a task.
 - **The turn job's bookkeeping brackets are tasks** (claim, take-pending,
   finish including the save); `run_loop` itself — LLM round-trips, tool
   execution — runs off-domain.
-- **{SseListener} renders off-domain** (kramdown, escaping, the
-  {StreamingMessage} accumulation — the domain owns *mutation*, not
+- **{Web::SseListener} renders off-domain** (kramdown, escaping, the
+  {Web::StreamingMessage} accumulation — the domain owns *mutation*, not
   rendering) **and enters a task per finished block**: store + broadcast
   as one unit, ~15 tiny tasks/s per streaming conversation.
 - **The Interloper's `on_change` opens a task** from whichever thread
   caused the change; fired from inside a task it just re-enters.
 
-Guarded classes — {AgentRunner}, {ConversationRegistry}, {Transcript} —
+Guarded classes — {Agents::Runner}, {Conversations::Registry}, {Web::Transcript} —
 lost their own locks and gained a *caller obligation*: every public
 method opens with {BigAppLock#assert!}, so a call from outside a task
 raises instead of racing. `OutsideTask` is an `Exception`, not a
@@ -3112,7 +3186,7 @@ operational failure. That assertion is the enforcement Node gets from its
 language and Ruby otherwise lacks; specs drive guarded classes through a
 `guard` proxy — the spec-side stand-in for the App's route wrapping.
 
-Outside the domain, deliberately: {Broadcaster} (its own small mutex —
+Outside the domain, deliberately: {Web::Broadcaster} (its own small mutex —
 `#close` fires from the stop hook, which must never wait on a wedged
 domain, so nothing in that hook enters the monitor); the `/events` drain
 loops (parked request threads doing the network); all rendering; the
@@ -3173,7 +3247,7 @@ rely on without an audit per seam. Two audit fixes survive regardless:
 `D_subscribe_then_snapshot`'s duplicate tolerance (the page render and
 the EventSource are still two HTTP requests, which no server mechanism
 reaches, though the server-side half now also sits in one task), and
-`Transcript::Block` staying a `Data`.
+`Web::Transcript::Block` staying a `Data`.
 
 **Consequences.**
 
@@ -3193,7 +3267,7 @@ reaches, though the server-side half now also sits in one task), and
   `turn_executor.shutdown` and nothing else — nothing in it may enter the
   domain.
 - New shared state joins the domain (guarded + `assert!`) or states the
-  reason for its own lock the way {Broadcaster}'s header does.
+  reason for its own lock the way {Web::Broadcaster}'s header does.
 - The registry's `#open` footgun (audit PROBE 7) was untouched by the
   mechanism — the stale `Conversation` is held *across* tasks — and was
   closed right after it by structure instead: `#open` is private, so every

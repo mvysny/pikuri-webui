@@ -14,10 +14,10 @@ module PikuriWeb
   #     runner&.submit(prompt)       # resolve + submit, untearable
   #   end
   #
-  # Guarded classes ({AgentRunner}, {ConversationRegistry}, {Transcript}) open
+  # Guarded classes ({Agents::Runner}, {Conversations::Registry}, {Transcript}) open
   # their public methods with {#assert!}, so a call from outside a task raises
-  # instead of racing. Who enters the domain: every route body ({App}), and
-  # the turn worker's bookkeeping brackets (+AgentRunner#run_turn+) — the
+  # instead of racing. Who enters the domain: every route body ({Web::App}), and
+  # the turn worker's bookkeeping brackets (+Agents::Runner#run_turn+) — the
   # agent loop itself, and all rendering, stay outside.
   #
   # A task must be **rapid-fire**: never a network wait, never a wait on

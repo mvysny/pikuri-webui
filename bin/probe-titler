@@ -8,8 +8,8 @@
 #   bin/probe-titler --attacks    # and six attempts to talk it out of titling
 #
 # Reads ~/.config/pikuri/config.toml like the shell does, and drives
-# PikuriWeb::Titler itself rather than a private copy of it — so what this
-# reports is the shipped path, caps and </think> strip included, and it cannot
+# PikuriWeb::Agents::Titler itself rather than a private copy of it — so what
+# this reports is the shipped path, caps and </think> strip included, and it cannot
 # drift the way a standalone benchmark script does. What a reader is judging:
 #
 # - 3-7 words, no quotes, no preamble, and *the input's own language*. Wrong
@@ -114,12 +114,12 @@ end
 llm = config.titler_llm
 abort 'no [titler] in the config file — nothing to probe. See the README recipe.' if llm.nil?
 
-choice = PikuriWeb::ModelCatalog.from_llms(config.llms).find(llm.name)
+choice = PikuriWeb::Agents::ModelCatalog.from_llms(config.llms).find(llm.name)
 puts "probing #{llm.name.inspect} — #{choice.model} @ #{choice.server}"
 puts "params: #{llm.params.empty? ? 'none declared' : llm.params.inspect}"
 puts
 
-titler = PikuriWeb::Titler.new(transport: choice.transport, params_declared: !llm.params.empty?)
+titler = PikuriWeb::Agents::Titler.new(transport: choice.transport, params_declared: !llm.params.empty?)
 
 begin
   puts 'openers'

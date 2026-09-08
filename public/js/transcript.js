@@ -16,7 +16,7 @@
  * owns what each kind looks like.
  *
  * A `:thinking` block's html carries a `<details open><summary>` the server
- * wrote (SseListener#disclose). The `open` in that markup is only the pre-JS
+ * wrote (Web::SseListener#disclose). The `open` in that markup is only the pre-JS
  * state — the listener is shared by every tab and cannot know a per-browser
  * preference — so resolving it is this file's job, per **Reasoning
  * disclosure** below.
