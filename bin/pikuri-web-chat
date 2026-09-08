@@ -85,6 +85,23 @@ end
 # nothing saved starts.
 catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
 
+# Conversation titles, when [titler] names one of those connections. One
+# instance for the process: it keeps no per-conversation state, building a
+# throwaway agent per title, and its transport carries whatever `params` that
+# [[llm]] declared — which is how thinking gets turned off (README recipe).
+# No [titler] at all leaves every conversation on its start stamp; the titler
+# entry stays pickable in /model like any other, which is why it comes from the
+# catalog rather than being built beside it.
+titler =
+  if (titler_llm = config.titler_llm)
+    choice = catalog.find(titler_llm.name)
+    PikuriWeb.logger.info(
+      "titler: #{titler_llm.name.inspect} — #{choice.model} @ #{choice.server}" \
+      "#{titler_llm.params.empty? ? ' (no params; expect slow titles from a thinking model)' : ''}"
+    )
+    PikuriWeb::Titler.new(transport: choice.transport, params_declared: !titler_llm.params.empty?)
+  end
+
 # A [[server]] naming no ceiling is left alone, so pikuri's /props probe sizes
 # it from the box's own total_slots (`D_max_concurrent_requests`). `.limit`
 # wins by decision rather than by ordering: ServerPermits marks an explicit
@@ -241,6 +258,7 @@ conversation_factory = lambda do |conversation|
     executor: turn_executor,
     catalog: catalog,
     token_log: token_log,
+    titler: titler,
     missing_connection: missing,
     lock: big_app_lock
   )

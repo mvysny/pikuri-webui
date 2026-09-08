@@ -83,6 +83,19 @@ module PikuriWeb
   # because +Event::ToolResult+ fires before ruby_llm appends the tool message
   # and nothing fires when it lands.
   #
+  # == The title
+  #
+  # A conversation is named from its opening message, wherever that message
+  # turns up: {#submit} posts a {Titler} job *beside* the turn — never inside
+  # it — for a fresh one, and {#restore!} posts the same job for a stored one
+  # that is still stamp-titled, so a conversation older than the feature is
+  # named the first time anyone opens it. Either way the answer lands through
+  # a task that rewrites the envelope and {#conversation} together.
+  #
+  # No +[titler]+ configured, a model that answers nothing usable, or a raise
+  # anywhere in that job all leave the start stamp, and none of them can reach
+  # the turn.
+  #
   # Server-side of the pikuri seam, so it names pikuri types freely
   # (`D_pikuri_free_core`).
   #
@@ -130,6 +143,9 @@ module PikuriWeb
     #   +on_status_line+ slot
     # @param catalog [ModelCatalog] the connections {#select_model} may pick
     #   from, and what turns the agent's transport into a display name
+    # @param titler [Titler, nil] names this conversation from its opening
+    #   message, on its own executor job; +nil+ — no +[titler]+ configured —
+    #   leaves every conversation on its start stamp
     # @param missing_connection [String, nil] +"model @ server"+ when this
     #   conversation was minted on {ModelCatalog#primary} because the
     #   connection it had saved has left the config file. Reported until a
@@ -137,7 +153,7 @@ module PikuriWeb
     # @param lock [BigAppLock] the domain every call must be inside
     def initialize(conversation:, agent:, interloper:, cancellable:, broadcaster:,
                    conversations:, transcript:, listener:, executor:, catalog:,
-                   lock:, token_log: nil, missing_connection: nil)
+                   lock:, token_log: nil, titler: nil, missing_connection: nil)
       @conversation = conversation
       @agent = agent
       @interloper = interloper
@@ -149,6 +165,7 @@ module PikuriWeb
       @executor = executor
       @catalog = catalog
       @token_log = token_log
+      @titler = titler
       @missing_connection = missing_connection
       @lock = lock
       @state = :idle
@@ -156,6 +173,7 @@ module PikuriWeb
       @discarded = false
       @announced_busy = false
       @pending = nil
+      @titling = false
 
       # Claims the interloper's single on_change slot. Without it the
       # queued-count badge only moves when a request happens to hit {#submit}
@@ -172,7 +190,10 @@ module PikuriWeb
       @token_log&.on_status_line = ->(_id, _line) { @lock.run { broadcast_status } }
     end
 
-    # @return [ConversationStore::Conversation]
+    # @return [ConversationStore::Conversation] replaced, not mutated, when a
+    #   title lands — so a reader always sees one consistent frozen envelope,
+    #   at worst the pre-title one. The +conversations+ SSE event that follows
+    #   the landing is what makes every tab re-fetch.
     attr_reader :conversation
 
     # @return [Transcript] this conversation's rendered blocks
@@ -184,6 +205,10 @@ module PikuriWeb
     # A conversation with nothing on disk (brand new, or never saved because it
     # holds no messages) restores to empty, which is already correct.
     #
+    # Also where a conversation older than the titling feature gets a name: its
+    # opener is in the history already in hand, so the retro-title costs no
+    # second read and reaches exactly the conversations someone actually opens.
+    #
     # @return [Boolean] whether a stored history was found and loaded
     def restore!
       @lock.assert!
@@ -192,6 +217,7 @@ module PikuriWeb
 
       @agent.load_history!(history)
       HistoryReplay.events(history).each { |event| @listener.on_event(event) }
+      maybe_title(first_user_message(history))
       true
     end
 
@@ -220,6 +246,8 @@ module PikuriWeb
         @state = :queued
         @executor.post { run_turn(message) }
         broadcast_status
+        # After the turn is posted, so a title never delays an answer.
+        maybe_title(message)
         :started
       end
     end
@@ -433,6 +461,69 @@ module PikuriWeb
     # @return [Pikuri::Agent::ChatTransport, nil] the parked selection, taken;
     #   nil — +run_loop+'s "keep the current model" — when there is none
     def take_pending = @pending.tap { @pending = nil }
+
+    # Post a titling job for this conversation's opening message, if it wants
+    # one. Called from both places an opener can turn up: {#restore!} with the
+    # one on disk, {#submit} with the one starting a fresh conversation.
+    #
+    # At most once per runner, so a restored conversation is never asked twice
+    # and a failure leaves the stamp rather than retrying. Across a restart it
+    # does retry, which is what makes a title lost to a server being down
+    # recoverable by opening the conversation again.
+    #
+    # @param opener [String, nil] the opening message; +nil+ when there is none
+    #   to read, which titles nothing
+    # @return [void]
+    def maybe_title(opener)
+      return if @titler.nil? || @titling || @discarded || opener.nil?
+      return unless @conversations.stamp_titled?(@conversation)
+
+      @titling = true
+      @executor.post { run_titling(opener) }
+      nil
+    end
+
+    # @param history [Pikuri::Agent::History] a restored conversation
+    # @return [String, nil] its opening message, or +nil+ for a history that
+    #   holds no user text at all
+    def first_user_message(history)
+      text = history.messages.find { |message| message.role.to_s == 'user' }&.content
+      text.is_a?(String) && !text.strip.empty? ? text : nil
+    end
+
+    # The titling job's body: ask off-domain, land the answer in a task.
+    #
+    # Every failure ends here, which is what makes the class header's promise
+    # true — so this rescue may never narrow to a specific error class.
+    #
+    # @param opener [String]
+    # @return [void]
+    def run_titling(opener)
+      Thread.current.name = "title #{@conversation.id}"
+      title = @titler.title_for(opener)
+      @lock.run { land_title(title) } unless title.nil?
+    rescue StandardError => e
+      PikuriWeb.logger.error("titling conversation #{@conversation.id} failed (#{e.class}: #{e.message})")
+    ensure
+      Thread.current.name = 'turn-idle'
+    end
+
+    # Store a landed title and tell every tab the list changed.
+    #
+    # Both halves of the rename happen here, in one task: the envelope on disk
+    # *and* the {#conversation} this runner holds. Writing only disk would be
+    # reverted by the next turn-end {#persist}, which writes the title off this
+    # object.
+    #
+    # @param title [String] capped and sanitized by {Titler}
+    # @return [void]
+    def land_title(title)
+      return if @discarded
+
+      @conversation = @conversations.retitle(@conversation, title)
+      @broadcaster.broadcast(event: :conversations, data: {})
+      nil
+    end
 
     # @return [Pikuri::Agent::History, nil] nil when this conversation has
     #   nothing stored, or when what is stored cannot be read — a file someone

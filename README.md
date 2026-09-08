@@ -299,9 +299,10 @@ tab to it. It is never refused, because a new conversation touches no
 existing one: a turn already running — including in the conversation you
 are leaving — carries on untouched, and other tabs stay where they are.
 
-The sidebar lists every conversation you have had, newest first, with when
-each started. The order is by start time, so a conversation stays where it
-is however long you keep talking in it. Click a row to open it **in this
+The sidebar lists every conversation you have had, newest first, titled by
+when each started unless something has named it (see *Naming conversations*
+below). The order is by start time, so a conversation stays where it is
+however long you keep talking in it. Click a row to open it **in this
 tab**; the rows are ordinary links, and no other tab moves. Each row
 carries two independent marks: the conversation this tab has open is
 highlighted, and a `●` means a turn is running there — in any conversation,
@@ -372,6 +373,75 @@ that is about to land. `rm -r` on a conversation directory still works and
 does the same thing.
 
 Nothing prunes old conversations for you — there is no cap and no expiry.
+
+### Naming conversations
+
+A conversation is titled with its start stamp — `2026-09-08 14:03` — until
+something names it. Name a connection under `[titler]` and the opening
+message becomes a real title instead, three to seven words, in whatever
+language you wrote in:
+
+```toml
+[[llm]]
+name           = "qwen-titler"
+server         = "local"
+model          = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+context_window = 8192
+params         = { chat_template_kwargs = { enable_thinking = false } }
+
+[titler]
+llm = "qwen-titler"
+```
+
+That is the whole recipe, and the model in it is the only one recommended:
+Qwen 3.6 35B A3B **with thinking turned off**. Thinking off is not a detail —
+it is the difference between a title in about a second and one in half a
+minute, and the half-minute version spends that time competing with your own
+messages for the server. `params` goes to the server verbatim, so the spelling
+above is llama.cpp's; another server may want something else, and the log says
+so at boot if the model reasons anyway.
+
+Point `[titler]` at a *second* `[[llm]]` even when it names the same model on
+the same server, as above — it is `params` that differs. Keep both on one
+`[[server]]` so titles queue behind your own requests instead of racing them,
+and set `context_window` so the titler skips a round trip on every title.
+
+The titler entry appears in `/model` like any other connection. Picking it
+gives you a conversation that does not think, which is a legitimate thing to
+want; it lasts as long as you stay in that conversation, because reopening
+resolves to the *first* entry naming that model on that server.
+
+Conversations from before you configured a titler get named too — each one
+the first time you open it, off the history it loads anyway. So the sidebar
+fills in as you revisit things rather than all at once, and a folder full of
+old conversations costs you nothing until you go looking. Nothing touches a
+conversation that already has a name, and there is no way to rename one by
+hand yet.
+
+Titling is best-effort and cannot break anything. No `[titler]`, a model that
+answers nothing usable, a server that is down — the conversation keeps its
+stamp, your turn is untouched, and nothing appears in the transcript. A title
+lost that way is retried the next time the conversation is opened in a fresh
+process.
+
+If your model cannot be talked out of thinking at all, `llama-server` can do it
+from its side instead — `--reasoning-budget 0`, or `--reasoning off` — and then
+the titler is just an `[[llm]]` pointed at that alias with no `params` at all.
+It costs a second full copy of the weights in VRAM, since each alias is its own
+process, so it is the better answer only on a box with room.
+
+**On smaller models: there is no recommendation to give.** A 4B is fast, but
+titling is mostly a test of following instructions rather than of knowing
+anything, and both small instruct models tried were rejected — one answered in
+the wrong language five times out of eight. If you have a candidate, point
+`[titler]` at it and run:
+
+```
+bin/probe-titler            # eight openers: short, long, code, a backtrace, Russian
+bin/probe-titler --attacks  # six attempts to talk it out of titling
+```
+
+It drives the real titler, so what you see is what the sidebar would get.
 
 ## Develop
 

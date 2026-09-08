@@ -328,6 +328,82 @@ describe PikuriWeb::Config do
     end
   end
 
+  # The titler connection and the passthrough that makes it non-thinking. A
+  # file that names no titler switches titling off — never a fallback to the
+  # primary, whose thinking-on titles are two orders of magnitude slower.
+  describe '[titler] and [[llm]] params' do
+    # A titler [[llm]] beside MINIMAL's, so `params` and the reference both
+    # have somewhere real to point.
+    TITLER = <<~TOML
+      [[llm]]
+      name           = "qwen-titler"
+      server         = "local"
+      model          = "qwen"
+      context_window = 8192
+      params         = { chat_template_kwargs = { enable_thinking = false } }
+    TOML
+
+    def load_with(body)
+      with_dirs do |home, _|
+        write_config(home, MINIMAL + body)
+        described_class.load(env: env_for(home))
+      end
+    end
+
+    it 'resolves [titler] llm to the named connection, not the primary' do
+      c = load_with("#{TITLER}\n[titler]\nllm = \"qwen-titler\"\n")
+      assert_equal 'qwen-titler', c.titler_llm.name
+      assert_equal 'Local', c.primary_llm.name
+    end
+
+    it 'leaves titler_llm nil when no [titler] names one — titling off, never a fallback' do
+      assert_nil load_bare.titler_llm
+      assert_nil load_with(TITLER).titler_llm
+    end
+
+    it 'carries params through verbatim, frozen' do
+      params = load_with(TITLER).llms.last.params
+      assert_equal({ 'chat_template_kwargs' => { 'enable_thinking' => false } }, params)
+      assert params.frozen?
+    end
+
+    it 'defaults params to empty for a connection that declares none' do
+      assert_empty load_bare.primary_llm.params
+    end
+
+    it 'accepts a titler pointed at a connection with no params (thinking-on, by choice)' do
+      c = load_with("[titler]\nllm = \"Local\"\n")
+      assert_equal 'Local', c.titler_llm.name
+      assert_empty c.titler_llm.params
+    end
+
+    it 'rejects a titler naming no [[llm]], listing the names that exist' do
+      e = assert_raises(described_class::Error) { load_with("[titler]\nllm = \"nope\"\n") }
+      assert_includes e.message, 'titler.llm names no [[llm]]: "nope"'
+      assert_includes e.message, '"Local"'
+    end
+
+    it 'rejects an empty [titler] table' do
+      e = assert_raises(described_class::Error) { load_with("[titler]\n") }
+      assert_includes e.message, 'titler.llm is required'
+    end
+
+    it 'rejects an unknown [titler] key' do
+      e = assert_raises(described_class::Error) { load_with("[titler]\nllm = \"Local\"\nmodel = \"x\"\n") }
+      assert_includes e.message, 'titler: unknown key(s): model'
+    end
+
+    it 'rejects titler written as an array of tables' do
+      e = assert_raises(described_class::Error) { load_with("[[titler]]\nllm = \"Local\"\n") }
+      assert_includes e.message, '`titler` must be a table ([titler])'
+    end
+
+    it 'rejects params that is not a table' do
+      e = assert_raises(described_class::Error) { load_with("params = \"enable_thinking=false\"\n") }
+      assert_includes e.message, '`params` must be a table'
+    end
+  end
+
   describe 'layering (XDG_CONFIG_DIRS < XDG_CONFIG_HOME)' do
     it 'deep-merges tables so a higher layer adding mcp keeps the lower layer sandbox' do
       with_dirs do |home, sys|

@@ -299,6 +299,66 @@ RSpec.describe PikuriWeb::ConversationStore do
     end
   end
 
+  context '#stamp_titled?' do
+    it 'is true for a conversation nothing has named' do
+      assert store.stamp_titled?(store.create(at: at))
+    end
+
+    it 'is false once something has' do
+      refute store.stamp_titled?(store.retitle(store.create(at: at), 'Named Thing'))
+    end
+  end
+
+  context '#retitle' do
+    it 'rewrites the envelope in place, keeping every other key' do
+      conversation = store.create(at: at)
+      save(conversation, SpyHistory.new)
+      before = meta_of(conversation)
+
+      renamed = store.retitle(conversation, 'Sinatra Versus Roda For SSE')
+
+      assert_equal 'Sinatra Versus Roda For SSE', meta_of(conversation)['title']
+      assert_equal 'Sinatra Versus Roda For SSE', renamed.title
+      assert_equal before.except('title'), meta_of(conversation).except('title')
+    end
+
+    it 'leaves the directory where it is — a title is never part of a path' do
+      conversation = store.create(at: at)
+      save(conversation, SpyHistory.new)
+      assert_equal conversation.dir, store.retitle(conversation, 'Named Thing').dir
+      assert conversation.dir.directory?
+    end
+
+    # A conversation minted but not yet saved: the rename lives in the returned
+    # value, and the save that first writes the envelope carries it.
+    it 'writes nothing when there is no envelope yet' do
+      conversation = store.create(at: at)
+      renamed = store.retitle(conversation, 'Named Thing')
+
+      assert_equal 'Named Thing', renamed.title
+      refute conversation.dir.exist?
+      save(renamed, SpyHistory.new)
+      assert_equal 'Named Thing', meta_of(renamed)['title']
+    end
+
+    it 'writes nothing over an envelope this reader cannot stand behind' do
+      conversation = store.create(at: at)
+      save(conversation, SpyHistory.new)
+      (conversation.dir / 'meta.json').write('{ this is not json')
+
+      assert_equal 'Named Thing', store.retitle(conversation, 'Named Thing').title
+      assert_equal '{ this is not json', (conversation.dir / 'meta.json').read
+    end
+
+    it 'survives a round trip through the listing' do
+      conversation = store.create(at: at)
+      save(conversation, SpyHistory.new)
+      store.retitle(conversation, 'Named Thing')
+
+      assert_equal ['Named Thing'], store.list.map(&:title)
+    end
+  end
+
   context '#delete' do
     # A committed conversation with pikuri's half beside ours, which is what
     # delete has to take with it.

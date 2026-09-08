@@ -23,6 +23,14 @@ module PikuriWeb
   # model id: a transport minted outside this catalog still renders as
   # something.
   #
+  # The pair is *not* unique, though the name is: the recommended titler is a
+  # second +[[llm]]+ on one model and one server, differing only in +params+.
+  # So {#resolve} and {#name_for} answer with the **first** entry declared on
+  # a pair, and the rest are shadowed — pickable, listed by {#rows}, and good
+  # for the session, but a conversation saved onto one reopens on the winner,
+  # because +meta.json+ stores the pair and nothing finer
+  # (+D_per_conversation_model+). Boot logs which names that affects.
+  #
   # Immutable.
   class ModelCatalog
     # One connection: the display name, and the transport picking it hands to
@@ -57,25 +65,35 @@ module PikuriWeb
     # on the server rather than on anything a transport carries
     # (+D_upstream_request_throttle+).
     #
+    # An entry's +params+ rides its transport as a {RequestParams} adapter, so
+    # a connection configured non-thinking stays non-thinking wherever its
+    # transport travels.
+    #
     # @param llms [Array<Config::Llm>] every configured connection, in
     #   declaration order
     # @return [ModelCatalog]
     def self.from_llms(llms)
       new(choices: llms.map do |llm|
         key = llm.api_key.to_s.strip
-        Choice.new(name: llm.name, transport: Pikuri::Agent::ChatTransport.from_openai_server(
-                     server: llm.server,
-                     model: llm.model,
-                     api_key: key.empty? ? 'not-needed' : key,
-                     context_window: llm.context_window
-                   ))
+        transport = Pikuri::Agent::ChatTransport.from_openai_server(
+          server: llm.server,
+          model: llm.model,
+          api_key: key.empty? ? 'not-needed' : key,
+          context_window: llm.context_window
+        )
+        adapter = RequestParams.adapter_for(llm.params)
+        transport = transport.with(faraday_adapter: adapter) if adapter
+        Choice.new(name: llm.name, transport: transport)
       end)
     end
 
     # @param choices [Array<Choice>] at least one, names already unique
     def initialize(choices:)
       @choices = choices.freeze
-      @by_key = choices.to_h { |choice| [choice.key, choice] }.freeze
+      # Reversed so the *first* declaration wins the pair, where +to_h+ hands
+      # it to the last — see the class header on shadowing.
+      @by_key = choices.reverse.to_h { |choice| [choice.key, choice] }.freeze
+      warn_shadowed_pairs(choices)
       freeze
     end
 
@@ -115,6 +133,25 @@ module PikuriWeb
     def rows
       @choices.map do |choice|
         { name: choice.name, model: choice.model, context_window: choice.context_window }
+      end
+    end
+
+    private
+
+    # Tell the operator, once at boot, which entries cannot survive a reopen.
+    #
+    # @param choices [Array<Choice>] in declaration order.
+    # @return [void]
+    def warn_shadowed_pairs(choices)
+      choices.group_by(&:key).each_value do |sharing|
+        next if sharing.one?
+
+        winner, *shadowed = sharing
+        PikuriWeb.logger.info(
+          "model catalog: #{shadowed.map { |c| c.name.inspect }.join(', ')} " \
+          "share #{winner.model.inspect} on #{winner.server} with #{winner.name.inspect}; " \
+          'a conversation picked onto one reopens on the first. Expected for a titler entry.'
+        )
       end
     end
   end
