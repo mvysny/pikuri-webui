@@ -78,6 +78,17 @@ gem 'tomlrb', '~> 2.0'
 # (ActiveSupport depends on it).
 gem 'concurrent-ruby', '~> 1.3'
 
+# Already in the bundle under ruby_llm, declared because PikuriWeb::
+# RequestParams subclasses Faraday::Adapter::NetHttp directly: an
+# [[llm]]'s `params` table has to reach the wire, and pikuri's
+# ChatTransport carries no params channel — only `faraday_adapter`, the
+# generic HTTP seam. An undeclared transitive dependency we compile
+# against would break on a ruby_llm bump that drops it.
+#
+# Temporary by intent: the day pikuri grows a real `params:`, this gem
+# and request_params.rb go together.
+gem 'faraday', '~> 2.14'
+
 # ERB engine Tilt picks over stdlib ERB. Needed for Sinatra's
 # +erb, escape_html: true+ auto-escaping and the +<%==+ raw-output tag
 # (stdlib ERB supports neither) — index.erb escapes everything except

@@ -60,6 +60,34 @@ module PikuriWeb
   # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
   # the file from then on (+D_ui_cookie_over_config+).
   #
+  # == The +[titler]+ table, and +[[llm]]+ +params+
+  #
+  #   [[llm]]
+  #   name           = "qwen-titler"
+  #   server         = "local"
+  #   model          = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+  #   context_window = 8192
+  #   params         = { chat_template_kwargs = { enable_thinking = false } }
+  #
+  #   [titler]
+  #   llm = "qwen-titler"
+  #
+  # Which connection writes conversation titles, named by +[[llm]]+ +name+
+  # and resolved into {#titler_llm}. Naming a *name* is safe where
+  # +D_per_conversation_model+ forbids it, because reference and referent
+  # live in one file, edited together. No +[titler]+ at all leaves
+  # {#titler_llm} +nil+, which means *no titling* — never a fallback to
+  # {#primary_llm}, so an unconfigured file never spends 30 s of a thinking
+  # model on a sidebar row.
+  #
+  # +params+ rides any +[[llm]]+, not only that one, and reaches the server
+  # verbatim. A passthrough rather than a +thinking = false+ boolean because
+  # the wire spelling differs per provider *and* per chat template, and a
+  # mistranslation fails in the expensive direction: silently not applied,
+  # dumping reasoning where a title belongs. Only the shape is checked here —
+  # what the keys *mean* is the server's to say, the same bargain
+  # {.build_search} takes with +engines+.
+  #
   # == Precedence
   #
   # Lowest to highest: built-in defaults → +/etc/xdg/pikuri/config.toml+
@@ -154,7 +182,18 @@ module PikuriWeb
     #     it for a cloud model the probe can't reach so the status bar
     #     shows a real +used/cap+. Rides the connection's
     #     +Pikuri::Agent::ChatTransport+, so it stays correct per-model.
-    Llm = Data.define(:name, :server, :model, :api_key, :context_window)
+    # @!attribute [r] params
+    #   @return [Hash{String => Object}] extra request parameters merged into
+    #     every chat completion on this connection, verbatim — e.g.
+    #     +{"chat_template_kwargs" => {"enable_thinking" => false}}+ to turn
+    #     Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it;
+    #     a non-empty value is also what marks a connection as deliberately
+    #     steered, which the titler's canary reads to pick its log level.
+    Llm = Data.define(:name, :server, :model, :api_key, :context_window, :params) do
+      def initialize(params: {}, **rest)
+        super(params: params.freeze, **rest)
+      end
+    end
 
     # One MCP server definition; exactly one of {#command} (local stdio
     # subprocess) / {#url} (remote HTTP) is non-nil. Parsed and validated
@@ -297,6 +336,7 @@ module PikuriWeb
       new(
         llms:          llms,
         servers:       servers,
+        titler_llm:    build_titler(merged['titler'], llms),
         search:        build_search(merged['search']),
         sandbox:       pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
         confirm:       pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
@@ -320,7 +360,10 @@ module PikuriWeb
     #   (parsed, unwired).
     # @param tool_lines [Symbol] resolved +[ui]+ tool-line form (parsed,
     #   unwired).
-    def initialize(llms:, search:, sandbox:, confirm:, mcp:, servers: [],
+    # @param titler_llm [Llm, nil] the connection titles are written on, or
+    #   +nil+ for no titling. Defaults to +nil+ so a config built in code
+    #   opts in the same way a file does.
+    def initialize(llms:, search:, sandbox:, confirm:, mcp:, servers: [], titler_llm: nil,
                    show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES)
       @llms    = llms.freeze
       @servers = servers.freeze
@@ -328,6 +371,7 @@ module PikuriWeb
       @sandbox = sandbox
       @confirm = confirm
       @mcp     = mcp.freeze
+      @titler_llm    = titler_llm
       @show_thinking = show_thinking
       @tool_lines    = tool_lines
       freeze
@@ -354,6 +398,10 @@ module PikuriWeb
     #   here unresolved. **The reader falls back**, as {App} does for an
     #   unknown +theme+ cookie; the vocabulary belongs to whoever renders it.
     attr_reader :tool_lines
+    # @return [Llm, nil] the connection conversation titles are written on
+    #   (+[titler] llm+), or +nil+ when the file names none — which switches
+    #   titling off rather than falling back to {#primary_llm}.
+    attr_reader :titler_llm
 
     # @return [Llm] the boot connection (the first).
     def primary_llm = @llms.first
@@ -428,7 +476,7 @@ module PikuriWeb
     end
 
     def self.validate_top!(merged)
-      unknown = merged.keys - %w[server llm search code ui]
+      unknown = merged.keys - %w[server llm search code ui titler]
       raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
       %w[server llm].each do |k|
         next unless merged.key?(k) && !merged[k].is_a?(Array)
@@ -439,9 +487,42 @@ module PikuriWeb
         raise Error, '`search` must be a table ([search])'
       end
       raise Error, '`code` must be a table ([code])' if merged.key?('code') && !merged['code'].is_a?(Hash)
-      return unless merged.key?('ui') && !merged['ui'].is_a?(Hash)
+      raise Error, '`ui` must be a table ([ui])' if merged.key?('ui') && !merged['ui'].is_a?(Hash)
+      return unless merged.key?('titler') && !merged['titler'].is_a?(Hash)
 
-      raise Error, '`ui` must be a table ([ui])'
+      raise Error, '`titler` must be a table ([titler])'
+    end
+
+    # Resolve +[titler] llm+ to the connection titles are written on.
+    #
+    # Strict, unlike +[ui]+: this shell is the one that consumes the table, so
+    # a key it does not know is a mistake rather than a sibling shell's
+    # business.
+    #
+    # @param table [Hash, nil] the raw +[titler]+ table; +nil+ when the file
+    #   has no such section.
+    # @param llms [Array<Llm>] every configured connection, names already
+    #   checked for uniqueness.
+    # @return [Llm, nil] the named connection, or +nil+ for +table+ +nil+ —
+    #   titling off.
+    # @raise [Error] on an unknown key, a missing or blank +llm+, or a name no
+    #   +[[llm]]+ defines.
+    def self.build_titler(table, llms)
+      return nil if table.nil?
+
+      unknown = table.keys - %w[llm]
+      raise Error, "titler: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
+
+      ref = table['llm']
+      unless non_empty_string?(ref)
+        raise Error, 'titler.llm is required and must be a non-empty string naming an [[llm]]'
+      end
+
+      found = llms.find { |llm| llm.name == ref }
+      return found if found
+
+      raise Error, "titler.llm names no [[llm]]: #{ref.inspect}; " \
+                   "known: #{llms.map { |llm| llm.name.inspect }.join(', ')}"
     end
 
     # Validate the +[ui]+ table, deliberately more loosely than its
@@ -536,7 +617,7 @@ module PikuriWeb
 
       # +api_key+ is legal this far so that an old entry reaches the message
       # naming where the key moved to, rather than a bare "unknown key".
-      unknown = hash.keys - %w[name server model api_key context_window]
+      unknown = hash.keys - %w[name server model api_key context_window params]
       raise Error, "llm[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
 
       name = hash['name']
@@ -553,6 +634,12 @@ module PikuriWeb
         raise Error, "llm #{name.inspect}: `context_window` must be a positive integer"
       end
 
+      params = hash.fetch('params', {})
+      unless params.is_a?(Hash)
+        raise Error, "llm #{name.inspect}: `params` must be a table, " \
+                     'e.g. params = { chat_template_kwargs = { enable_thinking = false } }'
+      end
+
       key = hash['api_key']
       server = resolve_server(hash['server'], name, by_id, key)
       raise Error, "llm #{name.inspect}: `api_key` belongs on [[server]] #{server.id.inspect}, not here." if key
@@ -562,7 +649,8 @@ module PikuriWeb
         server:         server.url,
         model:          hash['model'],
         api_key:        server.api_key, # nil when omitted → "not-needed" at the bin
-        context_window: cw # nil when omitted → pikuri auto-detects
+        context_window: cw, # nil when omitted → pikuri auto-detects
+        params:         params
       )
     end
 

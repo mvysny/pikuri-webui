@@ -45,8 +45,10 @@ the alternatives that were rejected, live one entry per slug in
   Pikuri-free: {Transcript}, {Broadcaster}, {StreamingMessage},
   {MarkdownRenderer}, {ConversationRegistry}, {Config}, {App}. Pikuri
   types used freely: `bin/pikuri-web-chat`, {SseListener}, {ToolLine},
-  {AgentRunner}, {HistoryReplay}, {ModelCatalog},
-  {ConversationStore#save}. The catalog
+  {AgentRunner}, {HistoryReplay}, {ModelCatalog}, {Titler},
+  {RequestParams}, {ConversationStore#save}. A title crosses as a
+  `String`; {Config} carries an `[[llm]]`'s `params` as a plain `Hash`
+  and {ModelCatalog} is where it becomes a transport's adapter. The catalog
   crosses as names and `[model, server]` pairs, never a `ChatTransport`.
   See `D_pikuri_free_core`.
 
@@ -309,18 +311,24 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, one
   conversation's agent, transcript and turn lifecycle: restore, the
   start-vs-inject (Interloper) decision, the pending model, the save at
-  turn end; broadcasts status.
+  turn end, the fire-and-forget title job; broadcasts status.
 - `lib/pikuri_web/conversation_registry.rb` — `PikuriWeb::ConversationRegistry`,
   the resident runners: mints one per conversation opened, deletes, and
   serves the sidebar rows. Pikuri-free.
+- `lib/pikuri_web/titler.rb` — `PikuriWeb::Titler`, the opening message as a
+  3–7 word title: a throwaway toolless agent per call, the caps, and the
+  reasoning canary.
 - `lib/pikuri_web/history_replay.rb` — `PikuriWeb::HistoryReplay`, a
   saved `Agent::History` back into the events that produced it.
 - `lib/pikuri_web/conversation_store.rb` — `PikuriWeb::ConversationStore`,
   the conversations folder: mints ids, owns the whole commit (`#save`
-  takes the history and writes both halves), lists what is saved, deletes
-  a folder.
+  takes the history and writes both halves), lists what is saved, retitles,
+  deletes a folder.
 - `lib/pikuri_web/model_catalog.rb` — `PikuriWeb::ModelCatalog`, the
   `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport.
+- `lib/pikuri_web/request_params.rb` — `PikuriWeb::RequestParams`, an
+  `[[llm]]`'s `params` table as the Faraday adapter that merges it on;
+  stopgap until pikuri carries params itself.
 - `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
   description for one palette row, and the `CATALOG` a page is served a
   config-gated subset of.
@@ -426,6 +434,10 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   lines, both forms of them ({ToolLine}). Markdown-rendered prose
   (`:assistant`, `:thinking`) is the known exemption: sanitizing the
   source would mangle the Markdown, and kramdown's output is the block.
+  The same rule reaches past blocks to a conversation *title*, which
+  `_sidebar.erb` renders as plain text in four places: {Titler} sanitizes
+  where model output becomes a title, so what reaches disk is already
+  clean and no renderer has to remember.
 - Slash commands are the same shape of contract, in three places:
   {SlashCommand}`::CATALOG` (the palette cannot list what it does not
   hold), the `commands` map `public/js/app.js` hands `composer.js` (the

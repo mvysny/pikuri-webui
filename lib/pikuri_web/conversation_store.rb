@@ -265,6 +265,49 @@ module PikuriWeb
       conversation.dir
     end
 
+    # Whether this conversation still carries the start stamp it was minted
+    # with — i.e. nothing has named it yet.
+    #
+    # The test is the stamp's *shape*, because +meta.json+'s +title+ always
+    # holds something and +#row+ falls back to the stamp when it does not. A
+    # model-written title colliding with +"%Y-%m-%d %H:%M"+ is not a real case.
+    #
+    # @param conversation [Conversation]
+    # @return [Boolean]
+    def stamp_titled?(conversation)
+      conversation.title == stamp_title(conversation.created_at)
+    end
+
+    # Rename a conversation: in memory always, on disk when there is an
+    # envelope to rewrite.
+    #
+    #   conversation = store.retitle(conversation, 'Sinatra Versus Roda For SSE')
+    #
+    # The renamed {Conversation} is the return value because it is frozen and
+    # {#save} writes +conversation.title+ — a caller that kept the old value
+    # would revert the rename at its next save.
+    #
+    # The directory is deliberately untouched: a title never appears in a path,
+    # so renaming moves nothing. A conversation with no envelope yet (minted,
+    # first turn not saved) is renamed in memory alone, and needs no write —
+    # the save that creates the envelope carries the new title. So is one whose
+    # envelope this reader cannot stand behind, which that same save rewrites
+    # wholesale.
+    #
+    # @param conversation [Conversation]
+    # @param title [String] stored as given — capping and sanitizing belong to
+    #   whoever produced it.
+    # @return [Conversation] the same conversation, retitled.
+    # @raise [SystemCallError] like {#save}, when the write itself fails; a
+    #   folder deleted underneath is the caller's to tolerate
+    #   (`D_no_store_lock`).
+    def retitle(conversation, title)
+      path = conversation.dir / META_FILE
+      meta = load_meta(path)
+      atomic_write(path, "#{JSON.pretty_generate(meta.merge('title' => title))}\n") if meta.is_a?(Hash)
+      conversation.with(title: title)
+    end
+
     private
 
     # Write +meta.json+, into a directory {#save} has already created 0700.

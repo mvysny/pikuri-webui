@@ -5,9 +5,9 @@
 # +[model, api_base]+ pair, which is the whole reason this class exists rather
 # than a Hash.
 RSpec.describe PikuriWeb::ModelCatalog do
-  def llm(name, server:, model: 'qwen3.6', api_key: nil, context_window: nil)
+  def llm(name, server:, model: 'qwen3.6', api_key: nil, context_window: nil, params: {})
     PikuriWeb::Config::Llm.new(name: name, server: server, model: model,
-                               api_key: api_key, context_window: context_window)
+                               api_key: api_key, context_window: context_window, params: params)
   end
 
   # The case the pair exists for: one model, two servers.
@@ -38,9 +38,46 @@ RSpec.describe PikuriWeb::ModelCatalog do
     end
 
     # Rationing the server is pikuri's now, and nothing rides the transport to
-    # do it (`D_upstream_request_throttle`).
-    it 'leaves the transports carrying no adapter of ours' do
+    # do it (`D_upstream_request_throttle`) — so only a `params` table puts an
+    # adapter there.
+    it 'leaves a connection with no params carrying no adapter' do
       assert_nil catalog.find('local').transport.faraday_adapter
+    end
+
+    it 'rides a params table onto the transport as a RequestParams adapter' do
+      one = described_class.from_llms(
+        [llm('titler', server: 'http://localhost:8080',
+                       params: { 'chat_template_kwargs' => { 'enable_thinking' => false } })]
+      )
+      assert_operator one.primary.transport.faraday_adapter, :<, Faraday::Adapter::NetHttp
+    end
+  end
+
+  # The titler recipe is a second [[llm]] on one model and one server,
+  # differing only in `params` — so the identity pair is no longer unique, and
+  # which entry owns it decides what a saved conversation reopens on.
+  context 'two entries sharing the [model, api_base] pair' do
+    let(:shadowing) do
+      described_class.from_llms(
+        [llm('Local Qwen 3.6', server: 'http://localhost:8080'),
+         llm('qwen-titler', server: 'http://localhost:8080',
+                            params: { 'chat_template_kwargs' => { 'enable_thinking' => false } })]
+      )
+    end
+
+    it 'resolves the pair to the first entry declared, not the last' do
+      choice = shadowing.resolve(model: 'qwen3.6', server: 'http://localhost:8080/v1')
+      assert_equal 'Local Qwen 3.6', choice.name
+      assert_nil choice.transport.faraday_adapter
+    end
+
+    it 'names the first entry for a transport carrying the pair' do
+      assert_equal 'Local Qwen 3.6', shadowing.name_for(shadowing.find('qwen-titler').transport)
+    end
+
+    it 'keeps the shadowed entry pickable and listed' do
+      assert_equal %w[Local\ Qwen\ 3.6 qwen-titler], shadowing.rows.map { |r| r[:name] }
+      refute_nil shadowing.find('qwen-titler').transport.faraday_adapter
     end
   end
 

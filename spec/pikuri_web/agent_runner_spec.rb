@@ -110,6 +110,12 @@ RSpec.describe PikuriWeb::AgentRunner do
   let(:lock) { PikuriWeb::BigAppLock.new }
   let(:transcript) { PikuriWeb::Transcript.new(lock: lock) }
   let(:conversation) { conversations.create }
+  # A real thread, not ImmediateExecutor: these examples are *about* the busy
+  # state, which needs the turn still running when #submit returns. One thread
+  # is enough for everything but titling, which posts a second job here.
+  let(:executor) { Concurrent::SingleThreadExecutor.new }
+  # Absent for most examples, as it is with no [titler] configured.
+  let(:titler) { nil }
   # Guarded proxy: the spec drives the runner the way a route task does.
   let(:runner) do
     guard(described_class.new(
@@ -117,9 +123,7 @@ RSpec.describe PikuriWeb::AgentRunner do
             agent: agent, interloper: interloper, cancellable: cancellable,
             broadcaster: broadcaster, conversations: conversations, listener: listener,
             transcript: transcript, catalog: catalog, token_log: token_log, lock: lock,
-            # A real thread, not ImmediateExecutor: these examples are *about* the
-            # busy state, which needs the turn still running when #submit returns.
-            executor: Concurrent::SingleThreadExecutor.new
+            titler: titler, executor: executor
           ), lock)
   end
 
@@ -724,6 +728,123 @@ RSpec.describe PikuriWeb::AgentRunner do
         assert_includes log.string, 'transport exploded'
       ensure
         PikuriWeb.logger = Logger.new(File::NULL)
+      end
+    end
+  end
+
+  # Titling is fire-and-forget beside the turn, so every example here asserts
+  # two things at once: that the title landed (or didn't), and that the turn
+  # was untouched either way.
+  context 'titling a new conversation' do
+    # Stands in for Titler: records the openers it was asked about and answers
+    # from the block.
+    class FakeTitler
+      attr_reader :openers
+
+      def initialize(&answer)
+        @answer = answer
+        @openers = []
+      end
+
+      def title_for(opener)
+        @openers << opener
+        @answer.call(opener)
+      end
+    end
+
+    # Titling posts a *second* job, so a single-thread pool would sit it behind
+    # the gated turn and every example here would time out. Production runs an
+    # unbounded pool for exactly this reason.
+    let(:executor) { Concurrent::CachedThreadPool.new }
+    let(:titler) { FakeTitler.new { 'Sinatra Versus Roda For SSE' } }
+    let(:stamp) { conversation.title }
+
+    it 'names the conversation from its opening message' do
+      runner.submit('Compare Sinatra and Roda for SSE')
+      wait_until { runner.conversation.title != stamp }
+
+      assert_equal ['Compare Sinatra and Roda for SSE'], titler.openers
+      assert_equal 'Sinatra Versus Roda For SSE', runner.conversation.title
+    end
+
+    it 'tells every tab the list changed, addressed to no single conversation' do
+      queue = broadcaster.subscribe(nil)
+      runner.submit('hello')
+      wait_until { drain_frames(queue).any? { |f| f.include?('event: conversations') } }
+    end
+
+    it 'leaves the turn alone: the message still ran, and the runner still goes idle' do
+      runner.submit('hello')
+      wait_until { agent.messages.any? }
+      assert_equal ['hello'], agent.messages
+      agent.release
+      wait_until { !runner.busy? }
+    end
+
+    it 'asks once, however many messages follow' do
+      runner.submit('first')
+      wait_until { titler.openers.any? }
+      agent.release
+      wait_until { !runner.busy? }
+      runner.submit('second')
+      wait_until { agent.messages.size == 2 }
+
+      assert_equal ['first'], titler.openers
+    end
+
+    it 'leaves a restored conversation alone — its opener is not this message' do
+      conversations.save(conversation, history_of('an older opener'),
+                         model: 'qwen3.6', server: 'http://localhost:8080/v1')
+      assert runner.restore!
+      runner.submit('hello')
+      wait_until { agent.messages.any? }
+
+      assert_empty titler.openers
+      assert_equal stamp, runner.conversation.title
+    end
+
+    it 'leaves an already-named conversation alone' do
+      named = conversations.retitle(conversation, 'Named By Hand')
+      runner = guard(described_class.new(
+                       conversation: named, agent: agent, interloper: interloper,
+                       cancellable: cancellable, broadcaster: broadcaster,
+                       conversations: conversations, listener: listener, transcript: transcript,
+                       catalog: catalog, token_log: token_log, lock: lock,
+                       titler: titler, executor: executor
+                     ), lock)
+      runner.submit('hello')
+      wait_until { agent.messages.any? }
+
+      assert_empty titler.openers
+      assert_equal 'Named By Hand', runner.conversation.title
+    end
+
+    context 'when the titler cannot answer' do
+      let(:titler) { FakeTitler.new { nil } }
+
+      it 'keeps the stamp' do
+        runner.submit('hello')
+        wait_until { titler.openers.any? }
+        assert_equal stamp, runner.conversation.title
+      end
+    end
+
+    context 'when the titler raises' do
+      let(:titler) { FakeTitler.new { raise 'titler exploded' } }
+
+      it 'logs, keeps the stamp, and finishes the turn' do
+        log = StringIO.new
+        PikuriWeb.logger = Logger.new(log)
+        begin
+          runner.submit('hello')
+          wait_until { log.string.include?('titler exploded') }
+          assert_includes log.string, "titling conversation #{conversation.id} failed"
+          assert_equal stamp, runner.conversation.title
+          agent.release
+          wait_until { !runner.busy? }
+        ensure
+          PikuriWeb.logger = Logger.new(File::NULL)
+        end
       end
     end
   end
