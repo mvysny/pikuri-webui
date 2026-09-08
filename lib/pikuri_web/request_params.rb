@@ -26,9 +26,9 @@ module PikuriWeb
   # registering +faraday.request :json+ *before* the adapter
   # (+RubyLLM::Connection#setup_middleware+). Every way that can rot — a
   # middleware reorder, a body that is no longer JSON, a request that is not a
-  # chat completion — leaves the request untouched instead of broken, so the
-  # failure mode is a parameter silently not applied. Which is precisely what
-  # the titler's +thinking_tokens+ canary exists to notice.
+  # chat completion — leaves the request untouched instead of broken. So the
+  # failure mode is always a parameter silently not applied, never a request
+  # that fails.
   #
   # The merge is shallow and ours wins: a +params+ table names top-level
   # request keys, so +chat_template_kwargs+ replaces any the provider set

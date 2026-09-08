@@ -287,12 +287,10 @@ module PikuriWeb
     # {#save} writes +conversation.title+ — a caller that kept the old value
     # would revert the rename at its next save.
     #
-    # The directory is deliberately untouched: a title never appears in a path,
-    # so renaming moves nothing. A conversation with no envelope yet (minted,
-    # first turn not saved) is renamed in memory alone, and needs no write —
-    # the save that creates the envelope carries the new title. So is one whose
-    # envelope this reader cannot stand behind, which that same save rewrites
-    # wholesale.
+    # No envelope yet (minted, first turn not saved), or one this reader cannot
+    # stand behind, is renamed in memory alone: the next {#save} writes
+    # +meta.json+ whole and carries the title anyway. The directory is
+    # untouched in every case — a title never appears in a path.
     #
     # @param conversation [Conversation]
     # @param title [String] stored as given — capping and sanitizing belong to

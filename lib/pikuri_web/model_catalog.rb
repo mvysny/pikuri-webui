@@ -90,12 +90,8 @@ module PikuriWeb
     # @param choices [Array<Choice>] at least one, names already unique
     def initialize(choices:)
       @choices = choices.freeze
-      # First declaration wins the identity pair, where +to_h+ would hand it
-      # to the last: the recommended titler is a second entry on the *same*
-      # model and server as the conversation model it shadows, so last-wins
-      # would silently reopen every saved conversation onto the titler's
-      # non-thinking connection. Both stay pickable — only which one owns the
-      # pair is decided here.
+      # Reversed so the *first* declaration wins the pair, where +to_h+ hands
+      # it to the last — see the class header on shadowing.
       @by_key = choices.reverse.to_h { |choice| [choice.key, choice] }.freeze
       warn_shadowed_pairs(choices)
       freeze
@@ -143,9 +139,6 @@ module PikuriWeb
     private
 
     # Tell the operator, once at boot, which entries cannot survive a reopen.
-    # Two +[[llm]]+ names on one +[model, api_base]+ pair are legal and the
-    # titler recipe *is* one, but +meta.json+ stores only the pair — so a
-    # conversation picked onto a shadowed entry comes back on the winner.
     #
     # @param choices [Array<Choice>] in declaration order.
     # @return [void]

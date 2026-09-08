@@ -86,12 +86,11 @@ module PikuriWeb
   # == The title
   #
   # A conversation minted fresh is named from its opening message: {#submit}
-  # posts a {Titler} job *beside* the turn — never inside it — once, and the
-  # answer lands through a task that rewrites the envelope and
-  # {#conversation} together. Every part of it is optional and
-  # failure-tolerant: no +[titler]+ configured, a model that answers nothing
-  # usable, or a raise anywhere in that job all leave the start stamp, and
-  # none of them can reach the turn.
+  # posts a {Titler} job *beside* the turn — never inside it — and the answer
+  # lands through a task that rewrites the envelope and {#conversation}
+  # together. No +[titler]+ configured, a model that answers nothing usable,
+  # or a raise anywhere in that job all leave the start stamp, and none of
+  # them can reach the turn.
   #
   # Server-side of the pikuri seam, so it names pikuri types freely
   # (`D_pikuri_free_core`).
@@ -189,10 +188,9 @@ module PikuriWeb
     end
 
     # @return [ConversationStore::Conversation] replaced, not mutated, when a
-    #   title lands ({Titler}) — inside a task, and it is a frozen +Data+, so a
-    #   reader always sees one consistent envelope. A read racing the landing
-    #   can see the pre-title one; the +conversations+ SSE event that follows
-    #   is what makes every tab re-fetch.
+    #   title lands — so a reader always sees one consistent frozen envelope,
+    #   at worst the pre-title one. The +conversations+ SSE event that follows
+    #   the landing is what makes every tab re-fetch.
     attr_reader :conversation
 
     # @return [Transcript] this conversation's rendered blocks
@@ -212,9 +210,8 @@ module PikuriWeb
 
       @agent.load_history!(history)
       HistoryReplay.events(history).each { |event| @listener.on_event(event) }
-      # Titling reads "the opening message", and on a restored conversation the
-      # opener is not the message about to be submitted. Retro-titling what is
-      # already on disk is a separate job nobody has built yet.
+      # Also the flag {#maybe_title} reads: on a restored conversation the
+      # opener is not the message about to be submitted.
       @restored = true
     end
 
@@ -462,15 +459,9 @@ module PikuriWeb
     # Post a titling job for this conversation's opening message, if it wants
     # one.
     #
-    # Once per runner: a title that failed leaves the stamp rather than
-    # retrying on the next message, because "the opener" is this message and
-    # only this message. A conversation restored from disk is skipped for the
-    # same reason.
-    #
-    # Its own job on the shared executor, never part of the turn — the turn
-    # holds a thread for its whole +run_loop+, and titling must not wait for
-    # that or be able to break it. Rationing against the user's own request is
-    # pikuri's per-server permit, not this queue (+D_serial_turn_executor+).
+    # Once per runner, and never for a conversation restored from disk: "the
+    # opener" is this message and only this message, so a title that failed
+    # leaves the stamp rather than retrying against the wrong message.
     #
     # @param opener [String] the message that just started the first turn
     # @return [void]
@@ -485,9 +476,8 @@ module PikuriWeb
 
     # The titling job's body: ask off-domain, land the answer in a task.
     #
-    # Fire-and-forget in the strong sense — every failure ends here. A title is
-    # cosmetic and the stamp is a working fallback, so nothing about this may
-    # reach the turn, the transcript or the browser.
+    # Every failure ends here, which is what makes the class header's promise
+    # true — so this rescue may never narrow to a specific error class.
     #
     # @param opener [String]
     # @return [void]

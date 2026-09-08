@@ -72,21 +72,17 @@ module PikuriWeb
   #   [titler]
   #   llm = "qwen-titler"
   #
-  # Which connection writes conversation titles, named by +[[llm]]+ +name+
-  # and resolved into {#titler_llm}. Naming a *name* is safe where
-  # +D_per_conversation_model+ forbids it, because reference and referent
-  # live in one file, edited together. No +[titler]+ at all leaves
-  # {#titler_llm} +nil+, which means *no titling* — never a fallback to
-  # {#primary_llm}, so an unconfigured file never spends 30 s of a thinking
-  # model on a sidebar row.
+  # Which connection writes conversation titles, resolved into {#titler_llm}.
+  # Naming a *name* is safe where +D_per_conversation_model+ forbids it,
+  # because reference and referent live in one file, edited together. No
+  # +[titler]+ leaves {#titler_llm} +nil+, which means *no titling* — never a
+  # fallback to {#primary_llm}, whose thinking-on titles cost 30 s each.
   #
   # +params+ rides any +[[llm]]+, not only that one, and reaches the server
-  # verbatim. A passthrough rather than a +thinking = false+ boolean because
-  # the wire spelling differs per provider *and* per chat template, and a
-  # mistranslation fails in the expensive direction: silently not applied,
-  # dumping reasoning where a title belongs. Only the shape is checked here —
-  # what the keys *mean* is the server's to say, the same bargain
-  # {.build_search} takes with +engines+.
+  # verbatim — a passthrough rather than a +thinking = false+ boolean, because
+  # the wire spelling differs per provider *and* per chat template. Only the
+  # shape is checked here; what the keys *mean* is the server's to say, the
+  # same bargain {.build_search} takes with +engines+.
   #
   # == Precedence
   #
@@ -186,9 +182,8 @@ module PikuriWeb
     #   @return [Hash{String => Object}] extra request parameters merged into
     #     every chat completion on this connection, verbatim — e.g.
     #     +{"chat_template_kwargs" => {"enable_thinking" => false}}+ to turn
-    #     Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it;
-    #     a non-empty value is also what marks a connection as deliberately
-    #     steered, which the titler's canary reads to pick its log level.
+    #     Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it,
+    #     which is also how "the operator steered this connection" is read.
     Llm = Data.define(:name, :server, :model, :api_key, :context_window, :params) do
       def initialize(params: {}, **rest)
         super(params: params.freeze, **rest)
