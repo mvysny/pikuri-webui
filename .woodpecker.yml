@@ -15,6 +15,13 @@ steps:
     commands:
       - ruby -v
 
+      # --- the sibling checkout the Gemfile points at ---
+      # pikuri-core / pikuri-pdf are path dependencies on ../pikuri (this
+      # shell tracks pikuri master again, not a release), and CI checks out
+      # only this repo — without the clone, bundle install fails outright.
+      # Depth 1 of master: the same tip a developer's sibling checkout has.
+      - git clone --depth 1 https://codeberg.org/mvysny/pikuri.git ../pikuri
+
       # --- restore the gem cache from Hetzner Object Storage ---
       # Keyed on Gemfile.lock so it auto-busts when deps change. Skipped when
       # no credentials are present (e.g. a fork PR), so such builds still pass.

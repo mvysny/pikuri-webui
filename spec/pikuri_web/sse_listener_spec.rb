@@ -19,6 +19,24 @@ RSpec.describe PikuriWeb::SseListener do
     frames.map { |f| f[/event: (\w+)/, 1] }
   end
 
+  # The two tool events as the agent emits them: the raw call beside the
+  # display strings the tool composed, defaulted here to what pikuri derives
+  # for a tool that overrides neither.
+  def tool_call(name:, arguments: {}, display_name: nil, argument: nil)
+    Pikuri::Agent::Event::ToolCall.new(
+      tool_call_id: "call_#{name}", name: name, arguments: arguments,
+      display_name: display_name || Pikuri::Tool.display_name_for(name),
+      argument: argument || Pikuri::Tool.describe_arguments(arguments)
+    )
+  end
+
+  def tool_result(content, name: 'calc', summary: nil)
+    Pikuri::Agent::Event::ToolResult.new(
+      tool_call_id: "call_#{name}", name: name, content: content,
+      summary: summary || Pikuri::Tool.describe_content(content)
+    )
+  end
+
   context 'UserTurn' do
     it 'adds an escaped user block' do
       listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'a <b> & c', mid_loop: false))
@@ -93,7 +111,7 @@ RSpec.describe PikuriWeb::SseListener do
     it 'does not render the bookend twice after a streamed turn' do
       listener.on_event(Pikuri::Agent::Event::ThinkingDelta.new(content: 'x'))
       # A ToolCall between deltas and bookend drops the thinking handle…
-      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'calc', arguments: {}))
+      listener.on_event(tool_call(name: 'calc'))
       # …so the bookend must not re-add the already-streamed content.
       listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'x'))
       thinking_blocks = transcript.to_a.select { |b| b.kind == :thinking }
@@ -128,9 +146,8 @@ RSpec.describe PikuriWeb::SseListener do
     it 'wraps no other kind' do
       listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
       listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'Two.'))
-      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'read', arguments: { path: 'x' }))
-      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: 'ok'))
-      listener.on_event(Pikuri::Agent::Event::FallbackNotice.new(reason: 'retrying'))
+      listener.on_event(tool_call(name: 'read', arguments: { path: 'x' }))
+      listener.on_event(tool_result('ok'))
       listener.on_event(Pikuri::Agent::Event::Cancelled.new)
 
       transcript.to_a.each { |block| refute_includes block.html, '<details' }
@@ -147,7 +164,7 @@ RSpec.describe PikuriWeb::SseListener do
     it 'wipes an unfinished assistant preview when a ToolCall arrives' do
       queue # subscribe before the events
       listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'partial'))
-      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'web_search', arguments: { query: 'x' }))
+      listener.on_event(tool_call(name: 'web_search', arguments: { query: 'x' }))
       kinds = transcript.to_a.map(&:kind)
       assert_equal [:tool_call], kinds
       assert_includes event_types(drain_frames(queue)), 'remove'
@@ -168,7 +185,7 @@ RSpec.describe PikuriWeb::SseListener do
   # preference in server state.
   context 'tool events' do
     it 'puts both forms of a call in one tool_call block' do
-      listener.on_event(Pikuri::Agent::Event::ToolCall.new(name: 'calc', arguments: { expr: '1+1' }))
+      listener.on_event(tool_call(name: 'calc', arguments: { expr: '1+1' }, display_name: 'Calc', argument: '1+1'))
       block = transcript.to_a.fetch(0)
       assert_equal :tool_call, block.kind
       assert_includes block.html, '<span class="tool-short">Calc(1+1)</span>'
@@ -176,17 +193,17 @@ RSpec.describe PikuriWeb::SseListener do
     end
 
     it 'puts both forms of a result in one tool_result block' do
-      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: 'x' * 500))
+      listener.on_event(tool_result('x' * 500, summary: 'Scraped 500 B'))
       block = transcript.to_a.fetch(0)
       assert_equal :tool_result, block.kind
-      assert_includes block.html, '<span class="tool-short">OK, 500 B</span>'
+      assert_includes block.html, '<span class="tool-short">Scraped 500 B</span>'
       assert_includes block.html, '… (500 bytes total)</span>'
     end
 
     # The sanitizing lives in ToolLine and is specced there; this asserts only
     # that the listener goes through it rather than escaping on its own.
     it 'reaches the transcript sanitized, not merely escaped' do
-      listener.on_event(Pikuri::Agent::Event::ToolResult.new(content: "Deleted‮ txet"))
+      listener.on_event(tool_result("Deleted‮ txet"))
       html = transcript.to_a.fetch(0).html
       assert_includes html, 'u{202e}'
       refute_includes html, "‮"

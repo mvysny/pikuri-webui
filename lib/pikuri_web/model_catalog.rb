@@ -52,27 +52,24 @@ module PikuriWeb
     # per-chat +RubyLLM::Context+ — so no process-global +RubyLLM.configure+ is
     # involved and two conversations on two servers coexist.
     #
+    # Nothing here rations the server: how many requests may fly at one
+    # +api_base+ is +Pikuri::Agent::ServerPermits+' business, a registry keyed
+    # on the server rather than anything a transport carries
+    # (+D_upstream_request_throttle+). {#servers} is what a boot script sizes
+    # it from.
+    #
     # @param llms [Array<Config::Llm>] every configured connection, in
     #   declaration order
-    # @param permits [Integer, nil] concurrent completions allowed *per server*
-    #   — entries sharing an +api_base+ share one {ThrottledAdapter} pool, since
-    #   the slots are the server's. nil leaves the transports unthrottled
     # @return [ModelCatalog]
-    def self.from_llms(llms, permits: nil)
-      throttles = {}
+    def self.from_llms(llms)
       new(choices: llms.map do |llm|
         key = llm.api_key.to_s.strip
-        transport = Pikuri::Agent::ChatTransport.from_openai_server(
-          server: llm.server,
-          model: llm.model,
-          api_key: key.empty? ? 'not-needed' : key,
-          context_window: llm.context_window
-        )
-        if permits
-          adapter = throttles[transport.api_base] ||= ThrottledAdapter.with_permits(permits)
-          transport = transport.with(faraday_adapter: adapter)
-        end
-        Choice.new(name: llm.name, transport: transport)
+        Choice.new(name: llm.name, transport: Pikuri::Agent::ChatTransport.from_openai_server(
+                     server: llm.server,
+                     model: llm.model,
+                     api_key: key.empty? ? 'not-needed' : key,
+                     context_window: llm.context_window
+                   ))
       end)
     end
 
@@ -105,6 +102,11 @@ module PikuriWeb
     # @return [Choice, nil] nil when the conversation saved no connection, or
     #   when the one it saved is no longer in the config file
     def resolve(model:, server:) = @by_key[[model, server]]
+
+    # @return [Array<String>] every distinct inference server, declaration
+    #   order — one entry per box to size, not per +[[llm]]+, because two
+    #   entries running two models on one server contend for its slots
+    def servers = @choices.map(&:server).uniq
 
     # @param transport [Pikuri::Agent::ChatTransport]
     # @return [String] its display name, or the raw model id when the

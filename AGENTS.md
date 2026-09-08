@@ -17,12 +17,15 @@ all pikuri. We own the web shell only.
 Working against a live llama.cpp server: turns stream, conversations save
 and reopen, and a turn keeps running while you read another conversation.
 
-Depends on **released** `pikuri-core` / `pikuri-pdf`, pinned to one minor
-(`~> 0.1.0`) because pikuri is pre-1.0 — never widen that to `~> 0.1`,
-and never bump one gem without the other. An upgrade follows pikuri's
-`CHANGELOG.md` — its `**Breaking:**` entries carry the migration
-instructions, and pikuri-tui's HEAD is the worked example for anything
-ambiguous. See `DECISIONS.md` `D_released_pikuri_gems`.
+Depends on `pikuri-core` / `pikuri-pdf` **by path**, on the `../pikuri`
+sibling checkout at master — this shell needs `Agent::ServerPermits`,
+which no release carries. So a clone of this repo needs one of pikuri
+beside it (CI clones it), master can break the build on any `bundle
+install`, and `bundle exec rake check` is what catches that: pikuri's
+`CHANGELOG.md` `**Breaking:**` entries carry the migrations, with
+pikuri-tui's HEAD as the worked example for anything ambiguous. Going
+back to a released pin is a good change the day a release carries that
+surface. See `DECISIONS.md` `D_path_deps_on_pikuri_master`.
 
 ## Scope decisions
 
@@ -172,13 +175,15 @@ the alternatives that were rejected, live one entry per slug in
   `--bind` defaults to 127.0.0.1; anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
-- **The server is rationed per *request*, not per turn.** `--turns N` is N
-  permits in {ThrottledAdapter}, taken for the length of one completion
-  and given back — so a turn off running a tool is not holding a slot the
-  server could be using. The pool is per `api_base`, because the slots are
-  the server's: two `[[llm]]` entries on one box share one pool. The turn
-  executor is sized `2N` and is now only a thread bound; never re-derive
-  the server's load cap from it. See `D_throttle_at_the_request`.
+- **The server is rationed per *request*, by pikuri — this shell only
+  sizes the pool.** `--turns N` is `ServerPermits.limit(server, N)`, one
+  call per distinct server at boot ({ModelCatalog#servers}); the permit is
+  pikuri's, taken for one HTTP request and given back, so a turn off
+  running a tool holds no slot. Size *explicitly* even though pikuri
+  auto-sizes from `/props`: an `[[llm]]` with a `context_window` skips
+  that probe, and unsized means unlimited. Never re-add a throttle here,
+  and never re-derive the server's load cap from the turn executor's `2N`.
+  See `D_upstream_request_throttle`.
 
 - **Turns run on one shared executor, and its pool size is not a
   correctness device.** Sending never refuses for load — a turn with no
@@ -212,9 +217,10 @@ the alternatives that were rejected, live one entry per slug in
   server-held mode, never a form chosen at render time, and never a
   `<details>` (that stays `:thinking`'s alone). Both forms sanitize, the
   argument dump included: the TUI's `inspect` carve-out does not port.
-  The short form is `CamelCase(first argument)` over what came back, and
-  a result short enough to read is shown rather than measured.
-  See `D_both_forms_in_the_block`.
+  The short form is the *tool's* — `display_name` / `argument` /
+  `summary`, composed upstream and carried on the event; {ToolLine}
+  defangs and caps it, and never goes back to guessing one from the name
+  and arguments. See `D_both_forms_in_the_block`.
 
 - **Theme is a presentational cookie, not transcript state.** Eleven
   semantic tokens, two palettes, both in `public/style.css`; `GET /`
@@ -308,10 +314,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   takes the history and writes both halves), lists what is saved, deletes
   a folder.
 - `lib/pikuri_web/model_catalog.rb` — `PikuriWeb::ModelCatalog`, the
-  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport;
-  mints one throttle per server and hangs it on each.
-- `lib/pikuri_web/throttled_adapter.rb` — `PikuriWeb::ThrottledAdapter`,
-  a Faraday adapter holding a permit for the length of one completion.
+  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport,
+  plus the distinct servers boot sizes `ServerPermits` from.
 - `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
   description for one palette row, and the `CATALOG` a page is served a
   config-gated subset of.
@@ -370,8 +374,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `public/manifest.webmanifest` — the PWA manifest: name, standalone
   display, the three manifest icons.
 - `bin/pikuri-web-chat` — boot script: config load, the model catalog, the
-  conversation factory (agent + tools + Interloper + the connection this
-  conversation is minted on, one wiring for every conversation), the
+  per-server permit sizing, the conversation factory (agent + tools +
+  Interloper + the connection this conversation is minted on, one wiring
+  for every conversation), the
   shared turn executor, the serialization domain, the trifecta report,
   Puma start (server settings and the shutdown hook). Flags are only what
   the config file has no home for

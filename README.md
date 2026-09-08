@@ -48,9 +48,19 @@ go *find* one.
 
 ## Install
 
+pikuri itself is a **path dependency on a sibling checkout**, not a
+released gem — this shell uses `Agent::ServerPermits`, which no pikuri
+release carries yet. So clone the two side by side:
+
 ```sh
+git clone https://codeberg.org/mvysny/pikuri.git
+git clone https://codeberg.org/mvysny/pikuri-web.git
+cd pikuri-web
 bundle install
 ```
+
+`../pikuri` at master is what `bundle install` reads; `bundle exec rake
+check` is how you find out whether master still fits.
 
 ## Run
 
@@ -73,11 +83,14 @@ Ctrl+C stops it. Open browser tabs don't delay the exit.
 
 ### How many conversations can think at once
 
-`--turns N` is the number of **completions in flight against your
-inference server** — match it to your server's parallel slots, so
-`--turns 4` against llama.cpp started with `--parallel 4`. The default is
-one. Setting it higher than the server has slots doesn't buy throughput,
-it just moves the queue from this process into that one.
+`--turns N` is the number of **requests in flight against your inference
+server** — match it to your server's parallel slots, so `--turns 4`
+against llama.cpp started with `--parallel 4`. The default is one.
+Setting it higher than the server has slots doesn't buy throughput, it
+just moves the queue from this process into that one.
+
+The count is per *server*, not per `[[llm]]` entry: two entries running
+two models on one box share its slots, because the slots are the box's.
 
 ```sh
 bin/pikuri-web-chat --turns 4
@@ -92,6 +105,9 @@ inference: it also runs tools. A conversation waiting on a web search is
 not using the server, so its slot goes to somebody who is. That is why
 the cap is on the request rather than on the turn, and it means a fast
 second conversation can answer while a first is off fetching a page.
+
+■ works on a conversation still waiting for a slot, not only on one the
+server is already answering.
 
 Note that web searches still serialize across conversations however high
 you set this — the rate limiter that keeps you off provider blocklists is

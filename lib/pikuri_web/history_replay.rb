@@ -21,10 +21,10 @@ module PikuriWeb
   # == What a reload cannot show
   #
   # Only messages are stored, so anything that never became one is gone:
-  # +! cancelled+ and run-loop failure blocks, +FallbackNotice+ lines, and the
-  # partial assistant text a cancel deliberately preserves (it raises out of
-  # +Chat#ask+ before the message lands). A reloaded turn that was cancelled
-  # mid-answer shows the user's message with no reply under it.
+  # +! cancelled+ and run-loop failure blocks, and the partial assistant text a
+  # cancel deliberately preserves (it raises out of +Chat#ask+ before the
+  # message lands). A reloaded turn that was cancelled mid-answer shows the
+  # user's message with no reply under it.
   #
   # == Implementation details
   #
@@ -64,12 +64,13 @@ module PikuriWeb
     # @return [Array<Pikuri::Agent::Event::Base>]
     def events(history)
       messages = history.repair_interrupted_tool_calls.messages
-      results = messages.select { |m| m.role == 'tool' }.to_h { |m| [m.tool_call_id, m.content] }
+      results = messages.select { |m| m.role == 'tool' }.to_h { |m| [m.tool_call_id, m] }
       messages.flat_map { |message| events_for(message, results) }
     end
 
     # @param message [Pikuri::Agent::History::Message]
-    # @param results [Hash{String => String}] tool-call id → observation
+    # @param results [Hash{String => Pikuri::Agent::History::Message}] tool-call
+    #   id → the +tool+ message answering it
     # @return [Array<Pikuri::Agent::Event::Base>]
     def events_for(message, results)
       case message.role
@@ -91,8 +92,13 @@ module PikuriWeb
       Pikuri::Agent::Event::UserTurn.new(content: message.content)
     end
 
+    # The tool that composed a call's display strings is long gone by replay
+    # time, so they come off the file — and where the file predates them
+    # (+nil+), off +Pikuri::Tool+'s mechanical defaults, which is the same
+    # floor pikuri lands a live call on when no +Tool+ answers to the name.
+    #
     # @param message [Pikuri::Agent::History::Message]
-    # @param results [Hash{String => String}]
+    # @param results [Hash{String => Pikuri::Agent::History::Message}]
     # @return [Array<Pikuri::Agent::Event::Base>]
     def assistant_events(message, results)
       events = []
@@ -100,9 +106,18 @@ module PikuriWeb
       events << Pikuri::Agent::Event::Thinking.new(content: thinking) unless thinking.empty?
       events << Pikuri::Agent::Event::Assistant.new(content: message.content) unless message.content.empty?
       message.tool_calls.each do |call|
-        events << Pikuri::Agent::Event::ToolCall.new(name: call.name, arguments: call.arguments)
+        events << Pikuri::Agent::Event::ToolCall.new(
+          tool_call_id: call.id, name: call.name, arguments: call.arguments,
+          display_name: call.display_name || Pikuri::Tool.display_name_for(call.name),
+          argument: call.argument || Pikuri::Tool.describe_arguments(call.arguments)
+        )
         result = results[call.id]
-        events << Pikuri::Agent::Event::ToolResult.new(content: result) if result
+        next unless result
+
+        events << Pikuri::Agent::Event::ToolResult.new(
+          tool_call_id: call.id, name: call.name, content: result.content,
+          summary: result.summary || Pikuri::Tool.describe_content(result.content)
+        )
       end
       events
     end
