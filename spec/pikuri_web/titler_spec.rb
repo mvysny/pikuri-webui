@@ -13,9 +13,9 @@ require 'pikuri/testing'
 #
 # Two things are deliberately not asserted here, because a unit spec cannot:
 # that the <opener> wrapper makes an imperative opener get *titled* rather than
-# obeyed, and that the system prompt yields 3-7 words. Both are measured
-# against a live model by the harness in ideas/conversation-titles/, and the
-# fake records no request bodies to check the wrapper against anyway.
+# obeyed, and that the system prompt yields 3-7 words. Both need a live model,
+# which is what bin/probe-titler is for, and the fake records no request bodies
+# to check the wrapper against anyway.
 describe PikuriWeb::Titler do
   def titler(reply, params_declared: true)
     transport = Pikuri::Testing.fake_transport { |llm| llm.reply(reply) }

@@ -424,12 +424,24 @@ stamp, your turn is untouched, and nothing appears in the transcript. A title
 lost that way is retried the next time the conversation is opened in a fresh
 process.
 
+If your model cannot be talked out of thinking at all, `llama-server` can do it
+from its side instead — `--reasoning-budget 0`, or `--reasoning off` — and then
+the titler is just an `[[llm]]` pointed at that alias with no `params` at all.
+It costs a second full copy of the weights in VRAM, since each alias is its own
+process, so it is the better answer only on a box with room.
+
 **On smaller models: there is no recommendation to give.** A 4B is fast, but
 titling is mostly a test of following instructions rather than of knowing
 anything, and both small instruct models tried were rejected — one answered in
-the wrong language five times out of eight. If you have a candidate, the probe
-scripts under `ideas/conversation-titles/` are how the current one was
-measured.
+the wrong language five times out of eight. If you have a candidate, point
+`[titler]` at it and run:
+
+```
+bin/probe-titler            # eight openers: short, long, code, a backtrace, Russian
+bin/probe-titler --attacks  # six attempts to talk it out of titling
+```
+
+It drives the real titler, so what you see is what the sidebar would get.
 
 ## Develop
 

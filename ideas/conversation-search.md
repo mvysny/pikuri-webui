@@ -148,11 +148,14 @@ Settled, except where noted. From a real `history.json`, a message is:
   match is at least legible in the result row.
 - The title from `meta.json` — **free**, since `#list` already reads it.
 
-**The free tier is weak today, and that is a sequencing argument.** Titles are start stamps
-(`stamp_title`), so the zero-cost tier can only match dates — `2026-06` as a poor man's month filter,
-which is genuinely useful for this feature's purpose but is not what anyone types first. If
-`ideas/conversation-titles.md` lands (auto-title or manual rename), the cheap tier becomes the tier
-that actually works and most searches would never open a file. **Consider doing titles first.**
+**The free tier stopped being weak — titles landed first.** The sequencing argument here was that
+start-stamp titles (`stamp_title`) let the zero-cost tier match only dates, so titles should come
+first. They did (`D_titler_connection`, `D_lazy_retro_titling`): a conversation is named from its
+opening message, and old ones are named as they are opened. So the cheap tier is now the tier that
+actually works, and most searches should never need to open a `history.json`. **Re-cost this feature
+against real titles before building anything** — the file-reading tiers below may not be worth it
+any more. Note the corollary: a conversation nobody has opened since the titler was configured is
+still stamp-titled, so the free tier is not uniformly good yet.
 
 ## Cost, and why no index yet
 

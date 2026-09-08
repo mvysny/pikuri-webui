@@ -53,6 +53,252 @@ replacement fresh.
 
 ---
 
+## D_titler_connection — `[titler]` names an `[[llm]]`, and no `[titler]` means no titling
+
+**Status:** Accepted, shipped. `Config#titler_llm` resolves `[titler] llm` against the
+`[[llm]]` list by `name`; `nil` switches the feature off.
+
+**Context.** A conversation was titled by its start stamp. Naming it from the
+opening message needs a model, and the first instinct was to reuse the
+conversation's own — "the first configured `[[llm]]`, same as a conversation
+with nothing saved", with the measured 1.2 s a title (`D_llm_params_passthrough`)
+as the argument that no knob was left to buy.
+
+**Decision.** A knob after all, because that argument holds only while the
+primary model *can* be made non-thinking. Thinking-only models are a real and
+growing category, and the day someone's first `[[llm]]` is one, no parameter
+rescues the feature — a second connection is the only exit. `[titler]` is that
+exit. Referencing by `name` rather than an id is safe here where
+`D_per_conversation_model` forbids it, because reference and referent live in
+one file, edited together, and `.load` already enforces `name` uniqueness.
+
+**Unset means off, never a fallback to `#primary_llm`.** So a file that says
+nothing never spends 30 s of a thinking model on a sidebar row, an upgrade
+brings no surprise inference load, and retro-titling (`D_lazy_retro_titling`)
+is priced at 1.2 s a title or nothing, with no third case.
+
+**Rejected: a hardcoded small sidecar model.** Probed and rejected on evidence,
+and the premise was wrong twice over. `Qwen3-4B-Instruct` is fast (0.4 s) and
+obeyed 4 of 6 delimiter attacks including a bare `PWNED`; `Qwen2.5-7B-Instruct`
+answered in the wrong language 5 times in 8 (Turkish, German, Chinese) and
+placed Australia's capital in Canada. The job is mostly instruction-following
+rather than knowledge, so a 4B is not ample — and the speed case evaporated
+anyway, because a 3B-active MoE emitting ten tokens with thinking off is
+already ~1.2 s, of which most is prefill and HTTP. What is rejected is
+*hardcoding* one, not *allowing* one: the whole point of this entry is that the
+file chooses.
+
+**Rejected: a `[web] title_model` key.** Titling is not web-specific and the
+config file is shared by every pikuri shell (`D_schema_complete_config`), so
+the table is top-level.
+
+**Rejected: a flat `titler = "name"`.** A table gives a later word cap or
+explicit off-switch a home without a second top-level key.
+
+**Rejected: excluding the titler entry from `ModelCatalog`.** Its transport has
+to come from somewhere, and picking it for a conversation is a legitimate thing
+to want — a conversation that does not think. The cost of leaving it visible is
+`D_shadowed_identity_pair`.
+
+## D_llm_params_passthrough — An `[[llm]]`'s `params` table goes to the server verbatim, through a Faraday adapter
+
+**Status:** Accepted, shipped, and the adapter half is explicitly temporary.
+`Config::Llm#params` is any TOML table; `ModelCatalog.from_llms` turns a
+non-empty one into a `RequestParams` adapter on that connection's transport.
+
+**Context.** Titling on the local 35B needs reasoning off, and that is not a
+detail: matched benchmark, same eight openers and the same agent, only the
+injected parameter differing — **1.2 s and 8 completion tokens a title against
+31.1 s and 625**, i.e. 27× on wall clock and 83× on tokens. Thinking-off is also
+the steadier (0.9–1.4 s against 1.5–72.2 s, a 48× spread on identical work) and
+the safer: with thinking on, one of the eight put ~4000 characters of
+chain-of-thought into `content` where a title belongs, and `reasoning_content`
+did not catch it. Only `chat_template_kwargs: {enable_thinking: false}`
+suppresses it, and `Pikuri::Agent` exposes no channel for an extra request
+parameter.
+
+**Decision.** Carry the parameter in the config as an opaque table, and get it
+onto the wire through `ChatTransport#faraday_adapter` — pikuri's documented
+generic HTTP seam. ruby_llm registers `faraday.request :json` *before* the
+adapter (`RubyLLM::Connection#setup_middleware`), so the adapter sees a
+serialized body it can parse, merge and re-serialize. The config spelling is
+the part meant to last: when pikuri grows a real `params:`, the file does not
+change and `request_params.rb` is deleted.
+
+**Rejected: `thinking = false` as the config key.** The obvious option, and the
+one originally asked for. The wire spelling is not one thing — llama.cpp+Qwen
+is `chat_template_kwargs.enable_thinking`, other GGUF templates spell their
+kwarg differently, OpenAI is `reasoning_effort`, Anthropic is
+`thinking: {type: "disabled"}` — so a boolean needs translating per provider
+*and per chat template*. A wrong translation fails in the one direction that is
+expensive here: **silently not applied**, which is the 4000-character essay
+above. A key that promises portability and quietly does not apply is worse than
+a key that says exactly what it sends. Sugar can still be added later, in the
+shell's config parser rather than as semantics in `ChatTransport` — at the cost
+of being written twice (`D_schema_complete_config`).
+
+**Rejected: `reasoning_effort`.** Accepted by the server and then effectively
+ignored — `"none"` and `"low"` both still emitted a full reasoning block
+(679–1070 tokens against a 1493-token baseline).
+
+**Rejected: prompt-level `/no_think`.** Qwen 3.6 dropped Qwen 3's soft switches.
+All three placements — system prompt, appended to the user message, prefixed to
+it — emitted a full reasoning block, and upstream says the API parameter is the
+supported route. The assistant-prefill variant (`<think></think>`) is dead more
+interestingly: llama.cpp answers `Assistant response prefill is incompatible
+with enable_thinking`, so prefill is available only once thinking is *already*
+off and can never be the thing that turns it off.
+
+**Rejected: making it the server's property instead, with no code at all.**
+`llama-server` has the flags (`--reasoning-budget 0`, `--reasoning off`,
+`--chat-template-kwargs`) and a router can alias one GGUF twice, so thinking-off
+becomes a connection and the titler is just a second `[[llm]]`. Strictly
+cleaner than the adapter — declarative, operator-visible, nothing
+provider-specific in this repo — and still the right choice on a box with room.
+It costs a second full copy of the weights in VRAM (~20 GB at Q4_K_M), because
+each alias is its own process, and a swap-on-demand router does not help when
+what you want is a title *during* a turn. The recipe stays available to anyone
+with the VRAM; `params` is what works on one box.
+
+**Rejected: reaching past pikuri to `RubyLLM::Chat#with_params`.** Would make
+this project own LLM transport wiring and replicate `Agent#build_context`,
+`openai_use_system_role = true` included, for a result the adapter already
+reaches.
+
+**Rejected: asking pikuri for the params channel first.** Still the right
+long-term home, and cheap now that this shell is on `../pikuri` master by path
+(`D_path_deps_on_pikuri_master`). Deferred deliberately: doing it upstream first
+spends a pikuri change *and* a pikuri-tui change on a design not yet run against
+a real server, and the config file — the expensive half to change later — is
+identical either way.
+
+**Consequence — pikuri-tui stops booting until its allowlists widen.** Both
+shells' parsers are strict over the one shared file, so `[titler]` and `params`
+raise `unknown top-level key(s)` / `llm[i]: unknown key(s)` there. Accepted
+deliberately, and fixed upstream as two allowlist entries that shell *carries*
+and reads nothing from — the standing obligation of
+`D_schema_complete_config` running the other way. There is no local escape: a
+project-local overlay or an `ENV` override is exactly what that decision
+forbids.
+
+**Consequence — every rot path degrades to "not applied", never "broken".** A
+middleware reorder, a body that is no longer JSON, a request that is not a chat
+completion: each leaves the request untouched. That is what makes the coupling
+to ruby_llm's middleware order acceptable, and what `D_canary_severity` watches
+for.
+
+## D_shadowed_identity_pair — Two `[[llm]]`s on one `[model, server]` pair: the first declared wins
+
+**Status:** Accepted, shipped. `ModelCatalog#initialize` folds `@by_key` over
+`choices.reverse`, so `#resolve` and `#name_for` answer with the earliest entry;
+boot logs the shadowed names.
+
+**Context.** `D_per_conversation_model` made `[model, api_base]` a
+conversation's stored identity because a name is renameable and a model id alone
+cannot tell two servers apart. The pair was assumed unique. The recommended
+titler recipe (`D_titler_connection`) breaks that assumption: it is a second
+`[[llm]]` on **the same model and the same server**, differing only in `params`.
+`Config` cannot catch it — it enforces unique `name`, and two entries on one
+pair are legal and now recommended.
+
+**Decision.** Give the pair to the first declaration. Found by wiring rather
+than predicted: `to_h` is last-wins, so shipping the recipe as written would
+have reopened every saved conversation on the titler's non-thinking connection
+and shown `qwen-titler` as the primary's name in the status bar. The shadowed
+entries stay pickable and in `#rows`; what they lose is durability, because
+`meta.json` stores the pair and nothing finer — a conversation picked onto one
+comes back on the winner. Boot says which names that affects, ending "Expected
+for a titler entry."
+
+**Rejected: widening the stored identity to tell them apart.** A `meta.json`
+schema change for a case whose entire point is that the two *are* one model on
+one box.
+
+**Rejected: keeping `to_h` and declaring the titler first.** Rests the whole
+behaviour on config file ordering, which nothing states or checks.
+
+**Why this needs an entry:** the fold reads as an arbitrary `.reverse`, and
+`model_catalog_spec.rb` is the only other thing standing between a plausible
+"simplification" back to `to_h` and the silent failure above.
+
+## D_canary_severity — Reasoning tokens on a title are diagnostic only, and the level follows declared intent
+
+**Status:** Accepted, shipped. `Titler` reads `thinking_tokens` off
+`Event::Tokens` and logs at most once per process.
+
+**Context.** The degradation mode of a thinking-off parameter is *silently not
+applied* (`D_llm_params_passthrough`), so it wants a signal. pikuri already
+carries `thinking_tokens` per assistant message, which makes the signal exact —
+`> 0` — rather than the threshold ("600 tokens or 30 s") first planned, with no
+tuning and no false positive from a merely slow server.
+
+**Decision.** Three separate things, which look like one:
+
+- **It never affects the title.** The earlier plan — "prefer keeping the stamp
+  over storing a suspect title" — must not hang off this signal, or it punishes
+  an operator who *cannot* turn thinking off and accepts slow titles.
+  Suspectness is a property of the string (over the cap, multi-line, carrying
+  `</think>`) and the caps decide it. A thinking-on title is a real title.
+- **Level by intent.** `params` declared and it reasoned anyway ⇒ WARN, a stated
+  intent silently not applied. No `params` ⇒ INFO, a connection nobody steered
+  doing what it was told.
+- **Once per process, never per title.** A line on every title teaches the
+  reader to filter it, which is how the regression it exists to catch goes
+  unseen.
+
+**Rejected: one fixed level.** WARN nags the operator with a thinking-only
+model on every boot; INFO buries a real config bug.
+
+**Known crudeness, accepted:** intent is read as "`params` is non-empty",
+because a passthrough cannot know that `chat_template_kwargs.enable_thinking`
+*means* thinking. This is `D_llm_params_passthrough`'s bill coming due, and it
+costs one spurious line in a config that set `params` for something else.
+
+## D_lazy_retro_titling — A stored conversation is titled when it is opened, never by a sweep
+
+**Status:** Accepted, shipped. `AgentRunner#restore!` posts the titling job for
+a stored conversation still carrying its start stamp.
+
+**Context.** Titling only new conversations leaves every conversation from
+before the feature stamp-titled with no path to a name. A title needs the
+opening message, and the obvious way to get one for an old conversation is to
+load its history — which, done in bulk, means reading every history on disk.
+
+**Decision.** Title on open, off the `History` `#restore!` has already replayed.
+That makes the per-conversation cost exactly zero until someone opens it, needs
+no second disk read, and reaches precisely the conversations a person looks at.
+"Is this still stamp-titled" is `ConversationStore#stamp_titled?`, comparing
+against `stamp_title(created_at)`.
+
+**Rejected: a bulk sweep after Puma binds.** Priced, and affordable — 100
+conversations at 1.2 s is two minutes of background work — but it pays for
+conversations nobody opens, and it reads every history at boot. (At the
+thinking-on 31.1 s it would be 52 minutes of inference-server occupancy
+fighting every real turn, which is what made this a gate rather than a
+preference before `D_llm_params_passthrough`.)
+
+**Rejected: a sweep capped to the newest N.** Same cost shape, plus a number
+nobody can choose.
+
+**Rejected: titling at boot proper.** The boot script warms one conversation
+before Puma binds; work added there delays the listen.
+
+**Rejected: a `title_source` key in `meta.json`.** The better answer *once
+manual rename exists*, because it is what stops auto-titling overwriting a name
+a person chose. Rename is not built, so the key would carry nothing today, and
+the stamp-shape test costs one line. **Revisit when rename lands:** the regex is
+not enough then, and existing conversations need the key backfilled.
+
+**Consequence — the opener is capped at `Titler::MAX_OPENER_CHARS`.** This path
+forced it: a conversation from months ago can open with a pasted stack trace or
+a whole file, where a title still comes out of the first sentence or two.
+Applies to new conversations too.
+
+**Consequence — retry is per process, not per message.** The once-per-runner
+guard means a title lost to an unreachable server is not retried on the next
+message (whose text is not the opener), but *is* retried when the conversation
+is opened in a fresh process.
+
 ## D_max_concurrent_requests — A `[[server]]` table sizes the permits; `--turns` retires
 
 **Status:** Accepted, shipped. **Refines `D_upstream_request_throttle`**, whose

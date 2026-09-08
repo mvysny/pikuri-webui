@@ -207,6 +207,40 @@ the alternatives that were rejected, live one entry per slug in
   `style.css`, and are exceptions on the record — don't grow a third.
   See `D_icon_plate`.
 
+- **A conversation's title comes from its opening message, on the
+  connection `[titler]` names — and no `[titler]` means no titling.**
+  Never a fallback to the primary connection. A fresh conversation is
+  titled from the message that starts it, a stored one from the opener in
+  the history {AgentRunner#restore!} has already replayed, at most once
+  per runner and never by a sweep. The job runs *beside* the turn on the
+  shared executor: no `[titler]`, no usable answer, or a raise anywhere in
+  it leaves the start stamp and cannot reach the turn.
+  See `D_titler_connection`, `D_lazy_retro_titling`.
+
+- **An `[[llm]]`'s `params` reaches the server verbatim, and the caps on a
+  title are load-bearing.** `params` is a passthrough — never a
+  `thinking = false` boolean, whose wire spelling differs per provider
+  *and* per chat template — installed as a {RequestParams} adapter at
+  `ModelCatalog.from_llms`, the one place a `Config::Llm` becomes a
+  transport, so any connection can declare it. It is a stopgap for
+  pikuri's missing params channel; the TOML spelling is what must survive
+  it. Every way it can rot leaves the request *untouched*, so a parameter
+  is silently not applied rather than a request broken — which is why
+  {Titler}'s word and character caps and its `</think>` strip stay: a
+  thinking model has been measured putting ~4000 characters of reasoning
+  where a title belongs. `thinking_tokens > 0` is watched for exactly
+  that, and is diagnostic only — it never discards a title.
+  See `D_llm_params_passthrough`, `D_canary_severity`.
+
+- **`[model, api_base]` is not unique, and the first `[[llm]]` declared
+  owns it.** The recommended titler is a second entry on one model and one
+  server, differing only in `params`, so {ModelCatalog}'s fold runs over
+  `choices.reverse` — `to_h` would hand the pair to the *last* and reopen
+  every saved conversation on the titler's connection. Shadowed entries
+  stay pickable and listed; what they lose is surviving a reopen, because
+  `meta.json` stores the pair and nothing finer. Boot logs which they are.
+  See `D_shadowed_identity_pair`, `D_per_conversation_model`.
+
 - **Reasoning is collapsible per block, and never hidden.** Every
   `:thinking` block is its own `<details>`; `[ui] show_thinking` sets
   whether blocks *start* open, never whether they render. `<details>` is
@@ -394,6 +428,9 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   shared turn executor, the serialization domain, the trifecta report,
   Puma start (server settings and the shutdown hook). Flags are only what
   the config file has no home for — `--port` / `--bind` / `--dev`.
+- `bin/probe-titler` — runs the eight probe openers (and six attacks) through
+  {Titler} on the configured `[titler]` connection; the corpus a candidate
+  model is judged against. Maintainer tool, run by hand.
 - `bin/regen-icons` — re-renders every plated icon from `kuri.svg`; holds
   the sizes, the plate colour and the maskable bound. Maintainer tool, run
   by hand, not part of boot or any build.

@@ -6,9 +6,8 @@ require 'json'
 
 # Specs for the stopgap that carries an [[llm]]'s `params` table to the
 # server. The merge itself is unit-tested against a hand-built Faraday::Env,
-# which is what the adapter sees; the round trip through a real ruby_llm chat
-# is a live-server check (ideas/conversation-titles/spike-thinking-off-adapter.rb),
-# not something a spec can assert without one.
+# which is what the adapter sees; that the parameter actually reaches a model
+# and silences it needs a live server, which is bin/probe-titler's job.
 describe PikuriWeb::RequestParams do
   THINKING_OFF = { 'chat_template_kwargs' => { 'enable_thinking' => false } }.freeze
 
