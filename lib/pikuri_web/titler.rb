@@ -35,6 +35,12 @@ module PikuriWeb
     # reasoning where a title belongs. CSS ellipsises as a second backstop.
     MAX_CHARS = 80
 
+    # Characters of the opener the model is shown. A title comes out of the
+    # first sentence or two, and an opener can be a pasted stack trace or a
+    # whole file — prefill nobody needs, and a conversation restored from disk
+    # is where the large ones turn up.
+    MAX_OPENER_CHARS = 2000
+
     # The titling agent's whole prompt. Two things in it are measured rather
     # than taste, and a rewrite has to keep both:
     #
@@ -70,7 +76,8 @@ module PikuriWeb
 
     # Title one conversation from its opening message.
     #
-    # @param opener [String] the first user message, verbatim.
+    # @param opener [String] the first user message; only its first
+    #   {MAX_OPENER_CHARS} characters are sent.
     # @return [String, nil] a single line of at most {MAX_WORDS} words and
     #   {MAX_CHARS} characters, sanitized; +nil+ when the model returned
     #   nothing usable.
@@ -84,7 +91,7 @@ module PikuriWeb
       end
       started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       raw = begin
-        agent.run_loop(user_message: "<opener>\n#{opener}\n</opener>")
+        agent.run_loop(user_message: "<opener>\n#{opener.to_s[0, MAX_OPENER_CHARS]}\n</opener>")
         agent.last_assistant_content
       ensure
         agent.close

@@ -85,12 +85,16 @@ module PikuriWeb
   #
   # == The title
   #
-  # A conversation minted fresh is named from its opening message: {#submit}
-  # posts a {Titler} job *beside* the turn — never inside it — and the answer
-  # lands through a task that rewrites the envelope and {#conversation}
-  # together. No +[titler]+ configured, a model that answers nothing usable,
-  # or a raise anywhere in that job all leave the start stamp, and none of
-  # them can reach the turn.
+  # A conversation is named from its opening message, wherever that message
+  # turns up: {#submit} posts a {Titler} job *beside* the turn — never inside
+  # it — for a fresh one, and {#restore!} posts the same job for a stored one
+  # that is still stamp-titled, so a conversation older than the feature is
+  # named the first time anyone opens it. Either way the answer lands through
+  # a task that rewrites the envelope and {#conversation} together.
+  #
+  # No +[titler]+ configured, a model that answers nothing usable, or a raise
+  # anywhere in that job all leave the start stamp, and none of them can reach
+  # the turn.
   #
   # Server-side of the pikuri seam, so it names pikuri types freely
   # (`D_pikuri_free_core`).
@@ -169,7 +173,6 @@ module PikuriWeb
       @discarded = false
       @announced_busy = false
       @pending = nil
-      @restored = false
       @titling = false
 
       # Claims the interloper's single on_change slot. Without it the
@@ -202,6 +205,10 @@ module PikuriWeb
     # A conversation with nothing on disk (brand new, or never saved because it
     # holds no messages) restores to empty, which is already correct.
     #
+    # Also where a conversation older than the titling feature gets a name: its
+    # opener is in the history already in hand, so the retro-title costs no
+    # second read and reaches exactly the conversations someone actually opens.
+    #
     # @return [Boolean] whether a stored history was found and loaded
     def restore!
       @lock.assert!
@@ -210,9 +217,8 @@ module PikuriWeb
 
       @agent.load_history!(history)
       HistoryReplay.events(history).each { |event| @listener.on_event(event) }
-      # Also the flag {#maybe_title} reads: on a restored conversation the
-      # opener is not the message about to be submitted.
-      @restored = true
+      maybe_title(first_user_message(history))
+      true
     end
 
     # Route one user message: start a turn or inject into the running one.
@@ -457,21 +463,32 @@ module PikuriWeb
     def take_pending = @pending.tap { @pending = nil }
 
     # Post a titling job for this conversation's opening message, if it wants
-    # one.
+    # one. Called from both places an opener can turn up: {#restore!} with the
+    # one on disk, {#submit} with the one starting a fresh conversation.
     #
-    # Once per runner, and never for a conversation restored from disk: "the
-    # opener" is this message and only this message, so a title that failed
-    # leaves the stamp rather than retrying against the wrong message.
+    # At most once per runner, so a restored conversation is never asked twice
+    # and a failure leaves the stamp rather than retrying. Across a restart it
+    # does retry, which is what makes a title lost to a server being down
+    # recoverable by opening the conversation again.
     #
-    # @param opener [String] the message that just started the first turn
+    # @param opener [String, nil] the opening message; +nil+ when there is none
+    #   to read, which titles nothing
     # @return [void]
     def maybe_title(opener)
-      return if @titler.nil? || @titling || @restored || @discarded
+      return if @titler.nil? || @titling || @discarded || opener.nil?
       return unless @conversations.stamp_titled?(@conversation)
 
       @titling = true
       @executor.post { run_titling(opener) }
       nil
+    end
+
+    # @param history [Pikuri::Agent::History] a restored conversation
+    # @return [String, nil] its opening message, or +nil+ for a history that
+    #   holds no user text at all
+    def first_user_message(history)
+      text = history.messages.find { |message| message.role.to_s == 'user' }&.content
+      text.is_a?(String) && !text.strip.empty? ? text : nil
     end
 
     # The titling job's body: ask off-domain, land the answer in a task.

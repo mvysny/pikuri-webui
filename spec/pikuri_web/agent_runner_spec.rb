@@ -792,15 +792,46 @@ RSpec.describe PikuriWeb::AgentRunner do
       assert_equal ['first'], titler.openers
     end
 
-    it 'leaves a restored conversation alone — its opener is not this message' do
+    it 'titles a stored conversation from its own opener, never the next message' do
       conversations.save(conversation, history_of('an older opener'),
                          model: 'qwen3.6', server: 'http://localhost:8080/v1')
       assert runner.restore!
-      runner.submit('hello')
-      wait_until { agent.messages.any? }
+      runner.submit('a much later message')
+      wait_until { runner.conversation.title != stamp }
 
-      assert_empty titler.openers
-      assert_equal stamp, runner.conversation.title
+      assert_equal ['an older opener'], titler.openers
+    end
+
+    # Retro-titling reaches a conversation older than the feature the first
+    # time someone opens it. Inline execution rather than a pool, so "was the
+    # titler asked?" is settled by the time #restore! returns.
+    context 'opening a conversation that is already on disk' do
+      let(:executor) { Concurrent::ImmediateExecutor.new }
+
+      def stored(history)
+        conversations.save(conversation, history,
+                           model: 'qwen3.6', server: 'http://localhost:8080/v1')
+      end
+
+      it 'names it on open, off the history it just replayed' do
+        stored(history_of('an older opener'))
+        runner.restore!
+
+        assert_equal ['an older opener'], titler.openers
+        assert_equal 'Sinatra Versus Roda For SSE', runner.conversation.title
+      end
+
+      it 'leaves one holding no user text alone' do
+        stored(Pikuri::Agent::History.new(
+                 messages: [Pikuri::Agent::History::Message.new(
+                   id: Pikuri::Agent::History.mint_id, role: 'assistant', content: 'orphaned reply'
+                 )]
+               ))
+        runner.restore!
+
+        assert_empty titler.openers
+        assert_equal stamp, runner.conversation.title
+      end
     end
 
     it 'leaves an already-named conversation alone' do

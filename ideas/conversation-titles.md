@@ -306,9 +306,19 @@ first, and go the proper rounds only once it works.
 
 ## Retrospective titling
 
-Conversations already on disk are all stamp-titled. Generating theirs some time after boot would
-mean the feature isn't only for new conversations.
+**Built, lazily.** `AgentRunner#restore!` posts the same titling job for a stored conversation that
+is still stamp-titled, off the `History` it has just replayed — so an old conversation is named the
+first time anyone opens it, no sweep and no second disk read. What follows is the reasoning, kept
+until this graduates.
 
+- **Never a bulk sweep, and the lazy form made the choice easy.** Reading every history at boot was
+  always the expensive half; `restore!` already holds the one history it needs, which makes the
+  per-conversation cost exactly zero until someone opens it. The rejected alternatives — sweep the
+  lot after Puma is up, or cap it to the newest N — both pay for conversations nobody looks at.
+- **`Q_titler_opener_cap`: the opener is truncated at `Titler::MAX_OPENER_CHARS`.** Not part of the
+  original plan, and it is the retro path that forced it: a conversation from months ago can open
+  with a pasted stack trace or a whole file, and a title comes out of the first sentence or two
+  regardless. Applies to new conversations too, since there is no reason it should not.
 - **Was gated on the fork above; now priced.** At the measured 1.2 s a title, sweeping 100
   stamp-titled conversations is **two minutes** of background work. At the thinking-on 31.1 s it is
   **52 minutes** of inference-server occupancy fighting every real turn. That is the difference

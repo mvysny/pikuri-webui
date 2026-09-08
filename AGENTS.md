@@ -311,7 +311,8 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
 - `lib/pikuri_web/agent_runner.rb` — `PikuriWeb::AgentRunner`, one
   conversation's agent, transcript and turn lifecycle: restore, the
   start-vs-inject (Interloper) decision, the pending model, the save at
-  turn end, the fire-and-forget title job; broadcasts status.
+  turn end, the fire-and-forget title job (on a fresh opener or a replayed
+  one); broadcasts status.
 - `lib/pikuri_web/conversation_registry.rb` — `PikuriWeb::ConversationRegistry`,
   the resident runners: mints one per conversation opened, deletes, and
   serves the sidebar rows. Pikuri-free.

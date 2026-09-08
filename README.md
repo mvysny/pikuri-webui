@@ -411,11 +411,18 @@ gives you a conversation that does not think, which is a legitimate thing to
 want; it lasts as long as you stay in that conversation, because reopening
 resolves to the *first* entry naming that model on that server.
 
+Conversations from before you configured a titler get named too — each one
+the first time you open it, off the history it loads anyway. So the sidebar
+fills in as you revisit things rather than all at once, and a folder full of
+old conversations costs you nothing until you go looking. Nothing touches a
+conversation that already has a name, and there is no way to rename one by
+hand yet.
+
 Titling is best-effort and cannot break anything. No `[titler]`, a model that
 answers nothing usable, a server that is down — the conversation keeps its
-stamp, the turn is untouched, and nothing appears in the transcript. Only
-*new* conversations are titled: ones already on disk keep their stamps, and
-nothing renames a conversation yet.
+stamp, your turn is untouched, and nothing appears in the transcript. A title
+lost that way is retried the next time the conversation is opened in a fresh
+process.
 
 **On smaller models: there is no recommendation to give.** A 4B is fast, but
 titling is mostly a test of following instructions rather than of knowing
