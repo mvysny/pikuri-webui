@@ -176,21 +176,24 @@ the alternatives that were rejected, live one entry per slug in
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
 - **The server is rationed per *request*, by pikuri — this shell only
-  sizes the pool.** `--turns N` is `ServerPermits.limit(server, N)`, one
-  call per distinct server at boot ({ModelCatalog#servers}); the permit is
-  pikuri's, taken for one HTTP request and given back, so a turn off
+  sizes the permit count.** `--turns N` is `ServerPermits.limit(server, N)`,
+  one call per distinct server at boot ({ModelCatalog#servers}); the permit
+  is pikuri's, taken for one HTTP request and given back, so a turn off
   running a tool holds no slot. Size *explicitly* even though pikuri
   auto-sizes from `/props`: an `[[llm]]` with a `context_window` skips
   that probe, and unsized means unlimited. Never re-add a throttle here,
-  and never re-derive the server's load cap from the turn executor's `2N`.
-  See `D_upstream_request_throttle`.
+  and never tie the turn executor's size to this number in either
+  direction. See `D_upstream_request_throttle`.
 
-- **Turns run on one shared executor, and its pool size is not a
-  correctness device.** Sending never refuses for load — a turn with no
-  free slot is *queued*, which the status bar says out loud. Single-writer
-  safety comes from the partition, so it holds at any pool size; don't
-  rebuild a correctness argument on that number. See
-  `D_serial_turn_executor`.
+- **Turns run on one shared *unbounded* executor, and its size is not a
+  correctness device.** Sending never refuses for load. Single-writer
+  safety comes from the partition, so it holds at any size — don't rebuild
+  a correctness argument on the number, and don't re-bound the pool to cap
+  load: a turn holds a thread for its whole `run_loop` but a permit only
+  per request, so any capacity-derived bound strands conversations behind
+  turns sitting in a tool. `:queued` is now the posting-to-running gap, not
+  a wait for the server; that wait is the permit, and it reads `:running`.
+  See `D_serial_turn_executor`.
 
 - **The mascot is the library's; the plate is ours.** `public/images/kuri.svg`
   is a **verbatim** copy of `../pikuri/assets/kuri.svg` (`D_kuri_mascot`)

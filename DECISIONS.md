@@ -1546,7 +1546,7 @@ is `call(env)` — middleware is request-scoped by construction and has no
 purchase on a graph that outlives a request — so there is no Sinatra
 answer to adopt. The primitive is already in the bundle: an owner queue is
 a `Concurrent::SingleThreadExecutor`, from the gem the `Gemfile` already
-justifies for `FixedThreadPool`. Candidates in ascending cost: an atomic
+justifies for the turn executor. Candidates in ascending cost: an atomic
 helper per seam; one global `Monitor`; a true owner thread. Vaadin's
 `UI.access()` is the middle one and Tuile is the last, as the entry above
 already notes.
@@ -1640,17 +1640,37 @@ tabs alone; server-side last-viewed is this decision reversed.
   detached conversation. Probably not, but it is pikuri's class — check
   whether a listener stack can be rebuilt mid-life before assuming.
 
-## D_serial_turn_executor — Turns run on one shared executor, whose pool size is the inference server's slot count
+## D_serial_turn_executor — Turns run on one shared executor, and its size is not a load cap
 
-**Status:** **Superseded in part by `D_upstream_request_throttle`** — the
-half that made the pool size the server's load cap. The executor itself
-stands: one shared `Concurrent::FixedThreadPool` injected into every
-{AgentRunner}, sized `--turns * 2`, still the admission gate that reports
-`:queued`. What the server may run at once is now pikuri's `ServerPermits`
-count, so the paragraph below beginning "The pool size caps
-concurrent turns" describes a job this pool no longer has. Everything here
-about single-writer safety living in the partition rather than the number
-is untouched, and load-bearing for the `2N` sizing.
+**Status:** **Superseded in part by `D_upstream_request_throttle`**, then
+amended to drop sizing altogether. The executor itself stands: one shared
+pool injected into every {AgentRunner}, still the admission gate that
+reports `:queued`. Two things below no longer describe the code.
+
+*The pool is unbounded* — `Concurrent::CachedThreadPool`, not
+`FixedThreadPool.new(turns * 2)`. `2N` was the compromise between two
+wrong answers, and once the permit moved to the request it stopped buying
+anything: a turn holds a thread for its whole `run_loop` but a permit only
+per HTTP request, so **any** number tied to the server's capacity strands
+conversations behind turns that are off in a tool using no slot. Doubling
+it just moved the stranding threshold. The bound that matters was already
+there and is not a number: a conversation admits one turn at a time, so
+turns in flight cannot exceed the conversations opened. Unbounded also
+retires a deadlock a bounded pool would hit the day a tool spawns a
+sub-agent posting back to the same executor.
+
+*`:queued` is no longer where a turn waits for the server.* It is now the
+posting-to-running gap, effectively instant; the wait for a slot is
+pikuri's permit, taken inside `run_loop`, and a turn parked on one reports
+`:running`. So the status bar can say "thinking" for a turn that is queued
+behind another conversation's completion — accepted, because the count that
+would fix it (`ServerPermits.for(base).available`) is upstream's and no
+event carries it. The paragraph below beginning "The pool size caps
+concurrent turns" describes a job this pool no longer has.
+
+Everything here about single-writer safety living in the partition rather
+than in the number is untouched, and is what makes an unbounded pool safe
+rather than merely convenient.
 
 **Context.** A turn blocks on the LLM for minutes, so it cannot run on a
 Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations

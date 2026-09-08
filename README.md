@@ -97,17 +97,19 @@ bin/pikuri-web-chat --turns 4
 ```
 
 Send in a second conversation while the first is working and the message
-is accepted and *queued* — never refused — and that conversation says so
-until its turn starts.
+is accepted — never refused.
 
-Twice `N` conversations may hold a turn, because a turn is not only
-inference: it also runs tools. A conversation waiting on a web search is
-not using the server, so its slot goes to somebody who is. That is why
-the cap is on the request rather than on the turn, and it means a fast
-second conversation can answer while a first is off fetching a page.
+`N` caps requests to the server, not conversations: any number of them may
+have a turn running, because a turn is not only inference, it also runs
+tools. A conversation waiting on a web search is not using the server, so
+its slot goes to somebody who is — which is why the cap is on the request,
+and why a fast second conversation can answer while a first is off
+fetching a page.
 
 ■ works on a conversation still waiting for a slot, not only on one the
-server is already answering.
+server is already answering. Such a conversation reads as working rather
+than waiting, though: the status bar cannot see the difference between
+thinking and queueing for the server.
 
 Note that web searches still serialize across conversations however high
 you set this — the rate limiter that keeps you off provider blocklists is
