@@ -464,11 +464,11 @@ toggles there is a settings bar, and the drawer is about conversations.
   both forms at once.
 - The command is `/toollines`, not `/tools`; {SlashCommand}`::CATALOG`
   holds why.
-- **v2 retires half of {ToolLine}**: when pikuri's `ToolCall` carries
-  `display_name:` / `argument:` and `ToolResult` a `summary:`, the
-  CamelCase helper, the first-value pick and the `Error:` heuristic go,
-  and no pixel changes but the result line's wording. The v1 look was
-  chosen for that.
+- **What the event's arrival did *not* retire is the `Error:` check.** The
+  CamelCase helper and the first-value pick went the day pikuri composed
+  those strings, but failure is still read off `content`'s prefix rather
+  than off `summary` — {ToolLine}`.for_result`'s rdoc holds why — and so is
+  the cap, because a width is the renderer's alone to know.
 
 ## D_details_per_block — Reasoning gets a disclosure per block; the config sets its default, not its visibility
 
@@ -2404,6 +2404,14 @@ pikuri-tui is a pikuri-web change. The guard is the `cross-shell schema`
 describe in `spec/pikuri_web/config_spec.rb` — the test that existed for
 this and missed it, now carrying the `[ui]` case; a pikuri upgrade should
 read pikuri-tui's `Shared::Config` allow-list against ours.
+
+The `markdown` key that rdoc names is the worked example of how little
+carrying costs: when the TUI ships it, it lands here as a *carried* key and
+nothing more, because this shell has no such flag at all — kramdown always
+runs on `:assistant` and `:thinking` prose. Schema-completeness obliges us
+to accept the file, never to grow the feature behind a key; that would be a
+decision of its own, and the toggle would be a `[ui]` cookie under
+`D_ui_cookie_over_config` before it were ever a config read.
 
 ## D_track_pikuri_master — Path dependencies on `../pikuri`, not released gems
 

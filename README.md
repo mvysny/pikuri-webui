@@ -265,11 +265,12 @@ Fetch(https://example.org/missing)
   Error: 404 Not Found
 ```
 
-The name is the tool's, tidied up, and the argument is the one that says
-what was asked for. What came back is measured rather than printed once
-it is too long to read at a glance — but a short answer *is* printed,
-because the size of `4` is not the interesting thing about it. A failure
-says so in red.
+Every one of those lines is the tool's own: it says what it is called,
+which argument is worth showing, and how to describe what it came back
+with — a line count, a byte count, or the answer itself, because the size
+of `4` is not the interesting thing about it. Nothing there is the model
+narrating its own success. This shell only defangs the strings and cuts
+them to the width of the page; a failure says so in red.
 
 `/toollines` switches to the raw form, which is the same two lines with
 nothing left out:
