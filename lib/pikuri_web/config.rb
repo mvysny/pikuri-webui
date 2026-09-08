@@ -8,19 +8,45 @@ module PikuriWeb
   #
   #   config = PikuriWeb::Config.load
   #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
+  #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
   #
   # Every load failure — unreadable file, malformed TOML, schema
   # violation — raises {Error}, naming the offending key.
   #
-  #   [[llm]]
-  #   name = "Local Qwen 3.6"
-  #   server = "http://localhost:8080"
-  #   model = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+  # == +[[server]]+ and +[[llm]]+
   #
-  #   [search]
-  #   brave_key = "BSA…"
-  #   engines = ["brave"]
+  #   [[server]]
+  #   id                      = "grok"
+  #   url                     = "https://api.x.ai/v1"
+  #   api_key                 = "xai-…"
+  #   max_concurrent_requests = 4
+  #
+  #   [[llm]]
+  #   name           = "Grok 4 Fast"
+  #   server         = "grok"
+  #   model          = "grok-4-fast"
+  #   context_window = 131072
+  #
+  # The box and the model running on it are separate tables, so four models
+  # on one provider state its URL and its key once instead of four times.
+  # +id+ is referenced by machine, +name+ is shown to a person, and those two
+  # are what {.load} checks for uniqueness. Two +[[server]]+ entries may
+  # share a URL (two accounts on one provider), and an unreferenced
+  # +[[server]]+ is legal, so commenting out an +[[llm]]+ cannot break the
+  # file.
+  #
+  # {Llm#server} is the resolved *URL*; the +id+ leaves this class only in a
+  # log line. An id means nothing away from the file that defines it, so a
+  # conversation's saved connection stores the URL
+  # (+D_per_conversation_model+) — a reference whose referent a later edit
+  # can delete would strand it, where a URL stands on its own.
+  #
+  # There is no built-in connection: no +[[llm]]+ at all, one missing
+  # +server+ or +model+, and one whose +server+ resolves to nothing each
+  # raise {Error}. A silent fallback to a hardcoded model tag would be a
+  # second, invisible connection source — so that knowledge is
+  # {EXAMPLE_CONFIG}, quoted by the raise where the user can edit it.
   #
   # == The +[ui]+ table
   #
@@ -41,8 +67,16 @@ module PikuriWeb
   # +$XDG_CONFIG_HOME/pikuri/config.toml+ (default +~/.config+) →
   # +overrides:+. Tables merge key-by-key, so a system file can supply
   # +search.brave_key+ while the user file adds +exa_key+; arrays (the
-  # +[[llm]]+ and +[[code.mcp]]+ lists) replace wholesale, nearest file
-  # wins.
+  # +[[server]]+, +[[llm]]+ and +[[code.mcp]]+ lists) replace wholesale,
+  # nearest file wins.
+  #
+  # +server+ references resolve *after* the whole merge. That is what lets a
+  # user file add one +[[llm]]+ against a system file's +[[server]]+ instead
+  # of re-pasting the block, secrets included — the duplication this schema
+  # exists to remove. The consequence, since arrays replace: a nearer file
+  # that declares +[[server]]+ at all replaces every farther one, which can
+  # leave a farther file's +[[llm]]+ dangling. That raises; it never falls
+  # back.
   #
   # No project-local layer, deliberately: a config file inside the repo
   # would be git-committable, and a literal {Llm#api_key} or {Search}
@@ -71,24 +105,48 @@ module PikuriWeb
     # Carries a human-readable message naming the offending key or file.
     class Error < StandardError; end
 
-    # One model connection; the first {Config#llms} entry is where a
-    # conversation with no saved connection starts, and any of them is a
-    # +/model+ pick away.
+    # One inference server: what is true of the box rather than of a model
+    # running on it, referenced by {#id} from any number of +[[llm]]+ entries
+    # (the class header shows the pair of tables).
+    #
+    # @!attribute [r] id
+    #   @return [String] unique reference an +[[llm]]+ names in its +server+
+    #     key; never shown to the user, never stored anywhere outside this
+    #     class (see the class header).
+    # @!attribute [r] url
+    #   @return [String] base URL, with or without the +/v1+ suffix — pikuri
+    #     normalizes both the transport's base and the throttle's key by
+    #     stripping it, so either spelling names one server.
+    # @!attribute [r] api_key
+    #   @return [String, nil] the API key/token, stored literally, or +nil+
+    #     for a server that needs none (a local llama.cpp). This file rather
+    #     than an env var on purpose: the environment is inherited by every
+    #     subprocess pikuri spawns, so a key there leaks to code the agent
+    #     runs.
+    # @!attribute [r] max_concurrent_requests
+    #   @return [Integer, nil] ceiling on requests in flight against this
+    #     server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
+    #     let pikuri's +/props+ probe size it from the box's own
+    #     +total_slots+. 1 is the recommended value and the probe's answer is
+    #     usually not — see +D_max_concurrent_requests+.
+    Server = Data.define(:id, :url, :api_key, :max_concurrent_requests)
+
+    # One model connection: a +[[llm]]+ entry with its +[[server]]+ already
+    # resolved into it, so nothing downstream has to hold the reference. The
+    # first {Config#llms} entry is where a conversation with no saved
+    # connection starts, and any of them is a +/model+ pick away.
     #
     # @!attribute [r] name
     #   @return [String] unique display name, e.g. +"Local Qwen 3.6"+.
     # @!attribute [r] server
-    #   @return [String] LLM server base URL (no +/v1+ suffix; a value
-    #     that carries one is normalized by +from_openai_server+).
+    #   @return [String] the referenced {Server}'s {Server#url} — a base
+    #     URL, never the +id+ the file wrote.
     # @!attribute [r] model
     #   @return [String] model identifier passed to the transport.
     # @!attribute [r] api_key
-    #   @return [String, nil] the API key/token, stored literally, or +nil+
-    #     when the entry omits it (the bin then falls back to
-    #     +"not-needed"+, fine for a local llama.cpp). This file rather
-    #     than an env var on purpose: the environment is inherited by every
-    #     subprocess pikuri spawns, so a key there leaks to code the agent
-    #     runs.
+    #   @return [String, nil] the referenced {Server}'s {Server#api_key}, or
+    #     +nil+ when that server omits it (the bin then falls back to
+    #     +"not-needed"+, fine for a local llama.cpp).
     # @!attribute [r] context_window
     #   @return [Integer, nil] explicit context-window cap for this
     #     connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
@@ -156,12 +214,22 @@ module PikuriWeb
       end
     end
 
-    # @return [String] display name of the synthetic default connection.
-    DEFAULT_LLM_NAME = 'Local Qwen 3.6'
-    # @return [String] default LLM server base URL (local llama.cpp).
-    DEFAULT_SERVER = 'http://localhost:8080'
-    # @return [String] default model identifier.
-    DEFAULT_MODEL = 'unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M'
+    # The smallest file that boots — a local llama.cpp. Every "no connection
+    # configured" raise quotes it, so a first run ends in a block to paste
+    # and edit rather than in a backtrace.
+    #
+    # @return [String] a paste-ready +config.toml+, newline-terminated.
+    EXAMPLE_CONFIG = <<~TOML
+      [[server]]
+      id  = "local"
+      url = "http://localhost:8080"
+
+      [[llm]]
+      name   = "Local Qwen 3.6"
+      server = "local"
+      model  = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+    TOML
+
     # @return [Boolean] sandbox on unless a file says otherwise.
     DEFAULT_SANDBOX = true
     # @return [Boolean] confirm on unless a file says otherwise.
@@ -191,7 +259,9 @@ module PikuriWeb
     # @param env [#[]] environment consulted for +XDG_CONFIG_HOME+ /
     #   +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
     # @return [Config] the resolved configuration.
-    # @raise [Error] on an unreadable / malformed / schema-invalid file.
+    # @raise [Error] on an unreadable / malformed / schema-invalid file, and
+    #   when the merged result defines no +[[llm]]+ — the message then quotes
+    #   {EXAMPLE_CONFIG} and the path to write it to.
     def self.load(overrides: {}, env: ENV)
       merged = {}
       any_loaded = false
@@ -204,11 +274,16 @@ module PikuriWeb
         warn_loose_perms(path, parsed)
         merged = deep_merge(merged, parsed)
       end
-      PikuriWeb.logger.info('config: no config file found; using built-in defaults') unless any_loaded
       validate_top!(merged)
 
+      servers = (merged['server'] || []).each_with_index.map { |h, i| build_server(h, i) }
+      check_unique!(servers.map(&:id), 'server id')
+
       llm_tables = merged['llm'] || []
-      llms = llm_tables.empty? ? [default_llm] : llm_tables.each_with_index.map { |h, i| build_llm(h, i) }
+      raise Error, no_connection_message(any_loaded, env) if llm_tables.empty?
+
+      by_id = servers.to_h { |s| [s.id, s] }
+      llms = llm_tables.each_with_index.map { |h, i| build_llm(h, i, by_id) }
       check_unique!(llms.map(&:name), 'llm name')
 
       code = merged['code'] || {}
@@ -221,6 +296,7 @@ module PikuriWeb
 
       new(
         llms:          llms,
+        servers:       servers,
         search:        build_search(merged['search']),
         sandbox:       pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
         confirm:       pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
@@ -231,6 +307,10 @@ module PikuriWeb
     end
 
     # @param llms [Array<Llm>] one or more model connections (never empty).
+    # @param servers [Array<Server>] the +[[server]]+ definitions +llms+ was
+    #   resolved against. Defaults to empty because the only thing that reads
+    #   it is the boot-time permit sizing, which a config built in code (a
+    #   spec) has nothing to install.
     # @param search [Search] web-search provider keys (fields may be nil).
     # @param sandbox [Boolean] resolved sandbox switch (parsed, unwired).
     # @param confirm [Boolean] resolved confirmer switch (parsed, unwired).
@@ -240,9 +320,10 @@ module PikuriWeb
     #   (parsed, unwired).
     # @param tool_lines [Symbol] resolved +[ui]+ tool-line form (parsed,
     #   unwired).
-    def initialize(llms:, search:, sandbox:, confirm:, mcp:,
+    def initialize(llms:, search:, sandbox:, confirm:, mcp:, servers: [],
                    show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES)
       @llms    = llms.freeze
+      @servers = servers.freeze
       @search  = search
       @sandbox = sandbox
       @confirm = confirm
@@ -252,8 +333,12 @@ module PikuriWeb
       freeze
     end
 
-    # @return [Array<Llm>] all configured connections, declaration order.
+    # @return [Array<Llm>] all configured connections, declaration order;
+    #   never empty.
     attr_reader :llms
+    # @return [Array<Server>] every +[[server]]+, declaration order,
+    #   including any that no +[[llm]]+ references.
+    attr_reader :servers
     # @return [Search] the web-search provider keys (fields may be nil).
     attr_reader :search
     # @return [Boolean] sandbox switch (flag > file > default).
@@ -287,7 +372,7 @@ module PikuriWeb
     end
 
     # Advise (non-fatally, through {PikuriWeb.logger}) when a file carrying
-    # a literal secret (an +[[llm]]+ api_key or a +[search]+ provider key)
+    # a literal secret (a +[[server]]+ api_key or a +[search]+ provider key)
     # is group/other-accessible — a plaintext secret should be +chmod 600+.
     # Only files that actually contain a secret are checked, so a
     # world-readable but secret-free /etc/xdg config raises no noise.
@@ -305,12 +390,16 @@ module PikuriWeb
       # stat failed (race, odd filesystem) — skip the advisory, never fatal.
     end
 
+    # Reads +[[server]]+ for the key, not +[[llm]]+: this check runs per file
+    # and pre-merge, on raw TOML, so it sees the table the key is *written*
+    # in rather than the {Llm} it is later resolved into.
+    #
     # @return [Boolean] true when the parsed file carries any literal secret
-    #   (an +[[llm]]+ +api_key+, a +[search]+ +brave_key+/+exa_key+, or an
+    #   (a +[[server]]+ +api_key+, a +[search]+ +brave_key+/+exa_key+, or an
     #   +[[code.mcp]]+ +bearer_token+/+basic_auth+/+headers+/+env+).
     def self.holds_secret?(parsed)
-      llms = parsed['llm']
-      return true if llms.is_a?(Array) && llms.any? { |e| e.is_a?(Hash) && e['api_key'] }
+      servers = parsed['server']
+      return true if servers.is_a?(Array) && servers.any? { |e| e.is_a?(Hash) && e['api_key'] }
 
       search = parsed['search']
       return true if search.is_a?(Hash) && (search['brave_key'] || search['exa_key'])
@@ -339,10 +428,12 @@ module PikuriWeb
     end
 
     def self.validate_top!(merged)
-      unknown = merged.keys - %w[llm search code ui]
+      unknown = merged.keys - %w[server llm search code ui]
       raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
-      if merged.key?('llm') && !merged['llm'].is_a?(Array)
-        raise Error, '`llm` must be an array of tables (use [[llm]], not [llm])'
+      %w[server llm].each do |k|
+        next unless merged.key?(k) && !merged[k].is_a?(Array)
+
+        raise Error, "`#{k}` must be an array of tables (use [[#{k}]], not [#{k}])"
       end
       if merged.key?('search') && !merged['search'].is_a?(Hash)
         raise Error, '`search` must be a table ([search])'
@@ -417,17 +508,44 @@ module PikuriWeb
       raise Error, 'code.mcp must be an array of tables (use [[code.mcp]])'
     end
 
-    def self.build_llm(hash, index)
+    def self.build_server(hash, index)
+      raise Error, "server[#{index}] must be a table" unless hash.is_a?(Hash)
+
+      unknown = hash.keys - %w[id url api_key max_concurrent_requests]
+      raise Error, "server[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
+
+      id = hash['id']
+      raise Error, "server[#{index}]: `id` is required and must be a non-empty string" unless non_empty_string?(id)
+
+      url = hash['url']
+      raise Error, "server #{id.inspect}: `url` is required and must be a non-empty string" unless non_empty_string?(url)
+
+      key = hash['api_key']
+      raise Error, "server #{id.inspect}: `api_key` must be a string" if key && !key.is_a?(String)
+
+      max = hash['max_concurrent_requests']
+      if max && !(max.is_a?(Integer) && max.positive?)
+        raise Error, "server #{id.inspect}: `max_concurrent_requests` must be a positive integer"
+      end
+
+      Server.new(id: id, url: url, api_key: key, max_concurrent_requests: max)
+    end
+
+    def self.build_llm(hash, index, by_id)
       raise Error, "llm[#{index}] must be a table" unless hash.is_a?(Hash)
 
+      # +api_key+ is legal this far so that an old entry reaches the message
+      # naming where the key moved to, rather than a bare "unknown key".
       unknown = hash.keys - %w[name server model api_key context_window]
       raise Error, "llm[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
 
       name = hash['name']
       raise Error, "llm[#{index}]: `name` is required and must be a non-empty string" unless non_empty_string?(name)
 
-      %w[server model api_key].each do |k|
-        raise Error, "llm #{name.inspect}: `#{k}` must be a string" if hash[k] && !hash[k].is_a?(String)
+      %w[server model].each do |k|
+        next if non_empty_string?(hash[k])
+
+        raise Error, "llm #{name.inspect}: `#{k}` is required and must be a non-empty string"
       end
 
       cw = hash['context_window']
@@ -435,13 +553,68 @@ module PikuriWeb
         raise Error, "llm #{name.inspect}: `context_window` must be a positive integer"
       end
 
+      key = hash['api_key']
+      server = resolve_server(hash['server'], name, by_id, key)
+      raise Error, "llm #{name.inspect}: `api_key` belongs on [[server]] #{server.id.inspect}, not here." if key
+
       Llm.new(
         name:           name,
-        server:         hash['server'] || DEFAULT_SERVER,
-        model:          hash['model'] || DEFAULT_MODEL,
-        api_key:        hash['api_key'], # nil when omitted → "not-needed" at the bin
+        server:         server.url,
+        model:          hash['model'],
+        api_key:        server.api_key, # nil when omitted → "not-needed" at the bin
         context_window: cw # nil when omitted → pikuri auto-detects
       )
+    end
+
+    # Look up the +[[server]]+ an +[[llm]]+ names, raising a message that
+    # names the fix when there is none.
+    #
+    # There is no compatibility path for a file written before +[[server]]+
+    # existed, so each shape such a file fails in gets its own message — the
+    # raise *is* the migration. A URL left in +server+ earns the most effort:
+    # it parses cleanly and fails as a *lookup*, which reads like the user's
+    # mistake rather than like a key whose meaning changed under them.
+    #
+    # @param ref [String] the +[[llm]]+ entry's +server+ value: an +id+ to
+    #   look up, or, in an old file, a URL.
+    # @param name [String] the entry's +name+, for error messages.
+    # @param by_id [Hash{String => Server}] every {Server} the merged file
+    #   defined.
+    # @param api_key [String, nil] the entry's stray +api_key+, folded into
+    #   the suggested block so one edit fixes both halves of an old file.
+    # @return [Server] the referenced server.
+    # @raise [Error] when +ref+ resolves to nothing.
+    def self.resolve_server(ref, name, by_id, api_key)
+      found = by_id[ref]
+      return found if found
+
+      raise Error, "llm #{name.inspect}: #{server_is_now_an_id(ref, api_key)}" if ref.include?('://')
+      raise Error, "llm #{name.inspect}: no [[server]] is defined — add one:\n\n#{EXAMPLE_CONFIG}" if by_id.empty?
+
+      raise Error, "llm #{name.inspect}: unknown server id #{ref.inspect}; " \
+                   "known: #{by_id.keys.map(&:inspect).join(', ')}"
+    end
+
+    def self.server_is_now_an_id(url, api_key)
+      block = +"[[server]]\nid  = \"myserver\"\nurl = #{url.inspect}\n"
+      block << "api_key = #{api_key.inspect}\n" if api_key
+      "`server` names a [[server]] `id` now, not a URL. Add:\n\n#{block}\n" \
+        "and on this [[llm]] set `server = \"myserver\"`" \
+        "#{api_key ? ', dropping its `api_key`.' : '.'}"
+    end
+
+    # Covers both "no config file at all" and "a file that defines no
+    # connection" — the same hole with the same fix, so one message with the
+    # path to write it to.
+    #
+    # @param any_loaded [Boolean] whether any file was read, which is the
+    #   only difference between the two cases.
+    # @param env [#[]] environment, for the path {.candidate_paths} names.
+    # @return [String] the message, quoting {EXAMPLE_CONFIG}.
+    def self.no_connection_message(any_loaded, env)
+      opening = any_loaded ? 'no [[llm]] is defined' : 'no config file found'
+      "#{opening}, and there is no built-in default connection. " \
+        "Write #{candidate_paths(env).last}:\n\n#{EXAMPLE_CONFIG}"
     end
 
     def self.build_mcp(hash, index)
@@ -570,11 +743,6 @@ module PikuriWeb
       "Basic #{["#{username}:#{password}"].pack('m0')}"
     end
 
-    def self.default_llm
-      Llm.new(name: DEFAULT_LLM_NAME, server: DEFAULT_SERVER, model: DEFAULT_MODEL, api_key: nil,
-              context_window: nil)
-    end
-
     # First non-nil value — precedence resolution that treats +false+ as a
     # real value (so a +sandbox = false+ in a file is not skipped).
     def self.pick(*values) = values.find { |v| !v.nil? }
@@ -587,8 +755,10 @@ module PikuriWeb
     def self.non_empty_string?(value) = value.is_a?(String) && !value.strip.empty?
 
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
-                         :validate_top!, :validate_code!, :validate_ui!, :build_llm, :build_mcp, :build_mcp_headers,
-                         :build_basic_auth, :build_mcp_env, :build_search, :default_llm,
+                         :validate_top!, :validate_code!, :validate_ui!, :build_server, :build_llm,
+                         :resolve_server, :server_is_now_an_id, :no_connection_message,
+                         :build_mcp, :build_mcp_headers,
+                         :build_basic_auth, :build_mcp_env, :build_search,
                          :pick, :check_unique!, :non_empty_string?
   end
 end

@@ -64,16 +64,32 @@ check` is how you find out whether master still fits.
 
 ## Run
 
+There is no built-in connection, so start by writing
+`~/.config/pikuri/config.toml`:
+
+```toml
+[[server]]
+id  = "local"
+url = "http://localhost:8080"
+max_concurrent_requests = 1   # one reply at a time, at full speed
+
+[[llm]]
+name   = "Local Qwen 3.6"
+server = "local"
+model  = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+```
+
+Then:
+
 ```sh
 bin/pikuri-web-chat
 ```
 
-Then open <http://localhost:4567>. With no config file it talks to the LLM
-server at `http://localhost:8080` using model
-`unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M`. To point it anywhere else, write an
-`[[llm]]` entry in `~/.config/pikuri/config.toml` (see
-[Configure](#configure)) — there are no `--server` / `--model` flags.
-`--port` and `--bind` are this shell's own:
+and open <http://localhost:4567>. Boot without that file and it exits
+printing the block above plus the path to write it to — there are no
+`--server` / `--model` flags, because a connection lives in the file and
+nowhere else (see [Configure](#configure)). `--port` and `--bind` are this
+shell's own:
 
 ```sh
 bin/pikuri-web-chat --port 9292
@@ -83,23 +99,68 @@ Ctrl+C stops it. Open browser tabs don't delay the exit.
 
 ### How many conversations can think at once
 
-`--turns N` is the number of **requests in flight against your inference
-server** — match it to your server's parallel slots, so `--turns 4`
-against llama.cpp started with `--parallel 4`. The default is one.
-Setting it higher than the server has slots doesn't buy throughput, it
-just moves the queue from this process into that one.
+A `[[server]]`'s `max_concurrent_requests` is the number of **requests in
+flight against that inference server**. On a local box, write `1`:
 
-The count is per *server*, not per `[[llm]]` entry: two entries running
-two models on one box share its slots, because the slots are the box's.
-
-```sh
-bin/pikuri-web-chat --turns 4
+```toml
+[[server]]
+id  = "local"
+url = "http://localhost:8080"
+max_concurrent_requests = 1
 ```
+
+**Why 1, even on a `llama-server --parallel 4`.** You are reading one
+conversation at a time, so what you feel is the speed of *that* reply, not
+the throughput of the box. A reply crawling at 5 tok/s while another
+conversation you are not looking at also crawls is worse than one at
+20 tok/s while the other waits its turn. Waiting is cheap; watching
+something slow is not.
+
+Generation speed is bound by memory bandwidth, not compute, so whether a
+second concurrent stream is cheap depends entirely on how much spare
+bandwidth the box has. On a big discrete GPU, some. On an iGPU reading
+through system DRAM — which is the machine you run a large MoE on, because
+what you need there is capacity to hold the weights — essentially none, and
+a second stream costs close to its full share.
+
+MoE makes that worse rather than better. Decode reads only the experts each
+token routes to, which is the whole reason a 35B-A3B fits your bandwidth at
+all; but two sequences in a batch route to *different* experts, so the set
+that must be read grows with the batch. Batching un-skips the weights MoE
+exists to skip. It pays off at batch sizes far beyond anything a chat shell
+produces, and in the two-to-eight range it is a straight loss.
+
+`--parallel` also **splits the context window**: llama.cpp divides
+`--ctx-size` by the slot count, so `--parallel 4 -c 32768` leaves each
+conversation 8k instead of 32k. That cost is unconditional, and in this
+shell it lands early — the whole history moves with the conversation.
+
+Raise it for a server whose bandwidth is somebody else's problem — a cloud
+endpoint, or a box big enough that you are not the only thing on it — where
+total completion time across several conversations is what you are buying.
+Setting it higher than the server has slots buys nothing either way; it just
+moves the queue from this process into that one.
+
+It sits on the `[[server]]` rather than the `[[llm]]` because the slots
+belong to the box: two `[[llm]]` entries running two models on one server
+share the same ceiling.
+
+Omit the key and pikuri probes the server's own `/props` for the slot count
+— which means a server started `--parallel 4` gets sized **4**, so omission
+is how you end up with four half-speed replies without having chosen them.
+Writing `1` is the ceiling being *your* word rather than the server's, and
+the server's report is about what the box *can* do, not what you want it
+doing while you watch one of the answers. Two more reasons
+to write it: a request queued here is cancellable — ■ lands on a turn
+waiting for a permit — whereas one queued inside llama.cpp is not, so you
+would wait out the reply ahead of it; and a server that answers no `/props`
+at all is left unlimited, which is right for a cloud endpoint and wrong for
+anything you host.
 
 Send in a second conversation while the first is working and the message
 is accepted — never refused.
 
-`N` caps requests to the server, not conversations: any number of them may
+The ceiling caps requests to the server, not conversations: any number of them may
 have a turn running, because a turn is not only inference, it also runs
 tools. A conversation waiting on a web search is not using the server, so
 its slot goes to somebody who is — which is why the cap is on the request,
@@ -361,18 +422,36 @@ same file pikuri-tui reads, so one file configures every pikuri shell.
 There is no `--api-key` flag: a secret on the command line is visible in
 `ps` and shell history.
 
+A `[[server]]` is a box; an `[[llm]]` is a model running on one, naming it
+by `id`. Splitting them means several models on one provider state its URL
+and its key once:
+
 ```toml
-[[llm]]
-name = "Local Qwen 3.6"
-server = "http://localhost:8080"
-model = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+[[server]]
+id  = "local"
+url = "http://localhost:8080"
+max_concurrent_requests = 1   # see "How many conversations can think at once"
+
+[[server]]
+id  = "xai"
+url = "https://api.x.ai"
+api_key = "xai-…"
 
 [[llm]]
-name = "Grok"
-server = "https://api.x.ai"
-model = "grok-4"
-api_key = "xai-…"
+name   = "Local Qwen 3.6"
+server = "local"              # a [[server]] id, not a URL
+model  = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+
+[[llm]]
+name   = "Grok"
+server = "xai"
+model  = "grok-4"
 context_window = 2000000   # for a server the llama.cpp /props probe can't reach
+
+[[llm]]
+name   = "Grok 4 Fast"
+server = "xai"             # same box, same key, written once
+model  = "grok-4-fast"
 
 [search]                   # optional; omit it and web_search runs DuckDuckGo-only
 brave_key = "BSA…"
@@ -392,11 +471,22 @@ literal key is group/other-readable. The first `[[llm]]` is the connection
 a conversation starts on when it has no saved one of its own; every other
 entry is a `/model` away. Layering runs
 `/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml`.
+`server` references resolve after that merge, so a user file can add one
+`[[llm]]` against a system file's `[[server]]` instead of re-pasting the
+block — but since arrays replace wholesale, a file that declares
+`[[server]]` at all replaces every lower layer's, and an `[[llm]]` left
+pointing at a vanished `id` is a boot error rather than a silent fallback.
 
 There is deliberately no `--server` or `--model` flag: a connection lives in
 this file and nowhere else, so there is never a question of which of the two
 wins. To talk to a *new* server or model, add an `[[llm]]` entry — no
 restart is needed to move between the ones already there.
+
+If you are coming from a config written before `[[server]]` existed — an
+`[[llm]]` carrying a URL in `server` and its own `api_key` — boot fails with
+the `[[server]]` block to paste, built from that URL and with the stray key
+folded in. There is no compatibility shim; the error message is the
+migration.
 
 ### Switching model
 

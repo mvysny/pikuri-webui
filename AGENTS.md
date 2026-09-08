@@ -175,15 +175,16 @@ the alternatives that were rejected, live one entry per slug in
   `--bind` defaults to 127.0.0.1; anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
 
-- **The server is rationed per *request*, by pikuri — this shell only
-  sizes the permit count.** `--turns N` is `ServerPermits.limit(server, N)`,
-  one call per distinct server at boot ({ModelCatalog#servers}); the permit
-  is pikuri's, taken for one HTTP request and given back, so a turn off
-  running a tool holds no slot. Size *explicitly* even though pikuri
-  auto-sizes from `/props`: an `[[llm]]` with a `context_window` skips
-  that probe, and unsized means unlimited. Never re-add a throttle here,
-  and never tie the turn executor's size to this number in either
-  direction. See `D_upstream_request_throttle`.
+- **The server is rationed per *request*, by pikuri — and the config file
+  sizes it, not a flag.** A `[[server]]`'s `max_concurrent_requests` is
+  `ServerPermits.limit(server.url, n)`, one call per sized server at boot;
+  the permit is pikuri's, taken for one HTTP request and given back, so a
+  turn off running a tool holds no slot. A server naming no ceiling is left
+  to pikuri's `/props` probe — which an explicit `context_window` no longer
+  suppresses, so there is nothing left for a flag to cover. Never re-add a
+  throttle here, never re-add `--turns`, and never tie the turn executor's
+  size to this number in either direction.
+  See `D_max_concurrent_requests`, `D_upstream_request_throttle`.
 
 - **Turns run on one shared *unbounded* executor, and its size is not a
   correctness device.** Sending never refuses for load. Single-writer
@@ -264,8 +265,10 @@ the alternatives that were rejected, live one entry per slug in
   one source.** {Config} carries the *whole* `~/.config/pikuri/config.toml`
   schema, including sections this host never reads. Anything the file has
   a home for comes from the file and nowhere else — no flag, no `ENV`, no
-  project-local overlay — so there is never a precedence rule between an
-  override, the file and a conversation's saved model. Schema-completeness
+  project-local overlay, and no built-in default connection either — so
+  there is never a precedence rule between an override, the file and a
+  conversation's saved model. No file, or a file with no `[[llm]]`, is a
+  boot error quoting `Config::EXAMPLE_CONFIG`. Schema-completeness
   is a *standing* obligation, not a one-time port: a config-schema
   addition in pikuri-tui is a pikuri-web change, and strictness is
   asymmetric on purpose — strict inside the tables we consume, permissive
@@ -317,8 +320,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   takes the history and writes both halves), lists what is saved, deletes
   a folder.
 - `lib/pikuri_web/model_catalog.rb` — `PikuriWeb::ModelCatalog`, the
-  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport,
-  plus the distinct servers boot sizes `ServerPermits` from.
+  `[[llm]]` list as transports: name ⇄ `[model, api_base]` ⇄ transport.
 - `lib/pikuri_web/slash_command.rb` — `PikuriWeb::SlashCommand`, name +
   description for one palette row, and the `CATALOG` a page is served a
   config-gated subset of.
@@ -382,8 +384,7 @@ namespace; `lib/pikuri_web.rb` boots Zeitwerk over `lib/pikuri_web/`.
   for every conversation), the
   shared turn executor, the serialization domain, the trifecta report,
   Puma start (server settings and the shutdown hook). Flags are only what
-  the config file has no home for
-  — `--port` / `--bind` / `--turns` / `--dev`.
+  the config file has no home for — `--port` / `--bind` / `--dev`.
 - `bin/regen-icons` — re-renders every plated icon from `kuri.svg`; holds
   the sizes, the plate colour and the maskable bound. Maintainer tool, run
   by hand, not part of boot or any build.

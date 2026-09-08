@@ -44,23 +44,6 @@ RSpec.describe PikuriWeb::ModelCatalog do
     end
   end
 
-  # What the boot script sizes ServerPermits from. The slots belong to the
-  # server, so two models on one box must be one entry here — sizing each
-  # would tell a server expecting N to expect N twice over.
-  context '#servers' do
-    it 'answers one entry per box, in declaration order' do
-      assert_equal ['http://localhost:8080/v1', 'http://remote:8080/v1'], catalog.servers
-    end
-
-    it 'collapses two connections on one server into one' do
-      two_models = described_class.from_llms(
-        [llm('big', server: 'http://localhost:8080', model: 'qwen3.6'),
-         llm('small', server: 'http://localhost:8080', model: 'qwen3-4b')]
-      )
-      assert_equal ['http://localhost:8080/v1'], two_models.servers
-    end
-  end
-
   context '#find' do
     it 'answers nil for a name this config does not have' do
       assert_nil catalog.find('gone')

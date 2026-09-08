@@ -20,8 +20,30 @@ describe PikuriWeb::Config do
     end
   end
 
-  # Write config.toml under dir/pikuri/ (the XDG layout) and return its path.
+  # The smallest file that loads. A file defining no [[llm]] raises, so an
+  # example about some *other* table still has to carry a connection.
+  MINIMAL = <<~TOML
+    [[server]]
+    id  = "local"
+    url = "http://localhost:8080"
+
+    [[llm]]
+    name   = "Local"
+    server = "local"
+    model  = "qwen"
+
+  TOML
+
+  # Write config.toml under dir/pikuri/ (the XDG layout) and return its path,
+  # prefixing MINIMAL unless the body brings its own connection — so an
+  # example about [ui] or [search] states only the table it is about.
   def write_config(dir, body)
+    write_exact_config(dir, body.include?('[[llm]]') ? body : MINIMAL + body)
+  end
+
+  # Write the body verbatim — for the examples that are about what a file
+  # *lacks*.
+  def write_exact_config(dir, body)
     path = File.join(dir, described_class::XDG_SUBDIR, described_class::FILENAME)
     FileUtils.mkdir_p(File.dirname(path))
     File.write(path, body)
@@ -35,21 +57,16 @@ describe PikuriWeb::Config do
     { 'XDG_CONFIG_HOME' => home, 'XDG_CONFIG_DIRS' => dirs }
   end
 
-  # Load with no files present and the given overrides.
+  # Load a file that states nothing but a connection, with the given
+  # overrides — every other setting is then at its built-in default.
   def load_bare(**overrides)
-    described_class.load(overrides: overrides, env: env_for)
+    with_dirs do |home, _|
+      write_config(home, '')
+      described_class.load(overrides: overrides, env: env_for(home))
+    end
   end
 
-  describe 'defaults (no files)' do
-    it 'synthesizes the default Local Qwen connection with no key' do
-      c = load_bare
-      assert_equal 1, c.llms.size
-      assert_equal described_class::DEFAULT_LLM_NAME, c.primary_llm.name
-      assert_equal described_class::DEFAULT_SERVER, c.primary_llm.server
-      assert_equal described_class::DEFAULT_MODEL, c.primary_llm.model
-      assert_nil c.primary_llm.api_key
-    end
-
+  describe 'defaults (a connection and nothing else)' do
     it 'defaults the coding switches on and the mcp list empty' do
       c = load_bare
       assert c.sandbox
@@ -65,11 +82,31 @@ describe PikuriWeb::Config do
     end
   end
 
+  # There is no built-in connection, so the paste-ready block in the raise is
+  # where the knowledge of a working file lives.
+  describe 'no connection configured' do
+    it 'raises with the example config and the path to write it to' do
+      err = assert_raises(described_class::Error) { described_class.load(env: env_for('/nonexistent')) }
+      assert_includes err.message, 'no config file found'
+      assert_includes err.message, '/nonexistent/pikuri/config.toml'
+      assert_includes err.message, described_class::EXAMPLE_CONFIG
+    end
+
+    it 'raises the same way for a file that defines no [[llm]]' do
+      with_dirs do |home, _|
+        write_exact_config(home, "[code]\nsandbox = false\n")
+        err = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes err.message, 'no [[llm]] is defined'
+        assert_includes err.message, described_class::EXAMPLE_CONFIG
+      end
+    end
+  end
+
   describe 'CLI overrides (highest precedence)' do
     it 'ignores connection keys — a server/model never comes from the command line' do
       c = load_bare(server: 'http://host:9', model: 'm2')
-      assert_equal described_class::DEFAULT_SERVER, c.primary_llm.server
-      assert_equal described_class::DEFAULT_MODEL, c.primary_llm.model
+      assert_equal 'http://localhost:8080', c.primary_llm.server
+      assert_equal 'qwen', c.primary_llm.model
     end
 
     it 'treats false sandbox/confirm overrides as real values (not "absent")' do
@@ -88,36 +125,93 @@ describe PikuriWeb::Config do
   end
 
   describe 'file loading' do
-    it 'reads a literal api_key from an [[llm]] entry' do
+    it 'resolves an [[llm]] server reference into the URL and key of that [[server]]' do
       with_dirs do |home, _|
-        write_config(home, "[[llm]]\nname = \"Remote\"\nserver = \"https://x\"\napi_key = \"sk-123\"")
+        write_config(home, <<~TOML)
+          [[server]]
+          id = "grok"
+          url = "https://api.x.ai/v1"
+          api_key = "xai-123"
+
+          [[llm]]
+          name = "Grok 4 Fast"
+          server = "grok"
+          model = "grok-4-fast"
+        TOML
         c = described_class.load(env: env_for(home))
-        assert_equal 'Remote', c.primary_llm.name
-        assert_equal 'sk-123', c.primary_llm.api_key
+        assert_equal 'https://api.x.ai/v1', c.primary_llm.server
+        assert_equal 'xai-123', c.primary_llm.api_key
+        assert_equal 'grok-4-fast', c.primary_llm.model
       end
     end
 
-    it 'leaves api_key nil when the entry omits it' do
+    # The duplication this schema exists to remove: four models on one
+    # provider state its URL and its key once.
+    it 'shares one [[server]] across several [[llm]] entries' do
       with_dirs do |home, _|
-        write_config(home, "[[llm]]\nname = \"Local\"\nserver = \"http://x\"")
+        write_config(home, <<~TOML)
+          [[server]]
+          id = "grok"
+          url = "https://api.x.ai/v1"
+          api_key = "xai-123"
+
+          [[llm]]
+          name = "Grok 4 Fast"
+          server = "grok"
+          model = "grok-4-fast"
+
+          [[llm]]
+          name = "Grok 4"
+          server = "grok"
+          model = "grok-4"
+        TOML
         c = described_class.load(env: env_for(home))
-        assert_nil c.primary_llm.api_key
+        assert_equal %w[xai-123 xai-123], c.llms.map(&:api_key)
+        assert_equal %w[grok-4-fast grok-4], c.llms.map(&:model)
       end
+    end
+
+    it 'leaves api_key nil when the [[server]] omits it' do
+      assert_nil load_bare.primary_llm.api_key
     end
 
     it 'reads an explicit context_window from an [[llm]] entry' do
       with_dirs do |home, _|
-        write_config(home, "[[llm]]\nname = \"Grok\"\nserver = \"https://api.x.ai\"\ncontext_window = 2000000")
+        write_config(home, <<~TOML)
+          [[server]]
+          id = "x"
+          url = "https://api.x.ai"
+
+          [[llm]]
+          name = "Grok"
+          server = "x"
+          model = "grok-4"
+          context_window = 2000000
+        TOML
         c = described_class.load(env: env_for(home))
         assert_equal 2_000_000, c.primary_llm.context_window
       end
     end
 
     it 'leaves context_window nil when the entry omits it (pikuri auto-detects)' do
+      assert_nil load_bare.primary_llm.context_window
+    end
+
+    # What the boot script sizes ServerPermits from — an unreferenced entry
+    # included, since rationing a server nobody dials is a no-op and cheaper
+    # than filtering by what the [[llm]] list happens to name.
+    it 'exposes every [[server]], including one no [[llm]] references' do
       with_dirs do |home, _|
-        write_config(home, "[[llm]]\nname = \"Local\"\nserver = \"http://x\"")
+        write_config(home, <<~TOML)
+          [[server]]
+          id = "spare"
+          url = "http://spare:8080"
+          max_concurrent_requests = 2
+        TOML
         c = described_class.load(env: env_for(home))
-        assert_nil c.primary_llm.context_window
+        assert_equal %w[local spare], c.servers.map(&:id)
+        assert_nil c.servers[0].max_concurrent_requests
+        assert_equal 2, c.servers[1].max_concurrent_requests
       end
     end
 
@@ -269,9 +363,6 @@ describe PikuriWeb::Config do
     it 'accepts a file carrying the sections only pikuri-tui reads' do
       with_dirs do |home, _|
         write_config(home, <<~TOML)
-          [[llm]]
-          name = "Local"
-
           [code]
           sandbox = false
 
@@ -334,25 +425,23 @@ describe PikuriWeb::Config do
   describe 'load logging (PikuriWeb.logger)' do
     it 'logs each config file it reads, in load order' do
       with_dirs do |home, sys|
-        sys_path  = write_config(sys, "[code]\nsandbox = false\n")
-        home_path = write_config(home, "[[llm]]\nname = \"a\"\n")
+        sys_path  = write_exact_config(sys, "[code]\nsandbox = false\n")
+        home_path = write_config(home, '')
         out = capture_log { described_class.load(env: env_for(home, dirs: sys)) }
         assert_includes out, "loaded #{sys_path}"
         assert_includes out, "loaded #{home_path}"
         assert_operator out.index(sys_path), :<, out.index(home_path)
       end
     end
-
-    it 'logs a defaults notice when no config file is found' do
-      out = capture_log { load_bare }
-      assert_includes out, 'no config file found'
-    end
   end
 
   describe 'security advisories' do
-    it 'warns when a file holding a literal api_key is group/other-accessible' do
+    # The key lives on [[server]] now, and this check reads raw pre-merge
+    # TOML — so it has to look there. Reading [[llm]] would keep passing on a
+    # file full of plaintext keys, with nothing going red.
+    it 'warns when a file holding a literal [[server]] api_key is group/other-accessible' do
       with_dirs do |home, _|
-        path = write_config(home, "[[llm]]\nname = \"a\"\napi_key = \"sk-secret\"")
+        path = write_config(home, "[[server]]\nid = \"keyed\"\nurl = \"http://x\"\napi_key = \"sk-secret\"")
         File.chmod(0o644, path)
         out = capture_log { described_class.load(env: env_for(home)) }
         assert_includes out, 'chmod 600'
@@ -361,7 +450,7 @@ describe PikuriWeb::Config do
 
     it 'stays silent when the secret file is chmod 600' do
       with_dirs do |home, _|
-        path = write_config(home, "[[llm]]\nname = \"a\"\napi_key = \"sk-secret\"")
+        path = write_config(home, "[[server]]\nid = \"keyed\"\nurl = \"http://x\"\napi_key = \"sk-secret\"")
         File.chmod(0o600, path)
         out = capture_log { described_class.load(env: env_for(home)) }
         refute_includes out, 'chmod 600'
@@ -370,7 +459,7 @@ describe PikuriWeb::Config do
 
     it 'does not warn about a secret-free file with loose perms' do
       with_dirs do |home, _|
-        path = write_config(home, "[[llm]]\nname = \"a\"\nserver = \"s\"")
+        path = write_config(home, '')
         File.chmod(0o644, path)
         out = capture_log { described_class.load(env: env_for(home)) }
         refute_includes out, 'chmod 600'
@@ -439,24 +528,33 @@ describe PikuriWeb::Config do
       assert_includes e.message, 'exactly one'
     end
 
+    # MINIMAL ends inside its [[llm]] table, so appending a line adds a key to
+    # that entry — an example about one key states only that key.
+    def expect_llm_error(line) = expect_error(MINIMAL + line)
+
     it 'rejects an unknown llm key (e.g. the dropped api_key_env)' do
-      e = expect_error("[[llm]]\nname = \"a\"\napi_key_env = \"OPENAI_API_KEY\"")
+      e = expect_llm_error("api_key_env = \"OPENAI_API_KEY\"\n")
       assert_includes e.message, 'unknown key'
     end
 
     it 'rejects a non-integer context_window' do
-      e = expect_error("[[llm]]\nname = \"a\"\ncontext_window = \"2000000\"")
+      e = expect_llm_error("context_window = \"2000000\"\n")
       assert_includes e.message, '`context_window` must be a positive integer'
     end
 
     it 'rejects a non-positive context_window' do
-      e = expect_error("[[llm]]\nname = \"a\"\ncontext_window = 0")
+      e = expect_llm_error("context_window = 0\n")
       assert_includes e.message, '`context_window` must be a positive integer'
     end
 
     it 'rejects duplicate llm names' do
-      e = expect_error("[[llm]]\nname = \"a\"\n[[llm]]\nname = \"a\"")
+      e = expect_error("#{MINIMAL}\n[[llm]]\nname = \"Local\"\nserver = \"local\"\nmodel = \"m\"\n")
       assert_includes e.message, 'duplicate'
+    end
+
+    it 'rejects duplicate server ids' do
+      e = expect_error("#{MINIMAL}\n[[server]]\nid = \"local\"\nurl = \"http://other\"\n")
+      assert_includes e.message, 'duplicate server id(s): local'
     end
 
     it 'rejects duplicate mcp ids' do
@@ -464,14 +562,44 @@ describe PikuriWeb::Config do
       assert_includes e.message, 'duplicate'
     end
 
+    # After MINIMAL, not before it: a bare key written below a [[llm]] table
+    # would belong to that table rather than to the top level.
     it 'rejects an unknown top-level key' do
-      e = expect_error("foo = 1")
+      e = expect_error("foo = 1\n\n#{MINIMAL}")
       assert_includes e.message, 'unknown top-level'
     end
 
     it 'rejects an llm entry without a name' do
       e = expect_error("[[llm]]\nserver = \"s\"")
       assert_includes e.message, '`name` is required'
+    end
+
+    it 'rejects an llm entry without a server reference' do
+      e = expect_error("[[llm]]\nname = \"a\"\nmodel = \"m\"")
+      assert_includes e.message, '`server` is required'
+    end
+
+    it 'rejects an llm entry without a model' do
+      e = expect_error("[[llm]]\nname = \"a\"\nserver = \"local\"")
+      assert_includes e.message, '`model` is required'
+    end
+
+    it 'rejects a server entry without a url' do
+      e = expect_error("[[server]]\nid = \"a\"")
+      assert_includes e.message, '`url` is required'
+    end
+
+    it 'rejects a non-positive max_concurrent_requests' do
+      e = expect_error("[[server]]\nid = \"a\"\nurl = \"http://x\"\nmax_concurrent_requests = 0")
+      assert_includes e.message, '`max_concurrent_requests` must be a positive integer'
+    end
+
+    it 'rejects [[server]] written as a plain table' do
+      with_dirs do |home, _|
+        write_exact_config(home, "[server]\nid = \"a\"\n")
+        e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes e.message, 'use [[server]]'
+      end
     end
 
     it 'rejects a non-boolean sandbox' do
@@ -522,6 +650,52 @@ describe PikuriWeb::Config do
     it 'wraps malformed TOML in Config::Error' do
       e = expect_error("this is = = not toml")
       assert_includes e.message, 'failed to read'
+    end
+  end
+
+  # There is no compat path, so the raise is the whole migration experience:
+  # each shape an old file fails in gets a message that names the fix.
+  describe 'migrating a pre-[[server]] file' do
+    def expect_error(body)
+      with_dirs do |home, _|
+        write_exact_config(home, body)
+        assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+      end
+    end
+
+    # A URL and an id are both strings, so the old value parses cleanly and
+    # fails as a *lookup* — which reads like the user's mistake rather than a
+    # key whose meaning changed.
+    it 'tells an [[llm]] whose server is a URL that the key now names an id' do
+      e = expect_error("[[llm]]\nname = \"a\"\nserver = \"http://localhost:8080\"\nmodel = \"m\"")
+      assert_includes e.message, '`server` names a [[server]] `id` now, not a URL'
+      assert_includes e.message, 'url = "http://localhost:8080"'
+    end
+
+    it 'names the [[server]] an api_key still sitting on an [[llm]] belongs to' do
+      e = expect_error("#{MINIMAL}api_key = \"sk-1\"\n")
+      assert_includes e.message, '`api_key` belongs on [[server]] "local"'
+    end
+
+    # The two halves of an old entry — a URL server and a stray key — fail as
+    # one block to paste, not as two round trips.
+    it 'folds a stray api_key into the [[server]] block it suggests for a URL' do
+      e = expect_error("[[llm]]\nname = \"a\"\nserver = \"http://x:8080\"\nmodel = \"m\"\napi_key = \"sk-1\"")
+      assert_includes e.message, 'url = "http://x:8080"'
+      assert_includes e.message, 'api_key = "sk-1"'
+      assert_includes e.message, 'dropping its `api_key`'
+    end
+
+    it 'quotes the example config when no [[server]] is defined at all' do
+      e = expect_error("[[llm]]\nname = \"a\"\nserver = \"local\"\nmodel = \"m\"")
+      assert_includes e.message, 'no [[server]] is defined'
+      assert_includes e.message, described_class::EXAMPLE_CONFIG
+    end
+
+    it 'lists the known ids for a reference that is merely misspelt' do
+      e = expect_error("#{MINIMAL}\n[[llm]]\nname = \"b\"\nserver = \"locl\"\nmodel = \"m\"\n")
+      assert_includes e.message, 'unknown server id "locl"'
+      assert_includes e.message, '"local"'
     end
   end
 end

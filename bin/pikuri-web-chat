@@ -41,7 +41,6 @@ require 'pikuri_web'
 # state (`D_schema_complete_config`).
 port = 4567
 bind = '127.0.0.1'
-turns = 1
 dev = false
 
 parser = OptionParser.new do |opts|
@@ -50,11 +49,6 @@ parser = OptionParser.new do |opts|
   opts.separator 'Options:'
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
   opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
-  opts.on('--turns N', Integer,
-          "Completions in flight per inference server (default: #{turns}; " \
-          "match your server's parallel slots). Caps requests to the server, " \
-          'not conversations: any number may have a turn running, and one ' \
-          'waiting on a tool holds no slot.') { |v| turns = v }
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -67,11 +61,6 @@ begin
 rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
   warn e.message
   warn parser
-  exit 2
-end
-
-if turns < 1
-  warn "--turns must be at least 1, got #{turns}"
   exit 2
 end
 
@@ -96,12 +85,18 @@ end
 # nothing saved starts.
 catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
 
-# Sized explicitly rather than left to the auto-sizing pikuri does from the
-# server's own /props slot count: an [[llm]] entry carrying an explicit
-# context_window skips that probe altogether, and an unsized server is an
-# unlimited one. `--turns` is the operator's word about their own server
-# (`D_upstream_request_throttle`).
-catalog.servers.each { |server| Pikuri::Agent::ServerPermits.limit(server, turns) }
+# A [[server]] naming no ceiling is left alone, so pikuri's /props probe sizes
+# it from the box's own total_slots (`D_max_concurrent_requests`). `.limit`
+# wins by decision rather than by ordering: ServerPermits marks an explicit
+# size and refuses to let a probe's `.default` overwrite it, so this may run
+# before or after the agent is built.
+config.servers.each do |server|
+  permits = server.max_concurrent_requests
+  next if permits.nil?
+
+  Pikuri::Agent::ServerPermits.limit(server.url, permits)
+  PikuriWeb.logger.info("permits: #{server.id} at most #{permits} concurrent request(s) → #{server.url}")
+end
 
 Pikuri::Extractors::PDF.register
 
@@ -224,9 +219,10 @@ conversation_factory = lambda do |conversation|
     # The consequence of two conversations running at once is latency, not
     # corruption: the search limiter holds its mutex across the HTTP call, so
     # two agents searching at once serialize, and one tripping a provider's
-    # circuit breaker cools down the other. Note this is not gated by --turns —
-    # a tool call holds no server permit, so any two open conversations can be
-    # in a search together however small the server's slot count.
+    # circuit breaker cools down the other. Note this is not gated by
+    # max_concurrent_requests — a tool call holds no server permit, so any two
+    # open conversations can be in a search together however small the
+    # server's slot count.
     c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
     c.add_tool Pikuri::Tool::CALCULATOR
     c.add_tool Pikuri::Tool::WEB_SCRAPE
