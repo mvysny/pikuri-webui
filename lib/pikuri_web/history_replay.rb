@@ -92,10 +92,9 @@ module PikuriWeb
       Pikuri::Agent::Event::UserTurn.new(content: message.content)
     end
 
-    # The tool that composed a call's display strings is long gone by replay
-    # time, so they come off the file — and where the file predates them
-    # (+nil+), off +Pikuri::Tool+'s mechanical defaults, which is the same
-    # floor pikuri lands a live call on when no +Tool+ answers to the name.
+    # The tool that composed a call's display strings is gone by replay time,
+    # so they come off the file — or, for a file written before them, off
+    # +Pikuri::Tool+'s mechanical defaults.
     #
     # @param message [Pikuri::Agent::History::Message]
     # @param results [Hash{String => Pikuri::Agent::History::Message}]

@@ -19,15 +19,11 @@ module PikuriWeb
   # re-renders nothing and the server holds no display preference
   # (+D_both_forms_in_the_block+).
   #
-  # == The short form is the tool's, the raw one is ours
-  #
-  # +display_name+, +argument+ and +summary+ arrive on the event, composed by
-  # the tool that ran — which is the only party still holding the structure it
-  # flattened for the model, so +Scraped 4.2 kB+ and a calculator's bare +4+
-  # come out of the same slot with no guessing here. This class does the two
-  # jobs that stay the renderer's: defanging them, and capping them to a width
-  # only a renderer knows. The verbose form remains ours end to end, built off
-  # the raw +name+ / +arguments+ / +content+ the same event carries.
+  # The short form is the *tool's*: +display_name+, +argument+ and +summary+
+  # arrive on the event, composed upstream (+../pikuri+ +D_tool_summary_lines+).
+  # Defanging them and capping them to a width only a renderer knows are the two
+  # jobs left here. The verbose form is ours end to end, off the raw +name+ /
+  # +arguments+ / +content+ beside them.
   #
   # == Implementation details
   #
@@ -37,10 +33,10 @@ module PikuriWeb
   # no substitute — it escapes the +ESC+ that escaping already renders inert
   # and passes bidi, zero-width and homoglyphs straight through, which is why
   # pikuri-tui's "verbose arguments are safe on +inspect+ alone" carve-out
-  # does not port. It is why a tool's own display strings are defanged too:
-  # they are composed *from* model text, and a tool has no reason to defang
-  # for a chrome it cannot see. Sanitize, then flatten, then cap, in that
-  # order, so a cut cannot land inside an escaped +\u{202e}+ token.
+  # does not port. A tool's own display strings are no exception — composed
+  # *from* model text, by a tool that cannot know what chrome will show them.
+  # Sanitize, then flatten, then cap, in that order, so a cut cannot land
+  # inside an escaped +\u{202e}+ token.
   #
   # @!attribute [r] short
   #   @return [String] the toned-down form: +Fetch(https://example.org)+.
@@ -67,10 +63,8 @@ module PikuriWeb
     #                     display_name: 'EnterPlanMode', argument: '')
     #   # short: 'EnterPlanMode'          — no argument, so no parentheses
     #
-    # +display_name+ and +argument+ are the tool's own (+Pikuri::Tool#display_name+
-    # / +#describe_call+, which an MCP or LSP tool overrides); an empty
-    # +argument+ is a tool saying there is nothing worth showing, not a value
-    # we failed to find.
+    # An empty +argument+ is a tool saying there is nothing worth showing, not
+    # a value we failed to find.
     #
     # @param name [String] the registered tool name, for the raw form.
     # @param arguments [Hash] the tool-call arguments, for the raw form.
@@ -92,13 +86,11 @@ module PikuriWeb
     #   ToolLine.for_result(content: '4', summary: '4')
     #   # short: '4'          — the calculator's answer *is* its status line
     #
-    # Failure is read off +content+'s +Error:+ prefix, which is not a
-    # heuristic but the same test +Pikuri::Tool::Result#error?+ applies:
-    # +Tool#run+ returns a recoverable failure as an +"Error: …"+ observation,
-    # while a genuine raise aborts the turn without ever reaching a
-    # +ToolResult+. It is read off the content rather than the summary because
-    # the summary of an error is its first line, prefix included, but only by
-    # +Result.error+'s convention — the content is where the contract is.
+    # Failure is read off +content+'s +Error:+ prefix — the same test
+    # +Pikuri::Tool::Result#error?+ applies, since +Tool#run+ returns a
+    # recoverable failure as an +"Error: …"+ observation while a genuine raise
+    # aborts the turn before any +ToolResult+. Not off +summary+: an error's
+    # summary carries the prefix too, but only by +Result.error+'s convention.
     #
     # @param content [String] the tool observation, for the raw form.
     # @param summary [String] the tool's own one-line display form.

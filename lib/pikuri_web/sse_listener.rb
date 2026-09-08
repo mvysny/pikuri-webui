@@ -43,11 +43,8 @@ module PikuriWeb
   #   that does the TUI's grayscale job.
   # - +ToolCall+ / +ToolResult+ each render as one {ToolLine}, which carries
   #   the short form and the raw one both and leaves CSS to pick
-  #   (+D_both_forms_in_the_block+). Both halves of each event go over —
-  #   the tool's own display strings for the short line, the raw name /
-  #   arguments / observation for the verbose one. That class owns the
-  #   sanitizing and the escaping those lines need, so nothing here touches
-  #   them.
+  #   (+D_both_forms_in_the_block+). That class owns the sanitizing and the
+  #   escaping those lines need, so nothing here touches them.
   # - +SystemInjected+ (reference text the host injected — a loaded skill,
   #   recalled memory) collapses to a one-line +notice+; see
   #   {#render_system_injection}.

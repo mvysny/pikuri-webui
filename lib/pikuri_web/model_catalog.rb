@@ -54,9 +54,8 @@ module PikuriWeb
     #
     # Nothing here rations the server: how many requests may fly at one
     # +api_base+ is +Pikuri::Agent::ServerPermits+' business, a registry keyed
-    # on the server rather than anything a transport carries
-    # (+D_upstream_request_throttle+). {#servers} is what a boot script sizes
-    # it from.
+    # on the server rather than on anything a transport carries
+    # (+D_upstream_request_throttle+).
     #
     # @param llms [Array<Config::Llm>] every configured connection, in
     #   declaration order
@@ -104,8 +103,8 @@ module PikuriWeb
     def resolve(model:, server:) = @by_key[[model, server]]
 
     # @return [Array<String>] every distinct inference server, declaration
-    #   order — one entry per box to size, not per +[[llm]]+, because two
-    #   entries running two models on one server contend for its slots
+    #   order — one entry per box, not per +[[llm]]+, since two entries running
+    #   two models on one server contend for its slots
     def servers = @choices.map(&:server).uniq
 
     # @param transport [Pikuri::Agent::ChatTransport]

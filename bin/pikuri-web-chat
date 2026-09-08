@@ -95,13 +95,11 @@ end
 # nothing saved starts.
 catalog = PikuriWeb::ModelCatalog.from_llms(config.llms)
 
-# `--turns N` is N requests in flight per inference server, enforced by pikuri
-# for the length of one HTTP request (`D_upstream_request_throttle`). Sized
-# here, explicitly, rather than left to the auto-sizing pikuri does from the
+# Sized explicitly rather than left to the auto-sizing pikuri does from the
 # server's own /props slot count: an [[llm]] entry carrying an explicit
-# context_window skips that probe altogether, and where both speak the flag is
-# the operator's word about their own server. One call per *server*, because
-# the permits are the server's — two entries on one box share a pool.
+# context_window skips that probe altogether, and an unsized server is an
+# unlimited one. `--turns` is the operator's word about their own server
+# (`D_upstream_request_throttle`).
 catalog.servers.each { |server| Pikuri::Agent::ServerPermits.limit(server, turns) }
 
 Pikuri::Extractors::PDF.register
