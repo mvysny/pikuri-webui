@@ -872,12 +872,20 @@ in.
 
 **Consequences.**
 
-- `open` is in the markup unconditionally, and that is not a default
-  masquerading as one: the listener is per-*conversation* and shared by
-  every tab reading it, while collapsing is per-*browser*, so it renders
-  the pre-JS state and `transcript.js` resolves it. Expanded is the state
-  chosen for it so the default configuration never flashes, and so a
-  browser running no script still shows everything.
+- `open` is in the *stored* markup unconditionally, and that is not a
+  default masquerading as one: the listener is per-*conversation* and
+  shared by every tab reading it, while collapsing is per-*browser*.
+  Expanded is the stored state so a browser running no script still shows
+  everything. Who resolves it depends on how a block reaches the page: a
+  streamed one is set by `transcript.js` before it is painted; the blocks
+  `GET /c/:id` renders are folded *in the markup* by `Web::App#disclosed`
+  (`Web::Disclosure.collapse`) when the cookie says collapsed, because the
+  page paints before the module graph has loaded — a collapsed reader
+  otherwise watches a screen of reasoning fold away, ~100 ms in, on every
+  conversation switch. A CSS gate off `data-thinking` was the other
+  candidate and lost: `details[open]` with its content hidden is a control
+  that closes when clicked to open, and the `toggle` event that would write
+  the override fires a task later.
 - **The runtime toggle is collapse-all / expand-all**, not
   default-for-future-blocks-only: `/thinking` drops every per-block
   override and moves the whole transcript. The alternative leaves the
@@ -945,10 +953,12 @@ a user's click, false of our own write. The event also does not bubble,
 hence the capture-phase listener.
 
 **Consequence.** The server-rendered snapshot never passes through
-`upsert`, so `transcript.js` also resolves the blocks already in the page
-at mount. Without it a collapsed-preference reader watches reasoning they
-asked to hide until the SSE catch-up arrives — a whole round trip, not a
-frame.
+`upsert`, and `transcript.js` does *not* resolve it at mount either: the
+script runs after the first paint, so any mount-time pass is a visible
+fold. `GET /c/:id` serves those blocks already resolved
+(`D_details_per_block`), and the `snapshot` frame re-places them through
+`upsert`'s path a round trip later, which is where a stale page would be
+corrected.
 
 ## D_ui_cookie_over_config — A `[ui]` preference is a per-browser cookie over a config default, and that is not the precedence rule the config decision forbids
 

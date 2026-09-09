@@ -310,12 +310,38 @@ RSpec.describe PikuriWeb::Web::App do
       assert_includes last_response.body, 'data-theme="dark"'
     end
 
-    # D_details_per_block: the blocks arrive as `<details open>` and the
-    # browser resolves them, so this attribute is what transcript.js reads.
+    # D_details_per_block: streamed blocks arrive as `<details open>` and
+    # transcript.js resolves them against this attribute; the blocks in the
+    # page itself are served already resolved, because the script runs after
+    # the first paint.
     context 'the reasoning-disclosure default' do
       it 'renders the configured default with no cookie' do
         get_live
         assert_includes last_response.body, 'data-thinking="expanded"'
+      end
+
+      context 'with a thinking block in the transcript' do
+        let(:stored) { PikuriWeb::Web::Disclosure.wrap('<p>hmm</p>') }
+        before { lock.run { runner.transcript.add(kind: :thinking, html: stored) } }
+
+        it 'serves it open to an expanded browser, as stored' do
+          get_live
+          assert_includes last_response.body, %(<div class="block thinking" id="b1">#{stored}</div>)
+        end
+
+        let(:closed) { '<div class="block thinking" id="b1"><details><summary>thinking</summary><p>hmm</p></details></div>' }
+
+        it 'serves it closed to a collapsed browser, so nothing folds after the paint' do
+          set_cookie 'thinking=collapsed'
+          get_live
+          assert_includes last_response.body, closed
+        end
+
+        it 'folds for the configured default too, not only for a cookie' do
+          described_class.set :show_thinking, false
+          get_live
+          assert_includes last_response.body, closed
+        end
       end
 
       context 'when the config file asked for collapsed' do

@@ -270,7 +270,11 @@ the alternatives that were rejected, live one entry per slug in
   reads. Which blocks are open lives in `data-disclosure` on the **block
   div**, outside the html `upsert` rewrites 15×/s, or mid-turn expansion
   breaks silently. `/thinking` is collapse-all/expand-all, and nothing
-  touches the scroll.
+  touches the scroll. The first paint is never wrong: a streamed block
+  arrives `<details open>` and `transcript.js` resolves it before the
+  browser paints it, while the blocks `GET /c/:id` renders are folded in
+  the markup ({Web::Disclosure}) for a collapsed browser — never a
+  mount-time pass, which runs after the paint and shows as a fold.
   See `D_details_per_block`, `D_disclosure_state_on_the_block_div`.
 
 - **A tool block carries the short line and the raw one both; CSS picks.**
@@ -388,6 +392,8 @@ object injected at `bin/pikuri-web-chat`.
   StreamingMarkdownBuffer.
 - `lib/pikuri_web/web/tool_line.rb` — `Web::ToolLine`, one tool event as
   its short and verbose lines plus the two-span markup CSS picks between.
+- `lib/pikuri_web/web/disclosure.rb` — `Web::Disclosure`, the `<details>` a
+  reasoning block is stored in, and its closed form for a page render.
 - `lib/pikuri_web/web/trifecta_view.rb` — `Web::TrifectaView`, a walked
   trifecta report as the `/trifecta` dialog's escaped HTML body.
 - `lib/pikuri_web/web/slash_command.rb` — `Web::SlashCommand`, name +

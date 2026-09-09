@@ -23,12 +23,13 @@
      `interactive-widget=resizes-content` is what keeps the composer above
      iOS's on-screen keyboard instead of behind it. -->
 <!-- `data-thinking` is the resolved reasoning-disclosure default — "expanded"
-     or "collapsed". Rendered here for the same reason `data-theme` is: the
-     blocks arrive as `<details open>` (the listener cannot know a per-browser
-     preference), so transcript.js reads this attribute to resolve them, and a
-     server-rendered value means it never has to wait for a cookie read.
-     A per-block override lives on the block div; see public/js/transcript.js
-     and DECISIONS.md D_details_per_block. -->
+     or "collapsed". The blocks below are already served in that state (a
+     collapsed browser gets its `<details>` closed, Web::App#disclosed), so the
+     first paint is right without a script; the attribute is what transcript.js
+     resolves *streamed* blocks against, which arrive `<details open>` because
+     the listener cannot know a per-browser preference. A per-block override
+     lives on the block div; see public/js/transcript.js and DECISIONS.md
+     D_details_per_block. -->
 <!-- `data-tools` is the resolved tool-line form — "short" or "verbose". Every
      tool block carries both forms and style.css shows the one this attribute
      names, so a flip is a single attribute write and no block re-renders;

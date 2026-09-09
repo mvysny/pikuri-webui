@@ -206,25 +206,14 @@ module PikuriWeb
         end
       end
 
-      # Wrap a +:thinking+ block in the disclosure the browser collapses, and
-      # pass every other kind through untouched (`D_details_per_block`):
-      #
-      #   disclose(:thinking, "<p>The user wants…</p>")
-      #   # => "<details open><summary>thinking</summary><p>The user wants…</p></details>"
-      #
-      # +open+ is unconditional, and cannot become the preference: this listener
-      # is per-conversation and shared by every tab reading it, while collapsing
-      # is per-browser. It renders the pre-JS state, +transcript.js+ resolves it
-      # per tab — expanded, so the default configuration never flashes and a
-      # browser running no script still shows everything.
+      # Wrap a +:thinking+ block in its disclosure ({Disclosure.wrap}, the open
+      # form), and pass every other kind through untouched (`D_details_per_block`).
       #
       # @param kind [Symbol] block kind
       # @param html [String] the block's rendered HTML
       # @return [String] +html+, wrapped when it is reasoning
       def disclose(kind, html)
-        return html unless kind == :thinking
-
-        "<details open><summary>thinking</summary>#{html}</details>"
+        kind == :thinking ? Disclosure.wrap(html) : html
       end
 
       # Open a streamed block: an empty transcript block claims the id and
