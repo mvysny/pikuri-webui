@@ -145,10 +145,10 @@ module PikuriWeb
       end
 
       # SSE feed for the one conversation this tab is showing: the opening
-      # +snapshot+, transcript deltas (+block+ / +remove+ / +reset+) and
-      # +status+ for that conversation, plus
-      # the server-wide +conversations+ signal. A turn running in a conversation
-      # this tab is *not* showing never reaches it — that is what detaching is.
+      # +snapshot+, transcript deltas (+block+ / +remove+ / +reset+) and +status+
+      # for that conversation, plus the server-wide +conversations+ signal. A
+      # turn running in a conversation this tab is *not* showing never reaches
+      # it — that is what detaching is.
       #
       # The drain loop blocks on the subscribed queue until the client goes away
       # (write raises) or the broadcaster shuts down (nil sentinel).
@@ -294,20 +294,22 @@ module PikuriWeb
       end
 
       # What a just-connected tab needs to be level with the server: the whole
-      # transcript, as one +snapshot+ frame.
+      # transcript as one +snapshot+ frame, an ordered block list the browser
+      # lays over what its page already rendered, dropping whatever the list
+      # does not name. Sent even when empty — that drop is the only way a tab
+      # which rendered its page just before a wipe loses the blocks the server
+      # has forgotten.
       #
       # Runs in the same task as {Broadcaster#subscribe}, so no server-side gap
-      # remains between the two. The duplicate tolerance survives regardless —
-      # the browser applies the snapshot over the blocks the page already
-      # rendered, and {Transcript#clear} keeps its id counter so no id is ever
-      # reused — because the page render and this connection are still two HTTP
-      # requests (`D_subscribe_then_snapshot`).
+      # remains between the two. The duplicate tolerance survives regardless,
+      # because the page render and this connection are still two HTTP requests
+      # (`D_subscribe_then_snapshot`): blocks are addressed by id, and
+      # {Transcript#clear} keeps its id counter so no id is ever reused.
       #
-      # One frame rather than a +reset+ followed by a +block+ each: the browser
-      # paints between event dispatches, so emptying the pane and refilling it
-      # blinked the transcript the page had just rendered. The list is also what
-      # carries the drop half — a block the server has forgotten (a wipe this
-      # tab's page render missed) is one the list does not name.
+      # Never a +reset+ followed by a +block+ each. The browser paints between
+      # event dispatches, so emptying the pane and refilling it blinks a
+      # transcript this tab has already rendered correctly — and no spec here
+      # can go red for it, there being no JS runtime in the suite.
       #
       # @param conversation [String] id; one nobody has opened has no transcript
       #   and needs no catch-up

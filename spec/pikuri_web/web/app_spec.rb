@@ -534,9 +534,9 @@ RSpec.describe PikuriWeb::Web::App do
     # them is in neither the rendered snapshot nor the queue. Opening with the
     # transcript is what closes that, and subscribing first is what makes the
     # overlap a duplicate rather than a miss.
-    # One frame for the whole transcript, not a reset plus a block each: the
-    # browser paints between dispatches, and this catch-up lands on a page that
-    # has already rendered these blocks.
+    #
+    # It is one frame because the browser paints between event dispatches and
+    # this catch-up lands on a page that has already rendered these blocks.
     it 'opens with the resident transcript as one snapshot frame' do
       lock.run do
         runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>')
@@ -555,7 +555,7 @@ RSpec.describe PikuriWeb::Web::App do
     # Resident with nothing in it still needs the frame: it is what drops
     # whatever this tab's page render caught before a wipe.
     it 'opens with an empty snapshot for a resident conversation with no blocks' do
-      runner # resident, transcript empty
+      runner # the let is lazy: touching it is what makes the conversation resident
 
       get '/events', conversation: live.id
 

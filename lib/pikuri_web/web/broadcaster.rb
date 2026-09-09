@@ -75,8 +75,8 @@ module PikuriWeb
       #
       # @param event [String, Symbol] SSE event type (the browser-side
       #   +addEventListener+ name): +block+, +remove+, +reset+, +status+,
-      #   +conversations+ — and +snapshot+, which only {#frame} ever formats,
-      #   since a catch-up is addressed to the one connection asking for it
+      #   +conversations+. The protocol's other frame, +snapshot+, is a catch-up
+      #   for one connection and goes out through {#frame} instead
       # @param data [Hash] JSON-serialized into the frame's +data:+ line
       # @param conversation [String, nil] the conversation this frame is about;
       #   +nil+ addresses every subscriber
