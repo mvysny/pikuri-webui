@@ -94,13 +94,17 @@ the alternatives that were rejected, live one entry per slug in
   client-only conversation state.
   See `D_server_authoritative_transcript`.
 
-- **`GET /events` subscribes *before* it snapshots.** The page and the
-  EventSource are two requests, and a block finalized between them must
-  not fall down the gap. Subscribing first makes the overlap a duplicate
-  instead of a miss, and duplicates are free because blocks upsert by id
-  and {Web::Transcript#clear} never reuses one. The pair now also shares one
-  {BigAppLock} task, but the duplicate tolerance is what covers the
-  page-render-to-connect gap, which no server mechanism reaches — keep
+- **`GET /events` subscribes *before* it snapshots, and the snapshot is
+  one frame.** The page and the EventSource are two requests, and a block
+  finalized between them must not fall down the gap. Subscribing first
+  makes the overlap a duplicate instead of a miss, and duplicates are free
+  because the whole transcript rides one `snapshot` event, which the
+  browser applies over the blocks the page already rendered — by id, and
+  {Web::Transcript#clear} never reuses one. Never a `reset` plus a `block`
+  each: the browser paints between event dispatches, so emptying the pane
+  and refilling it blinks the tail of the conversation. The pair now also
+  shares one {BigAppLock} task, but the duplicate tolerance is what covers
+  the page-render-to-connect gap, which no server mechanism reaches — keep
   it. See `D_subscribe_then_snapshot`.
 
 - **A saved conversation is `history.json` plus our `meta.json`, and

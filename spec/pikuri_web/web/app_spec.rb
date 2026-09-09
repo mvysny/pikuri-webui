@@ -534,13 +534,33 @@ RSpec.describe PikuriWeb::Web::App do
     # them is in neither the rendered snapshot nor the queue. Opening with the
     # transcript is what closes that, and subscribing first is what makes the
     # overlap a duplicate rather than a miss.
-    it 'opens with the resident transcript, reset first' do
-      lock.run { runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>') }
+    # One frame for the whole transcript, not a reset plus a block each: the
+    # browser paints between dispatches, and this catch-up lands on a page that
+    # has already rendered these blocks.
+    it 'opens with the resident transcript as one snapshot frame' do
+      lock.run do
+        runner.transcript.add(kind: :tool_call, html: '<pre>calculator</pre>')
+        runner.transcript.add(kind: :assistant, html: '<p>42</p>')
+      end
 
       get '/events', conversation: live.id
 
-      assert_equal ['reset', 'block', 'status'], last_response.body.scan(/event: (\w+)/).flatten
-      assert_includes last_response.body, 'calculator'
+      assert_equal %w[snapshot status], last_response.body.scan(/event: (\w+)/).flatten
+      payload = JSON.parse(last_response.body[/^data: (.*)$/, 1])
+      assert_equal [{ 'id' => 'b1', 'kind' => 'tool_call', 'html' => '<pre>calculator</pre>' },
+                    { 'id' => 'b2', 'kind' => 'assistant', 'html' => '<p>42</p>' }],
+                   payload['blocks']
+    end
+
+    # Resident with nothing in it still needs the frame: it is what drops
+    # whatever this tab's page render caught before a wipe.
+    it 'opens with an empty snapshot for a resident conversation with no blocks' do
+      runner # resident, transcript empty
+
+      get '/events', conversation: live.id
+
+      assert_equal %w[snapshot status], last_response.body.scan(/event: (\w+)/).flatten
+      assert_includes last_response.body, 'data: {"blocks":[]}'
     end
 
     it 'opens with nothing for a conversation nobody has resident' do

@@ -144,8 +144,9 @@ module PikuriWeb
         erb :_sidebar, locals: { conversations: rows }
       end
 
-      # SSE feed for the one conversation this tab is showing: transcript deltas
-      # (+block+ / +remove+ / +reset+) and +status+ for that conversation, plus
+      # SSE feed for the one conversation this tab is showing: the opening
+      # +snapshot+, transcript deltas (+block+ / +remove+ / +reset+) and
+      # +status+ for that conversation, plus
       # the server-wide +conversations+ signal. A turn running in a conversation
       # this tab is *not* showing never reaches it — that is what detaching is.
       #
@@ -293,17 +294,20 @@ module PikuriWeb
       end
 
       # What a just-connected tab needs to be level with the server: the whole
-      # transcript, as +reset+ plus one +block+ each.
+      # transcript, as one +snapshot+ frame.
       #
       # Runs in the same task as {Broadcaster#subscribe}, so no server-side gap
       # remains between the two. The duplicate tolerance survives regardless —
-      # the browser upserts blocks by id, and {Transcript#clear} keeps its id
-      # counter so no id is ever reused — because the page render and this
-      # connection are still two HTTP requests (`D_subscribe_then_snapshot`).
+      # the browser applies the snapshot over the blocks the page already
+      # rendered, and {Transcript#clear} keeps its id counter so no id is ever
+      # reused — because the page render and this connection are still two HTTP
+      # requests (`D_subscribe_then_snapshot`).
       #
-      # +reset+ leads because the window may have swallowed one: without it a tab
-      # that rendered its page just before a +/clear+ would keep showing blocks
-      # the server has forgotten.
+      # One frame rather than a +reset+ followed by a +block+ each: the browser
+      # paints between event dispatches, so emptying the pane and refilling it
+      # blinked the transcript the page had just rendered. The list is also what
+      # carries the drop half — a block the server has forgotten (a wipe this
+      # tab's page render missed) is one the list does not name.
       #
       # @param conversation [String] id; one nobody has opened has no transcript
       #   and needs no catch-up
@@ -312,13 +316,8 @@ module PikuriWeb
         runner = settings.registry.resident(conversation)
         return [] if runner.nil?
 
-        frames = [settings.broadcaster.frame(event: :reset, data: {})]
-        runner.transcript.to_a.each do |block|
-          frames << settings.broadcaster.frame(
-            event: :block, data: { id: block.id, kind: block.kind, html: block.html }
-          )
-        end
-        frames
+        blocks = runner.transcript.to_a.map { |b| { id: b.id, kind: b.kind, html: b.html } }
+        [settings.broadcaster.frame(event: :snapshot, data: { blocks: blocks })]
       end
 
       # The sidebar's model.

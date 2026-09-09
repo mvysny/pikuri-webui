@@ -75,7 +75,8 @@ module PikuriWeb
       #
       # @param event [String, Symbol] SSE event type (the browser-side
       #   +addEventListener+ name): +block+, +remove+, +reset+, +status+,
-      #   +conversations+
+      #   +conversations+ — and +snapshot+, which only {#frame} ever formats,
+      #   since a catch-up is addressed to the one connection asking for it
       # @param data [Hash] JSON-serialized into the frame's +data:+ line
       # @param conversation [String, nil] the conversation this frame is about;
       #   +nil+ addresses every subscriber
@@ -89,7 +90,7 @@ module PikuriWeb
       # own connection instead of receiving it through a queue. Same wire format
       # as {#broadcast}, which is the point of it living here.
       #
-      #   out << broadcaster.frame(event: :block, data: { id: 'b1', … })
+      #   out << broadcaster.frame(event: :snapshot, data: { blocks: [{ id: 'b1', … }] })
       #
       # @param event [String, Symbol] SSE event type
       # @param data [Hash] JSON-serialized into the frame's +data:+ line
