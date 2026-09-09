@@ -1040,8 +1040,8 @@ version constraints plus `bundle update pikuri-core pikuri-pdf`.
 
 ## D_subscribe_then_snapshot — `GET /events` subscribes first and opens with the transcript, so the page-render-to-connect window loses nothing
 
-**Status:** Accepted, shipped in `Web::App#GET /events` + `Web::App#catch_up_frames`
-and `Web::Broadcaster#frame`.
+**Status:** Accepted, shipped in `Web::App#GET /events` + `Web::App#catch_up_frames`,
+`Web::Broadcaster#frame` and `transcript.js`'s `apply`.
 
 **Context.** Loading a conversation takes two requests: `GET /c/:id`
 renders the transcript at T1, and the browser opens `GET /events` at T2 —
@@ -1068,9 +1068,24 @@ upserts blocks by id, and {Web::Transcript#clear} deliberately keeps its id
 counter so an id is never reused. A miss is permanent; a repeat is a
 no-op. The seam closes on *ordering*, with no lock and no new mechanism.
 
-The catch-up leads with `reset`, because the window can swallow one of
-those too — a tab that rendered its page a moment before a `/clear` would
-otherwise keep showing blocks the server has forgotten.
+**The catch-up is one `snapshot` frame** carrying the whole ordered block
+list, which `transcript.js`'s `apply` places over what the page rendered
+and then drops whatever the list does not name. The drop half is why the
+frame is sent even when it is empty: the window can swallow a wipe too, and
+a tab that rendered its page a moment before one would otherwise keep
+showing blocks the server has forgotten.
+
+**Rejected: `reset` plus one `block` per block** — the first shape of this,
+and the source of a visible flash. Opening a stored conversation showed
+the transcript, blinked its tail out, and put it back: the browser paints
+between event dispatches, and the frames arrive across more than one read,
+so `reset` emptied a pane the page had *just* rendered correctly and a
+paint landed part-way through the refill. What is visible is the tail,
+because the pane is scrolled to the bottom. One frame is one dispatch, and
+placing a block whose html has not changed is invisible — so the fix is the
+frame count, not a client-side diff. No spec here can catch this
+(`D_no_js_build_step` — there is no JS runtime in the suite), which is why
+`Web::App#catch_up_frames` says so in prose.
 
 **Rejected: a lock shared by the writer and the subscriber**, so that
 append-and-broadcast and snapshot-and-subscribe are each atomic. It works
@@ -1096,10 +1111,18 @@ lands right back in this same window.
   the only authority — but "GET renders, SSE deltas" is now "GET renders,
   SSE re-opens with the transcript and then deltas".
 - **Every connect re-sends the whole transcript.** One extra pass over a
-  conversation that was just rendered into HTML. Acceptable on localhost;
-  the refinement, if it ever matters, is for the page to pass its last
-  block id and the route to send only the tail — which stays correct under
-  the same ordering argument.
+  conversation that was just rendered into HTML, and now one JSON payload
+  the size of it. Acceptable on localhost; the refinement, if it ever
+  matters, is for the page to pass its last block id and the route to send
+  only the tail — which stays correct under the same ordering argument.
+- **The client owns a whole-snapshot operation**, `transcript.apply`,
+  distinct from the per-block `upsert` — and it is the one place that
+  removes blocks it was not told to remove. `reset` stays a live event of
+  its own, for the history load that {Web::SseListener} broadcasts it from.
+- **The pane lands at the bottom on connect.** `apply` scrolls there
+  unconditionally rather than sticking to where the reader is, because it
+  runs once per page load and a conversation opens at its newest message —
+  nothing else scrolls a freshly rendered page.
 - **{Web::Broadcaster#frame} is public**, because the route writes catch-up
   straight onto its own connection and one place still has to own the wire
   format.

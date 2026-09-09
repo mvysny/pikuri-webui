@@ -24,6 +24,7 @@ const conversations = initConversations({ conversation: viewing });
 
 const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
 es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
+es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
 es.addEventListener('remove', (e) => transcript.remove(JSON.parse(e.data).id));
 es.addEventListener('status', (e) => statusbar.update(JSON.parse(e.data)));
 es.addEventListener('reset', () => transcript.reset());

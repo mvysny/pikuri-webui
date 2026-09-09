@@ -144,10 +144,11 @@ module PikuriWeb
         erb :_sidebar, locals: { conversations: rows }
       end
 
-      # SSE feed for the one conversation this tab is showing: transcript deltas
-      # (+block+ / +remove+ / +reset+) and +status+ for that conversation, plus
-      # the server-wide +conversations+ signal. A turn running in a conversation
-      # this tab is *not* showing never reaches it — that is what detaching is.
+      # SSE feed for the one conversation this tab is showing: the opening
+      # +snapshot+, transcript deltas (+block+ / +remove+ / +reset+) and +status+
+      # for that conversation, plus the server-wide +conversations+ signal. A
+      # turn running in a conversation this tab is *not* showing never reaches
+      # it — that is what detaching is.
       #
       # The drain loop blocks on the subscribed queue until the client goes away
       # (write raises) or the broadcaster shuts down (nil sentinel).
@@ -293,17 +294,22 @@ module PikuriWeb
       end
 
       # What a just-connected tab needs to be level with the server: the whole
-      # transcript, as +reset+ plus one +block+ each.
+      # transcript as one +snapshot+ frame, an ordered block list the browser
+      # lays over what its page already rendered, dropping whatever the list
+      # does not name. Sent even when empty — that drop is the only way a tab
+      # which rendered its page just before a wipe loses the blocks the server
+      # has forgotten.
       #
       # Runs in the same task as {Broadcaster#subscribe}, so no server-side gap
-      # remains between the two. The duplicate tolerance survives regardless —
-      # the browser upserts blocks by id, and {Transcript#clear} keeps its id
-      # counter so no id is ever reused — because the page render and this
-      # connection are still two HTTP requests (`D_subscribe_then_snapshot`).
+      # remains between the two. The duplicate tolerance survives regardless,
+      # because the page render and this connection are still two HTTP requests
+      # (`D_subscribe_then_snapshot`): blocks are addressed by id, and
+      # {Transcript#clear} keeps its id counter so no id is ever reused.
       #
-      # +reset+ leads because the window may have swallowed one: without it a tab
-      # that rendered its page just before a +/clear+ would keep showing blocks
-      # the server has forgotten.
+      # Never a +reset+ followed by a +block+ each. The browser paints between
+      # event dispatches, so emptying the pane and refilling it blinks a
+      # transcript this tab has already rendered correctly — and no spec here
+      # can go red for it, there being no JS runtime in the suite.
       #
       # @param conversation [String] id; one nobody has opened has no transcript
       #   and needs no catch-up
@@ -312,13 +318,8 @@ module PikuriWeb
         runner = settings.registry.resident(conversation)
         return [] if runner.nil?
 
-        frames = [settings.broadcaster.frame(event: :reset, data: {})]
-        runner.transcript.to_a.each do |block|
-          frames << settings.broadcaster.frame(
-            event: :block, data: { id: block.id, kind: block.kind, html: block.html }
-          )
-        end
-        frames
+        blocks = runner.transcript.to_a.map { |b| { id: b.id, kind: b.kind, html: b.html } }
+        [settings.broadcaster.frame(event: :snapshot, data: { blocks: blocks })]
       end
 
       # The sidebar's model.

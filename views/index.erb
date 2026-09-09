@@ -9,7 +9,8 @@
      Server-rendered snapshot of the transcript and status bar; public/js/app.js
      then connects an EventSource and applies deltas. Block divs are addressed
      by their transcript id — the SSE `block` event upserts by id, `remove`
-     deletes by id.
+     deletes by id, and the `snapshot` the connection opens with reconciles
+     this whole list against the server's (D_subscribe_then_snapshot).
 
      `data-theme` carries the resolved `theme` cookie so the first paint is
      already in the right palette; the toggle's label names the theme it

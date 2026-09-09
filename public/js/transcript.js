@@ -4,6 +4,7 @@
  *
  *     const transcript = initTranscript();
  *     es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
+ *     es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
  *     transcript.setThinkingDefault(false);   // /thinking → collapsed
  *
  * Every block arrives as ready-made HTML — kramdown ran on the server
@@ -24,6 +25,7 @@
  * Call once.
  *
  * @returns {{upsert: (block: {id: string, kind: string, html: string}) => void,
+ *   apply: (blocks: {id: string, kind: string, html: string}[]) => void,
  *   remove: (id: string) => void, reset: () => void,
  *   setThinkingDefault: (open: boolean) => void}}
  */
@@ -78,23 +80,69 @@ export const initTranscript = () => {
   // for a collapsed-preference reader to watch reasoning they asked to hide.
   transcript.querySelectorAll('.block.thinking').forEach(applyDisclosure);
 
+  // Create-or-fill one block div, without placing it and without scrolling —
+  // both are the caller's, so `apply` can place a whole snapshot and scroll
+  // once. A returned element with no `parentNode` is a fresh one.
+  const place = ({ id, kind, html }) => {
+    let el = document.getElementById(id);
+    if (!el) {
+      el = document.createElement('div');
+      el.id = id;
+      el.className = `block ${kind}`;
+    }
+    el.innerHTML = html;
+    applyDisclosure(el);
+    return el;
+  };
+
   return {
     /**
      * Upserts one block: the first frame of a streamed message creates the div,
      * every re-render replaces its content in place (D_rerender_and_replace).
+     * A block already in the pane keeps its position — a late update to a block
+     * something else has since followed must not move it to the end.
      */
-    upsert({ id, kind, html }) {
+    upsert(block) {
       const stick = nearBottom();
-      let el = document.getElementById(id);
-      if (!el) {
-        el = document.createElement('div');
-        el.id = id;
-        el.className = `block ${kind}`;
-        transcript.append(el);
-      }
-      el.innerHTML = html;
-      applyDisclosure(el);
+      const el = place(block);
+      if (!el.parentNode) transcript.append(el);
       if (stick) transcript.scrollTop = transcript.scrollHeight;
+    },
+
+    /**
+     * Makes the pane the server's snapshot — every block in the server's order,
+     * anything the server no longer holds dropped — which is what `GET /events`
+     * opens with (D_subscribe_then_snapshot).
+     *
+     * It has to be one call, and it must not empty the pane first: the browser
+     * paints between event dispatches, so a `reset` plus a `block` each blinks
+     * the tail of an already-rendered conversation out and back. The usual case
+     * here is a snapshot the page already agrees with — the cursor walk below
+     * leaves such a pane structurally untouched, and refilling a block in place
+     * is invisible.
+     *
+     * Lands the pane at the bottom — this runs once, just after the page loads,
+     * and a conversation opens at its newest message.
+     *
+     * @param {{id: string, kind: string, html: string}[]} blocks in order.
+     */
+    apply(blocks) {
+      // Walk both lists together: `next` is where the pane still agrees with
+      // the snapshot, so a block in the right place already costs no mutation,
+      // and whatever `next` is left pointing at is the tail the server has
+      // dropped.
+      let next = transcript.firstElementChild;
+      blocks.forEach((block) => {
+        const el = place(block);
+        if (el === next) next = next.nextElementSibling;
+        else transcript.insertBefore(el, next);
+      });
+      while (next) {
+        const after = next.nextElementSibling;
+        next.remove();
+        next = after;
+      }
+      transcript.scrollTop = transcript.scrollHeight;
     },
 
     /**
