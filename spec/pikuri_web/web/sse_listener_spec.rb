@@ -119,8 +119,9 @@ RSpec.describe PikuriWeb::Web::SseListener do
     end
   end
 
-  # D_details_per_block. What is pinned here is the markup; the `open` in it is
-  # the pre-JS state, and resolving it per tab is transcript.js's.
+  # D_details_per_block. What is pinned here is the stored markup; the `open` in
+  # it is resolved per browser by GET /c/:id (Web::Disclosure.collapse) and by
+  # transcript.js for streamed blocks.
   context 'reasoning disclosure' do
     it 'wraps a non-streamed thinking block in an open disclosure' do
       listener.on_event(Pikuri::Agent::Event::Thinking.new(content: 'I should read the config.'))

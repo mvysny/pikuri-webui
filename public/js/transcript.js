@@ -16,11 +16,12 @@
  * or a streamed block would style differently from a replayed one. `style.css`
  * owns what each kind looks like.
  *
- * A `:thinking` block's html carries a `<details open><summary>` the server
- * wrote (Web::SseListener#disclose). The `open` in that markup is only the pre-JS
- * state — the listener is shared by every tab and cannot know a per-browser
- * preference — so resolving it is this file's job, per **Reasoning
- * disclosure** below.
+ * A `:thinking` block's html carries a `<details><summary>` the server wrote
+ * (Web::Disclosure). A streamed one always arrives `open` — the listener is
+ * shared by every tab and cannot know a per-browser preference — and this file
+ * resolves it before the browser paints it, per **Reasoning disclosure** below.
+ * The blocks already in the page at mount are left alone: `GET /c/:id` knows
+ * the browser it renders for and served them resolved.
  *
  * Call once.
  *
@@ -74,11 +75,6 @@ export const initTranscript = () => {
       el.dataset.disclosure = details.open ? 'open' : 'closed';
     }
   }, true);
-
-  // The server-rendered snapshot never passes through `upsert`, and the SSE
-  // catch-up that would re-upsert it is a whole round trip away — long enough
-  // for a collapsed-preference reader to watch reasoning they asked to hide.
-  transcript.querySelectorAll('.block.thinking').forEach(applyDisclosure);
 
   // Create-or-fill one block div, without placing it and without scrolling —
   // both are the caller's, so `apply` can place a whole snapshot and scroll

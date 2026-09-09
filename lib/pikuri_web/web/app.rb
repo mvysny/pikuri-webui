@@ -103,11 +103,13 @@ module PikuriWeb
       # what keeps a light-theme user from a dark first paint; a JS-applied class
       # would flash. There is no matching route: the toggle writes the cookie
       # client-side (see public/js/app.js), because a POST + reload would cost an
-      # SSE reconnect for a color change.
+      # SSE reconnect for a color change. The reasoning disclosures are resolved
+      # here for the same reason ({#disclosed}).
       get '/c/:id' do
         cookie = request.cookies['theme']
         thinking = request.cookies['thinking']
         tools = request.cookies['tools']
+        thinking = THINKING.include?(thinking) ? thinking : default_thinking
         # One task, so the page is an untorn read: the blocks, the status bar
         # and the sidebar rows come from the same instant, never straddling a
         # transition. The blocks are immutable and the rest plain data, so the
@@ -127,8 +129,9 @@ module PikuriWeb
           }
         end
         erb :index, locals: snapshot.merge(
+          blocks: disclosed(snapshot[:blocks], thinking),
           theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
-          thinking: THINKING.include?(thinking) ? thinking : default_thinking,
+          thinking: thinking,
           tools: TOOL_LINES.include?(tools) ? tools : default_tool_lines,
           commands: SlashCommand.catalog(connections: settings.models.size),
           models: settings.models
@@ -268,6 +271,22 @@ module PikuriWeb
 
       # @return [String] the {THINKING} state a browser with no cookie gets.
       def default_thinking = settings.show_thinking ? 'expanded' : 'collapsed'
+
+      # The snapshot's blocks with every reasoning disclosure in the state this
+      # browser's first paint needs ({Disclosure.collapse}).
+      #
+      # Not left to +transcript.js+: a module script runs after the first paint,
+      # so a fold done there is a visible one — and nothing in the suite can go
+      # red for it, there being no JS runtime here.
+      #
+      # @param blocks [Array<Transcript::Block>] the transcript as stored
+      # @param thinking [String] one of {THINKING}
+      # @return [Array<Transcript::Block>]
+      def disclosed(blocks, thinking)
+        return blocks if thinking == 'expanded'
+
+        blocks.map { |block| block.with(html: Disclosure.collapse(block.html)) }
+      end
 
       # @return [String] the {TOOL_LINES} form a browser with no cookie gets:
       #   the config file's, or `short` when the file named a form this shell
