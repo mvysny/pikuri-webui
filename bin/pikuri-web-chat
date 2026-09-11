@@ -326,7 +326,7 @@ end
 gate_warning = nil
 
 if config.credentials
-  PikuriWeb::Web::App.use PikuriWeb::Web::BasicAuth, config.credentials
+  PikuriWeb::Web::App.use PikuriWeb::Web::Gate, config.credentials
 elsif !loopback.call(bind)
   gate_warning = <<~WARNING
     ⚠ WARNING: --bind #{bind} reaches past this machine and no password is set.

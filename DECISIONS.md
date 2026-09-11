@@ -53,11 +53,62 @@ replacement fresh.
 
 ---
 
+## D_gate_cookie — A passed prompt mints a cookie signed with the password itself
+
+**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`. Lands the
+half `D_one_password_gate` deferred.
+
+**Context.** Measured on an iPhone, home-screen app: iOS does not keep
+Basic credentials for a standalone web app between launches, so every
+launch met the native dialog — and met it slowly, 5–10 seconds of blank
+white while the 401 was digested. A password you retype on every launch
+is a password that gets shortened until it stops being one.
+
+**Decision.** Getting through the Basic challenge sets an `auth` cookie
+of `<expiry>.<HMAC_SHA256(password, "auth|<user>|<expiry>")>`, and a
+request carrying a valid one skips the challenge. The configured password
+*is* the signing key, so nothing is stored server-side and no secret is
+introduced; the window is 90 days, refreshed whenever a cookie is past
+its halfway mark, so a browser in regular use never reaches the expiry.
+HttpOnly, `SameSite=Lax`, and `Secure` only when the request arrived over
+TLS — a `secure` cookie on a plain-HTTP LAN server is one the browser
+accepts and then never sends back.
+
+**Rejected: a server-side session store.** A table of live sessions is
+the thing `D_no_event_queue` and `D_one_password_gate` both avoid, and it
+buys nothing here: there is one credential, so there is nothing per
+session to remember.
+
+**Rejected: a login form instead of the Basic challenge.** It would kill
+the *first* launch's blank screen too, and it is the road
+`D_one_password_gate` rejected — a page to render, and `curl -u` stops
+working. Reconsider only if the once-per-install prompt turns out to
+annoy; the cookie half would not change.
+
+**Rejected: setting the cookie from JavaScript.** Safari caps
+script-writable storage at 7 days, which is the bug this entry exists to
+fix, and it would put the password in reach of the page.
+
+**Rejected: a configurable window.** One more key in `[web]` for a number
+whose only wrong answers are "shorter than a habit" and "forever".
+
+**Consequences.**
+
+- The first launch after installing to the home screen still prompts, and
+  still pauses on the blank screen while it does. That is once per
+  browser, not once per launch.
+- Changing the password (or the user) invalidates every outstanding
+  cookie, which is the closest thing to a logout this app has — there is
+  still no logout, and no way to revoke one browser alone.
+- The cookie is a bearer token in the clear over plain HTTP, exactly as
+  the Basic header was. It is not a smaller exposure, just a rarer one.
+
 ## D_one_password_gate — One password from the config file, browser-prompted; a gate, not accounts
 
-**Status:** Accepted, shipped in `lib/pikuri_web/web/basic_auth.rb`,
+**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`,
 `Config#credentials` and `bin/pikuri-web-chat`. Overrules the
-"shipping auth" rejection in `D_single_shared_conversation`.
+"shipping auth" rejection in `D_single_shared_conversation`; the cookie
+that spares the prompt is `D_gate_cookie`.
 
 **Context.** Reaching the page from a phone means binding off loopback,
 and off loopback the port is the whole app: read, write and delete every
@@ -114,13 +165,8 @@ front of `public/` as well as the routes.
   their loaders raise on an unknown key — so pikuri-tui carries `web` in
   its allowlist, shape-checked and logged as unread, the same bargain it
   takes with `[titler]` (`D_schema_complete_config`).
-- A remember-me cookie is deferred, not rejected, with one trigger: iOS
-  has historically been unreliable about keeping Basic credentials for a
-  home-screen web app across launches. If a relaunch re-prompts, the fix
-  is to keep issuing the Basic challenge and set an HttpOnly cookie of
-  `<expiry>.<HMAC_SHA256(password, expiry)>` on success, accepting
-  either — still no session, no new secret, and changing the password
-  invalidates every outstanding cookie.
+- The deferred remember-me cookie was needed, and shipped:
+  `D_gate_cookie`. The trigger fired on the first iPhone that tried it.
 
 ## D_namespaces — Four namespaces cut by what a class *does*, and service never names `Web`
 

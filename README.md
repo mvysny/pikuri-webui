@@ -198,8 +198,10 @@ In Safari, not in another browser:
 
 Launch it from the icon and you get the page standalone — no address bar,
 no tabs, Kuri in the app switcher. A home-screen app keeps its own
-credentials, separate from Safari's, so a gated server asks for the
-password once more the first time you open it from the icon.
+cookies, separate from Safari's, so a gated server asks for the password
+once more the first time you open it from the icon — iOS sits on a blank
+screen for a few seconds before putting that dialog up. Answer it once
+and the cookie takes over; later launches go straight in.
 
 The icon is Kuri, a pika: a small alpine animal that spends the summer
 stacking cut grass into a pile under a rock, spends the winter eating it,
@@ -598,11 +600,17 @@ user     = "mavi"
 password = "a long passphrase"
 ```
 
-The browser asks once, in its own dialog, and remembers for the tab. Both
-keys are required together; without the table there is no password at all
-(and no prompt), which is why binding off loopback without one prints a
-warning at boot and starts anyway — you may well have a reverse proxy in
-front doing this job already.
+The browser asks in its own dialog the first time, then sets a cookie and
+stops asking — 90 days, renewed as you keep using it, so a phone's
+home-screen icon opens straight into the conversation instead of stopping
+for a password on every launch. The cookie is signed with the password
+itself, so changing the password in the file logs every browser out
+again.
+
+Both keys are required together; without the table there is no password
+at all (and no prompt), which is why binding off loopback without one
+prints a warning at boot and starts anyway — you may well have a reverse
+proxy in front doing this job already.
 
 It is a gate, not accounts. One password for everyone, no logout, no
 lockout on repeated guesses — pick a passphrase, not a word — and
