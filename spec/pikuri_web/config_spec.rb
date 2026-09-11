@@ -404,6 +404,52 @@ describe PikuriWeb::Config do
     end
   end
 
+  # The [web] gate. Both keys or neither: a half-written table that quietly
+  # gated nothing is the one failure this feature cannot have, so every
+  # incomplete shape below raises rather than resolving to nil.
+  describe '[web] credentials' do
+    def load_with(body)
+      with_dirs do |home, _|
+        write_config(home, body)
+        described_class.load(env: env_for(home))
+      end
+    end
+
+    it 'resolves the pair a file states' do
+      c = load_with("[web]\nuser = \"mavi\"\npassword = \"a long passphrase\"\n")
+      assert_equal 'mavi', c.credentials.user
+      assert_equal 'a long passphrase', c.credentials.password
+    end
+
+    it 'leaves credentials nil when no [web] names one — the gate off, never a default password' do
+      assert_nil load_bare.credentials
+    end
+
+    it 'rejects a [web] table missing either half' do
+      ["[web]\nuser = \"mavi\"\n", "[web]\npassword = \"a long passphrase\"\n", "[web]\n"].each do |body|
+        e = assert_raises(described_class::Error) { load_with(body) }
+        assert_includes e.message, 'web: `user` and `password` are both required'
+      end
+    end
+
+    it 'rejects a blank password' do
+      e = assert_raises(described_class::Error) { load_with("[web]\nuser = \"mavi\"\npassword = \"  \"\n") }
+      assert_includes e.message, 'web: `user` and `password` are both required'
+    end
+
+    it 'rejects an unknown [web] key' do
+      e = assert_raises(described_class::Error) do
+        load_with("[web]\nuser = \"m\"\npassword = \"p\"\nrealm = \"x\"\n")
+      end
+      assert_includes e.message, 'web: unknown key(s): realm'
+    end
+
+    it 'rejects web written as an array of tables' do
+      e = assert_raises(described_class::Error) { load_with("[[web]]\nuser = \"m\"\npassword = \"p\"\n") }
+      assert_includes e.message, '`web` must be a table ([web])'
+    end
+  end
+
   describe 'layering (XDG_CONFIG_DIRS < XDG_CONFIG_HOME)' do
     it 'deep-merges tables so a higher layer adding mcp keeps the lower layer sandbox' do
       with_dirs do |home, sys|
@@ -518,6 +564,15 @@ describe PikuriWeb::Config do
     it 'warns when a file holding a literal [[server]] api_key is group/other-accessible' do
       with_dirs do |home, _|
         path = write_config(home, "[[server]]\nid = \"keyed\"\nurl = \"http://x\"\napi_key = \"sk-secret\"")
+        File.chmod(0o644, path)
+        out = capture_log { described_class.load(env: env_for(home)) }
+        assert_includes out, 'chmod 600'
+      end
+    end
+
+    it 'warns when a file holding the [web] password is group/other-accessible' do
+      with_dirs do |home, _|
+        path = write_config(home, "[web]\nuser = \"mavi\"\npassword = \"a long passphrase\"\n")
         File.chmod(0o644, path)
         out = capture_log { described_class.load(env: env_for(home)) }
         assert_includes out, 'chmod 600'

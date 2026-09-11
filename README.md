@@ -89,7 +89,8 @@ and open <http://localhost:4567>. Boot without that file and it exits
 printing the block above plus the path to write it to — there are no
 `--server` / `--model` flags, because a connection lives in the file and
 nowhere else (see [Configure](#configure)). `--port` and `--bind` are this
-shell's own:
+shell's own — `--bind` off its loopback default wants a password with it,
+see [Locking the port](#locking-the-port):
 
 ```sh
 bin/pikuri-web-chat --port 9292
@@ -182,9 +183,9 @@ The page ships a web manifest, so Safari's **Add to Home Screen** on an
 iPad or iPhone gives pikuri its own icon and opens it without browser
 chrome. It is still the same server on the same machine: the icon is a
 bookmark, not an app, and it opens on nothing if the server isn't
-running. Reaching it from a phone also means binding off loopback, which
-is the thing the warning further down tells you not to do — on an iPad
-sharing the machine's own browser, none of that applies.
+running. Reaching it from a phone also means binding off loopback, so put
+a password on it first — see [Locking the port](#locking-the-port). On an
+iPad sharing the machine's own browser, none of that applies.
 
 In Safari, not in another browser:
 
@@ -196,7 +197,9 @@ In Safari, not in another browser:
 4. The name defaults to `pikuri`; change it or don't, then tap **Add**.
 
 Launch it from the icon and you get the page standalone — no address bar,
-no tabs, Kuri in the app switcher.
+no tabs, Kuri in the app switcher. A home-screen app keeps its own
+credentials, separate from Safari's, so a gated server asks for the
+password once more the first time you open it from the icon.
 
 The icon is Kuri, a pika: a small alpine animal that spends the summer
 stacking cut grass into a pile under a rock, spends the winter eating it,
@@ -538,7 +541,7 @@ from DuckDuckGo (and so from Bing, which fulfils its web results). Naming an
 engine whose key you did not set aborts at boot.
 
 `chmod 600` it — pikuri-web logs an advisory at boot if a file holding a
-literal key is group/other-readable. The first `[[llm]]` is the connection
+literal key or password is group/other-readable. The first `[[llm]]` is the connection
 a conversation starts on when it has no saved one of its own; every other
 entry is a `/model` away. Layering runs
 `/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml`.
@@ -582,12 +585,37 @@ one.
 Delete an `[[llm]]` that some conversation was on and it opens on the first
 connection instead; `/model` says so when you open it.
 
+### Locking the port
+
+Bound to its loopback default, the server is reachable only from the
+machine it runs on and asks nobody for anything. Bind it anywhere else —
+to reach it from a phone, say — and the port *is* the app: whoever finds
+it can read, write and delete every conversation. So gate it:
+
+```toml
+[web]
+user     = "mavi"
+password = "a long passphrase"
+```
+
+The browser asks once, in its own dialog, and remembers for the tab. Both
+keys are required together; without the table there is no password at all
+(and no prompt), which is why binding off loopback without one prints a
+warning at boot and starts anyway — you may well have a reverse proxy in
+front doing this job already.
+
+It is a gate, not accounts. One password for everyone, no logout, no
+lockout on repeated guesses — pick a passphrase, not a word — and
+everyone who gets in shares the same conversations. It stays single-user
+by construction: a second person runs their own `pikuri-web-chat` under
+their own OS account.
+
 > [!WARNING]
-> There is no authentication of any kind, and no notion of who is asking:
-> anyone who can reach the port can read, write and delete every
-> conversation. It is single-user by construction — a second person runs
-> their own `pikuri-web-chat` under their own OS account. Keep `--bind` at
-> its loopback default.
+> Basic credentials are sent on every request, in the clear over plain
+> HTTP, so anyone who can watch the traffic can lift them. On a home LAN
+> that is usually an acceptable trade; anywhere else, put TLS in front of
+> it (a reverse proxy) or reach it over a private overlay such as
+> Tailscale or WireGuard.
 
 ## Layout
 

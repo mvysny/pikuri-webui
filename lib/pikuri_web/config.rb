@@ -84,6 +84,17 @@ module PikuriWeb
   # shape is checked here; what the keys *mean* is the server's to say, the
   # same bargain {.build_search} takes with +engines+.
   #
+  # == The +[web]+ table
+  #
+  #   [web]
+  #   user     = "mavi"
+  #   password = "a long passphrase"
+  #
+  # The one password gating the port, resolved into {#credentials}. No +[web]+
+  # leaves it +nil+, which is no gate at all rather than a default password —
+  # and one pair for everyone rather than accounts (+D_one_password_gate+).
+  # Both keys are required once the table exists.
+  #
   # == Precedence
   #
   # Lowest to highest: built-in defaults → +/etc/xdg/pikuri/config.toml+
@@ -248,6 +259,16 @@ module PikuriWeb
       end
     end
 
+    # The +[web]+ table's pair, checked against the +Authorization+ header of
+    # every request (+D_one_password_gate+).
+    #
+    # @!attribute [r] user
+    #   @return [String] the name the browser's own prompt asks for.
+    # @!attribute [r] password
+    #   @return [String] the password, stored literally — the same file and the
+    #     same +chmod 600+ advisory a +[[server]]+ api_key earns.
+    Credentials = Data.define(:user, :password)
+
     # The smallest file that boots — a local llama.cpp. Every "no connection
     # configured" raise quotes it, so a first run ends in a block to paste
     # and edit rather than in a backtrace.
@@ -332,6 +353,7 @@ module PikuriWeb
         llms:          llms,
         servers:       servers,
         titler_llm:    build_titler(merged['titler'], llms),
+        credentials:   build_credentials(merged['web']),
         search:        build_search(merged['search']),
         sandbox:       pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
         confirm:       pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
@@ -358,7 +380,9 @@ module PikuriWeb
     # @param titler_llm [Llm, nil] the connection titles are written on, or
     #   +nil+ for no titling. Defaults to +nil+ so a config built in code
     #   opts in the same way a file does.
-    def initialize(llms:, search:, sandbox:, confirm:, mcp:, servers: [], titler_llm: nil,
+    # @param credentials [Credentials, nil] the +[web]+ pair gating the app, or
+    #   +nil+ for no gate. Defaults to +nil+, as a file with no +[web]+ does.
+    def initialize(llms:, search:, sandbox:, confirm:, mcp:, servers: [], titler_llm: nil, credentials: nil,
                    show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES)
       @llms    = llms.freeze
       @servers = servers.freeze
@@ -367,6 +391,7 @@ module PikuriWeb
       @confirm = confirm
       @mcp     = mcp.freeze
       @titler_llm    = titler_llm
+      @credentials   = credentials
       @show_thinking = show_thinking
       @tool_lines    = tool_lines
       freeze
@@ -397,6 +422,10 @@ module PikuriWeb
     #   (+[titler] llm+), or +nil+ when the file names none — which switches
     #   titling off rather than falling back to {#primary_llm}.
     attr_reader :titler_llm
+    # @return [Credentials, nil] the +[web]+ pair gating every request, or
+    #   +nil+ when the file names none — which switches the gate off rather
+    #   than inventing a default password.
+    attr_reader :credentials
 
     # @return [Llm] the boot connection (the first).
     def primary_llm = @llms.first
@@ -438,11 +467,15 @@ module PikuriWeb
     # in rather than the {Llm} it is later resolved into.
     #
     # @return [Boolean] true when the parsed file carries any literal secret
-    #   (a +[[server]]+ +api_key+, a +[search]+ +brave_key+/+exa_key+, or an
-    #   +[[code.mcp]]+ +bearer_token+/+basic_auth+/+headers+/+env+).
+    #   (a +[[server]]+ +api_key+, a +[web]+ +password+, a +[search]+
+    #   +brave_key+/+exa_key+, or an +[[code.mcp]]+
+    #   +bearer_token+/+basic_auth+/+headers+/+env+).
     def self.holds_secret?(parsed)
       servers = parsed['server']
       return true if servers.is_a?(Array) && servers.any? { |e| e.is_a?(Hash) && e['api_key'] }
+
+      web = parsed['web']
+      return true if web.is_a?(Hash) && web['password']
 
       search = parsed['search']
       return true if search.is_a?(Hash) && (search['brave_key'] || search['exa_key'])
@@ -471,7 +504,7 @@ module PikuriWeb
     end
 
     def self.validate_top!(merged)
-      unknown = merged.keys - %w[server llm search code ui titler]
+      unknown = merged.keys - %w[server llm search code ui titler web]
       raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
       %w[server llm].each do |k|
         next unless merged.key?(k) && !merged[k].is_a?(Array)
@@ -483,9 +516,36 @@ module PikuriWeb
       end
       raise Error, '`code` must be a table ([code])' if merged.key?('code') && !merged['code'].is_a?(Hash)
       raise Error, '`ui` must be a table ([ui])' if merged.key?('ui') && !merged['ui'].is_a?(Hash)
+      raise Error, '`web` must be a table ([web])' if merged.key?('web') && !merged['web'].is_a?(Hash)
       return unless merged.key?('titler') && !merged['titler'].is_a?(Hash)
 
       raise Error, '`titler` must be a table ([titler])'
+    end
+
+    # Resolve the +[web]+ table into the pair gating every request, or +nil+
+    # when the file has no such section — the gate off, the way no +[titler]+
+    # means no titling. Strict for the reason {.build_titler} is.
+    #
+    # Both keys are required together: a half-written table resolving to +nil+
+    # would gate nothing and say nothing, which is the one failure this feature
+    # cannot have.
+    #
+    # @param table [Hash, nil] the raw +[web]+ table.
+    # @return [Credentials, nil] the pair, or +nil+ for +table+ +nil+.
+    # @raise [Error] on an unknown key or a missing/blank +user+/+password+.
+    def self.build_credentials(table)
+      return nil if table.nil?
+
+      unknown = table.keys - %w[user password]
+      raise Error, "web: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
+
+      user     = table['user']
+      password = table['password']
+      unless non_empty_string?(user) && non_empty_string?(password)
+        raise Error, 'web: `user` and `password` are both required and must be non-empty strings'
+      end
+
+      Credentials.new(user: user, password: password)
     end
 
     # Resolve +[titler] llm+ to the connection titles are written on.
@@ -840,7 +900,7 @@ module PikuriWeb
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
                          :validate_top!, :validate_code!, :validate_ui!, :build_server, :build_llm,
                          :resolve_server, :server_is_now_an_id, :no_connection_message,
-                         :build_mcp, :build_mcp_headers,
+                         :build_mcp, :build_mcp_headers, :build_credentials,
                          :build_basic_auth, :build_mcp_env, :build_search,
                          :pick, :check_unique!, :non_empty_string?
   end
