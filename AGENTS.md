@@ -192,9 +192,27 @@ the alternatives that were rejected, live one entry per slug in
   single-user for good.** {Conversations::Registry} holds one {Agents::Runner}
   per conversation opened; which one a tab views lives in the URL, and
   SSE frames are addressed per conversation, so a turn runs on undisturbed
-  while you read something else. No sessions, no auth, no accounts.
+  while you read something else. No sessions, no accounts.
   `--bind` defaults to 127.0.0.1; anything else is the operator's risk.
   See `D_single_shared_conversation`, `D_conversation_owns_agent`.
+
+- **One password gates the port, and it is a gate, not accounts.** A
+  `[web]` table's `user`/`password` becomes {Web::Gate} wrapped around the
+  whole app — routes, `public/` and the SSE feed — and no `[web]` means no
+  middleware at all, so the loopback default prompts nobody. The browser's
+  own prompt is the entire UI: no login page, no logout, no lockout, and
+  everyone who gets in shares every conversation. Never a `--password`
+  flag (visible in `ps`), never a default password, and a bind off
+  loopback without one warns but still starts — a proxy doing the auth is
+  a legitimate deployment. See `D_one_password_gate`.
+
+- **The cookie a passed prompt mints is signed, never stored.**
+  `<expiry>.<HMAC_SHA256(password, expiry)>`, keyed by the configured
+  password itself — so there is still no server-side session, nothing to
+  expire on our side, and a changed password invalidates every outstanding
+  cookie. It exists because iOS forgets Basic credentials between launches
+  of a home-screen app; refresh past the halfway mark, and never a
+  server-held session table. See `D_gate_cookie`.
 
 - **The server is rationed per *request*, by pikuri — and the config file
   sizes it, not a flag.** A `[[server]]`'s `max_concurrent_requests` is
@@ -379,6 +397,9 @@ object injected at `bin/pikuri-web-chat`.
   `POST /conversations/:id/delete`. Every route names the conversation it
   acts on, and every route body is one task. Lock, registry,
   broadcaster and the connection rows injected via class-level settings.
+- `lib/pikuri_web/web/gate.rb` — `Web::Gate`, the one config-file password
+  as Rack middleware in front of everything, plus the signed cookie a
+  passed prompt mints.
 - `lib/pikuri_web/web/sse_listener.rb` — `Web::SseListener`, the
   `Pikuri::Agent::Listener::Base` subclass rendering the event stream
   into the transcript + SSE. The TuileListener equivalent.
@@ -479,7 +500,8 @@ namespace file, and it is meant to fail things):
   per-server permit sizing, the conversation factory (agent + tools +
   Interloper + the connection this conversation is minted on, one wiring
   for every conversation), the
-  shared turn executor, the serialization domain, the trifecta report,
+  shared turn executor, the serialization domain, the trifecta report, the
+  gate (or the warning when a bind off loopback has none),
   Puma start (server settings and the shutdown hook). Flags are only what
   the config file has no home for — `--port` / `--bind` / `--dev`.
 - `bin/probe-titler` — runs the eight probe openers (and six attacks) through

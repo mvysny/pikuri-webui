@@ -19,6 +19,7 @@ ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __dir__)
 
 require 'bundler/setup'
 require 'concurrent'
+require 'ipaddr'
 require 'optparse'
 
 # Only for the :after_stopped hook wired below; Sinatra's run! loads the
@@ -48,7 +49,9 @@ parser = OptionParser.new do |opts|
   opts.separator ''
   opts.separator 'Options:'
   opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
-  opts.on('--bind ADDR', "Address to bind (default: #{bind}; this app has no auth — keep it loopback)") { |v| bind = v }
+  opts.on('--bind ADDR', "Address to bind (default: #{bind}; off loopback, gate it with [web] in config.toml)") do |v|
+    bind = v
+  end
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -308,6 +311,38 @@ PikuriWeb::Web::App.set :show_exceptions, dev
 PikuriWeb::Web::App.set :bind, bind
 PikuriWeb::Web::App.set :port, port
 
+# No [web] table means no middleware rather than a default password, so a bind
+# off loopback is the one case where nobody at all is asked who they are —
+# hence the warning, which is advice and not a refusal: a reverse proxy doing
+# this job in front of us is a legitimate deployment (`D_one_password_gate`).
+loopback = lambda do |address|
+  address == 'localhost' || IPAddr.new(address).loopback?
+rescue IPAddr::InvalidAddressError
+  false
+end
+
+# Held rather than warned on the spot so it lands *under* Puma's banner, where
+# the operator's eye already is, instead of scrolling past above it.
+gate_warning = nil
+
+if config.credentials
+  PikuriWeb::Web::App.use PikuriWeb::Web::Gate, config.credentials
+elsif !loopback.call(bind)
+  gate_warning = <<~WARNING
+    ⚠ WARNING: --bind #{bind} reaches past this machine and no password is set.
+      Anyone who can reach #{bind}:#{port} can read, write and delete every
+      conversation. Put a gate in ~/.config/pikuri/config.toml:
+
+          [web]
+          user     = "you"
+          password = "a long passphrase"
+
+      Basic credentials travel in the clear over plain HTTP, so off a trusted
+      network put TLS in front (a reverse proxy) or reach it over a private
+      overlay instead.
+  WARNING
+end
+
 # Ctrl+C hangs without this hook. Every open EventSource parks one Puma
 # thread in the /events drain loop; Puma's graceful stop then waits for
 # in-flight requests with no deadline, and the heartbeat above keeps
@@ -347,4 +382,5 @@ PikuriWeb::Web::App.run! do
   primary = catalog.primary
   puts "pikuri-web listening on http://#{bind}:#{port} " \
        "(default connection: #{primary.model} @ #{primary.server}; #{catalog.choices.size} configured)"
+  warn gate_warning if gate_warning
 end

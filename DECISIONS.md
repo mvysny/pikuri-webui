@@ -53,6 +53,121 @@ replacement fresh.
 
 ---
 
+## D_gate_cookie — A passed prompt mints a cookie signed with the password itself
+
+**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`. Lands the
+half `D_one_password_gate` deferred.
+
+**Context.** Measured on an iPhone, home-screen app: iOS does not keep
+Basic credentials for a standalone web app between launches, so every
+launch met the native dialog — and met it slowly, 5–10 seconds of blank
+white while the 401 was digested. A password you retype on every launch
+is a password that gets shortened until it stops being one.
+
+**Decision.** Getting through the Basic challenge sets an `auth` cookie
+of `<expiry>.<HMAC_SHA256(password, "auth|<user>|<expiry>")>`, and a
+request carrying a valid one skips the challenge. The configured password
+*is* the signing key, so nothing is stored server-side and no secret is
+introduced; the window is 90 days, refreshed whenever a cookie is past
+its halfway mark, so a browser in regular use never reaches the expiry.
+HttpOnly, `SameSite=Lax`, and `Secure` only when the request arrived over
+TLS — a `secure` cookie on a plain-HTTP LAN server is one the browser
+accepts and then never sends back.
+
+**Rejected: a server-side session store.** A table of live sessions is
+the thing `D_no_event_queue` and `D_one_password_gate` both avoid, and it
+buys nothing here: there is one credential, so there is nothing per
+session to remember.
+
+**Rejected: a login form instead of the Basic challenge.** It would kill
+the *first* launch's blank screen too, and it is the road
+`D_one_password_gate` rejected — a page to render, and `curl -u` stops
+working. Reconsider only if the once-per-install prompt turns out to
+annoy; the cookie half would not change.
+
+**Rejected: setting the cookie from JavaScript.** Safari caps
+script-writable storage at 7 days, which is the bug this entry exists to
+fix, and it would put the password in reach of the page.
+
+**Rejected: a configurable window.** One more key in `[web]` for a number
+whose only wrong answers are "shorter than a habit" and "forever".
+
+**Consequences.**
+
+- The first launch after installing to the home screen still prompts, and
+  still pauses on the blank screen while it does. That is once per
+  browser, not once per launch.
+- Changing the password (or the user) invalidates every outstanding
+  cookie, which is the closest thing to a logout this app has — there is
+  still no logout, and no way to revoke one browser alone.
+- The cookie is a bearer token in the clear over plain HTTP, exactly as
+  the Basic header was. It is not a smaller exposure, just a rarer one.
+
+## D_one_password_gate — One password from the config file, browser-prompted; a gate, not accounts
+
+**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`,
+`Config#credentials` and `bin/pikuri-web-chat`. Overrules the
+"shipping auth" rejection in `D_single_shared_conversation`; the cookie
+that spares the prompt is `D_gate_cookie`.
+
+**Context.** Reaching the page from a phone means binding off loopback,
+and off loopback the port is the whole app: read, write and delete every
+conversation, plus an agent with egress. `--bind` documented that as the
+operator's risk, which is a warning nobody can act on — there was nothing
+to configure. What is wanted is a gate on the port, not multi-user
+support: the second person is still expected to run their own process
+under their own OS account (`D_single_shared_conversation`).
+
+**Decision.** One `user`/`password` pair in the shared config file's
+`[web]` table, checked by `Rack::Auth::Basic` wrapped around the whole
+app. No `[web]` means no middleware at all, so the loopback default
+prompts nobody; a bind off loopback with no `[web]` prints a warning
+under Puma's banner and starts anyway. The browser's own prompt is the
+entire UI — no login page, no session, no logout, no lockout — and the
+credentials it caches for the origin are replayed on the EventSource
+too, so `GET /events` needs nothing.
+
+**Rejected: per-user accounts.** The sentence
+`D_single_shared_conversation` rejected auth with — "it would look like
+multi-user support while delivering none" — is right about accounts and
+wrong about a gate. A gate makes no claim about who is asking; it only
+decides whether anyone gets in. Conversations stay shared, and the
+README says so where the old warning stood.
+
+**Rejected: a login form over a signed session cookie.** A page to
+render, a secret to manage and a session concept in an app whose whole
+shape is not having one (`D_no_event_queue`) — all to replace a dialog
+the browser already draws.
+
+**Rejected: a `--password` flag or an env var.** A secret on the command
+line is visible in `ps` and in shell history, and the file already owns
+every secret (`D_schema_complete_config`).
+
+**Rejected: refusing to boot off loopback without a password.** `--bind
+0.0.0.0` behind a reverse proxy that does the auth is a legitimate
+deployment, and a refusal forbids it to protect against a mistake the
+warning already names.
+
+**Rejected: TLS of our own** (Puma's `ssl_bind`). Certificate lifecycle
+for a chat shell; a proxy or a private overlay does it better, and the
+warning points at both.
+
+**Rejected: a `before` filter.** Middleware is what puts the gate in
+front of `public/` as well as the routes.
+
+**Consequences.**
+
+- Basic credentials travel in the clear on every request, the long-lived
+  SSE connection included. That is the accepted trade on a trusted LAN
+  and the reason the warning names TLS; nothing here should ever be
+  called "secure" without it.
+- `[web]` is a new top-level table in a file three shells share, and
+  their loaders raise on an unknown key — so pikuri-tui carries `web` in
+  its allowlist, shape-checked and logged as unread, the same bargain it
+  takes with `[titler]` (`D_schema_complete_config`).
+- The deferred remember-me cookie was needed, and shipped:
+  `D_gate_cookie`. The trigger fired on the first iPhone that tried it.
+
 ## D_namespaces — Four namespaces cut by what a class *does*, and service never names `Web`
 
 **Status:** Accepted, shipped. `PikuriWeb::Web`, `::Agents`, `::Conversations`,
@@ -3078,8 +3193,10 @@ multi-user. This one is the TUI's single-conversation model rendered in a
 browser, and its second "user" is a second tab on the same machine.
 
 **Decision.** One agent, one transcript, in-process. No sessions, no
-auth. `--bind` defaults to `127.0.0.1`; anything else is the operator's
-risk and is documented as such. Selecting a conversation is therefore
+auth (the second half now narrowed by `D_one_password_gate`: one password
+gates the port, and sessions still do not exist). `--bind` defaults to
+`127.0.0.1`; anything else is the operator's risk and is documented as
+such. Selecting a conversation is therefore
 *server* state, changed by a POST and announced to every tab, not a
 per-URL view: one live agent showing two panes where only one accepts
 input would be confusing in exactly the situation it enabled. Per-URL
@@ -3094,6 +3211,9 @@ broadcast. Out of scope until there's a concrete need.
 **Rejected: shipping auth to make a non-loopback bind safe.** Auth
 without per-session conversations protects an inbox everyone shares; it
 would look like multi-user support while delivering none of it.
+**Overruled by `D_one_password_gate`**, which took that argument as a
+constraint rather than a veto: one password for everyone, gating the port
+and claiming nothing about who is asking. The shared inbox stays shared.
 
 ## D_no_js_build_step — No bundler and no dependencies; JS is mechanics, never a renderer
 
