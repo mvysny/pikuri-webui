@@ -1,0 +1,20 @@
+# Decision slugs this repo cites but does not own: they belong to a sibling project, whose
+# DECISIONS.md holds the argument (cite it, don't re-argue it here). Read by
+# verify_design_tripwires.sh, which subtracts these from the slugs it demands a local heading
+# for. One slug per line, then the repo that defines it.
+#
+# Adding a line is a deliberate act: it says "this decision is upstream's". A slug that is
+# really ours belongs in decisions.md as a heading instead.
+
+D_history_attachments      ../pikuri
+D_kuri_mascot              ../pikuri
+D_llm_request_throttle     ../pikuri
+D_opaque_request_params    ../pikuri
+D_probe_when_unknown       ../pikuri
+D_tool_summary_lines       ../pikuri
+
+D_config_default           ../pikuri-tui
+D_drop_deltas_while_hidden ../pikuri-tui
+D_kinded_regions           ../pikuri-tui
+D_no_hidden_marker         ../pikuri-tui
+D_verbose_toggle           ../pikuri-tui

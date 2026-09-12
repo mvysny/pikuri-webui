@@ -55,7 +55,7 @@ thinnest possible viewport onto it.**
 ## What Open WebUI has that pikuri-web deliberately does not
 
 These are scope decisions, not gaps waiting for contributors — each traces
-to an entry in [`DECISIONS.md`](DECISIONS.md):
+to an entry in [`design/decisions.md`](decisions.md):
 
 - **Accounts, sharing, RBAC.** pikuri-web has no session concept and no
   notion of who is asking; anyone who reaches the port owns every
@@ -99,7 +99,7 @@ to an entry in [`DECISIONS.md`](DECISIONS.md):
   this concrete.
 - **Auditability of the whole stack.** ~5k lines including CSS and
   templates, readable in an afternoon; every behavior decision is written
-  down in `DECISIONS.md` with its rejected alternatives.
+  down in `design/decisions.md` with its rejected alternatives.
 - **Mid-turn injection.** Sending while the agent is working doesn't queue
   a new chat turn — it is delivered *into* the running loop at the next
   tool-batch boundary (pikuri's `Control::Interloper`), so you can steer a

@@ -1,55 +1,35 @@
-# DECISIONS.md
+# Decisions
 
-The *why-we-chose* record for pikuri-web — especially the roads not
-taken, which nothing else here has a home for. Never context-loaded; read
-when someone asks "why this way?". It is not the how-it-works reference
-(the YARD headers), the what-you-must-not-break list (`AGENTS.md`), or
-the user-facing promise (`README.md`). An entry links out rather than
-restating: `AGENTS.md` states the invariant flat with a `See D_<slug>`
-pointer, this file holds the argument behind it, and never two
-half-answers. A fork inside the agent loop, a tool, or LLM transport
-belongs to `../pikuri/DECISIONS.md` — cite it, don't re-argue it.
+Why this project is the way it is: one entry per decision *already taken*,
+with the roads not taken. Not what the code does (the YARD headers), not
+what must hold (`requirements.md` for a promise the README makes,
+`AGENTS.md` for an invariant), not what a user needs (`README.md`). A fork
+inside the agent loop, a tool or LLM transport belongs to
+`../pikuri/DECISIONS.md` — cite it, don't re-argue it here.
 
-**Format.** One entry per decision, newest first. The ID is `D_` plus a
-1–4-word snake_case slug, so a citation carries meaning on its own.
-Entries carry no dates — nobody reads this for the archaeology, and git
-owns the edit history, so never narrate how an entry used to read.
-`grep '^## D_' DECISIONS.md` is the index — there is no ToC, and every
-`D_<slug>` referenced in the repo must exist as a heading here.
-
-**Two tests before writing an entry, and both must pass:**
-
-- **Is there a real fork?** If nothing was seriously considered and
-  rejected, it isn't a decision — it's how the thing works, and that's
-  the YARD header. This is the guard against a diary.
-- **Would a future change silently break without it?** If rediscovering
-  the rejection costs a rebuild anyway, the fork isn't worth an entry.
-
-**A manual is not a decision, and it does not live here.** The tense
-tells you which you are holding: past — *"we chose X over Y because Z"* —
-is a decision; imperative future — *"change this and those move
-together"* — is a manual, and belongs next to the thing, ideally as a
-script that cannot drift from what it produces. `bin/regen-icons` is the
-worked example: `D_icon_plate` argues the plate, the script holds the
-sizes.
-
-**Budget the parts, not the entry.** Some decisions need more room than
-others, so there is no line cap — but the compulsory core is short:
-Status, Context, Decision, and the rejected alternatives at **one line
-each**. A rejection earns a paragraph only when its argument *surprised*
-you — when the obvious option failed for a reason a reader could not
-reconstruct. Below that, an optional tail may hold only: a measurement
-actually run, a mechanism that cannot be re-derived (the iOS compositing
-fact, the `pointerup` tap), or constraints binding future work. Prose
-that re-explains the decision at greater length is not on that list.
-
-**Entries are mutable — edit in place, don't append addendums.** Keep an
-entry current as its decision is refined. Two limits: the
-roads-not-taken **stay** (they are live content, not stale history, and
-the most valuable thing here); and a decision *reversed after shipping*
-forks a tombstone rather than being overwritten — leave the old entry,
-set its `Status:` to **Superseded by `D_<slug>`**, and write the
-replacement fresh.
+- Cite an entry by slug — `D_<slug>`, 1–4 snake_case words — never by
+  position. `grep '^## D_' design/decisions.md` is the index; there is no
+  ToC, and every `D_` cited in the repo resolves to a heading here unless
+  `design/foreign-slugs.txt` names the sibling repo that owns it.
+- **An entry is earned by what happened, not by having had an
+  alternative:** the decision shaped what this project is, or it cost
+  research the next person would otherwise redo — and *Rejected:* then says
+  what was *done* to rule the road out. A library among equals, the CI
+  host, a version bump: a comment at the site of the choice, never an
+  entry. Nothing about `design/` itself is one.
+- Shape: `## D_<slug> — <title>`, then **Status**, **Context**,
+  **Decision**, one **Rejected: …** paragraph per alternative,
+  **Consequences**. Deliberately no dates: git owns the edit history and
+  nobody reads this for the archaeology.
+- **Budget the parts, not the entry.** Status, Context, Decision and one
+  line per rejection are the compulsory core; a rejection earns a paragraph
+  only when its argument *surprised* you. An optional tail may hold a
+  measurement actually run, a mechanism that cannot be re-derived, or a
+  constraint binding future work — not prose re-explaining the decision.
+- Entries are mutable: refine in place, newest first, and the roads not
+  taken **stay**. A *shipped* decision that is reversed keeps its entry as a
+  tombstone (`Status: Superseded by D_<slug>`) and the replacement is
+  written fresh. **The oldest entry — at the bottom — is the ruler.**
 
 ---
 
@@ -1326,7 +1306,7 @@ the other consumer. Revisit if two features ever want the same short name.
 **Consequences.**
 
 - `app.js` no longer names `#prompt`, `#slash-menu` or `/messages`.
-- **`Q_composer_edges` is half-answered.** `statusbar.js` took `#cancel`:
+- **Where the composer's edges lie is half-answered.** `statusbar.js` took `#cancel`:
   the id is the contract, not the nesting, so a button sitting in
   `#composer`'s markup belongs to whoever the status frame drives. The
   unknown-command dialog stays the root's — it is already reached through
@@ -1636,7 +1616,7 @@ command, so `/usr/share/foo is broken` sends normally.
   keyboard with no Shift+Enter, so a Return that sends makes a two-line
   message unwritable. On the phone ↑ is Enter's send, and tapping a palette
   row is Enter's run.
-- **`Q_error_dialog_weight` stays open.** A modal for a typo is intrusive;
+- **Whether a modal is too much weight for a typo stays open.** It is intrusive;
   the alternative that keeps the intent is a status-bar note, for which
   there is precedent (`statusbar.say('not sent')`). Shipped as the dialog
   because it can list the known commands and a status line cannot.
@@ -3185,7 +3165,8 @@ a per-user *session* as the same thing, and Slack is the refutation —
 channel selection lives in its URL, the session exists only for auth. The
 premise the clause reasons from ("one live agent") is itself scheduled for
 replacement by one agent per conversation. Direction, staging and the
-hazards it opens: `ideas/per-conversation-agents.md`. Nothing here has
+hazards it opens: `D_conversation_owns_agent`, which the idea file that
+argued this graduated into. Nothing here has
 changed in code yet; amend this entry, don't trust it as intent.
 
 **Context.** A web front-end invites the assumption that it is
