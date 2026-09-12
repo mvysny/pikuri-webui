@@ -81,7 +81,7 @@ use the *element* and the CSS, not `openDialog` itself.
 
 ## If it graduates
 
-- **Rejected** → a one-line why-not in `DECISIONS.md`'s `D_one_shell_two_layouts` *Consequences*:
+- **Rejected** → a one-line why-not in `design/decisions.md`'s `D_one_shell_two_layouts` *Consequences*:
   a `<dialog>` cannot be the desktop column and the phone overlay, so the drawer keeps hand-rolled
   modality. The trap is invisible in the code and someone will retry it every time they see
   `chat.inert`.

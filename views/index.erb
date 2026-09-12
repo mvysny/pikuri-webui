@@ -4,7 +4,7 @@
      is a full-screen overlay the `#topbar` menu button opens, and `#topbar` is
      what is hidden the other way round. Nothing here is per-device: the split
      is media queries in style.css, so resizing a window crosses it live.
-     See DECISIONS.md D_one_shell_two_layouts.
+     See design/decisions.md D_one_shell_two_layouts.
 
      Server-rendered snapshot of the transcript and status bar; public/js/app.js
      then connects an EventSource and applies deltas. Block divs are addressed
@@ -28,12 +28,12 @@
      first paint is right without a script; the attribute is what transcript.js
      resolves *streamed* blocks against, which arrive `<details open>` because
      the listener cannot know a per-browser preference. A per-block override
-     lives on the block div; see public/js/transcript.js and DECISIONS.md
+     lives on the block div; see public/js/transcript.js and design/decisions.md
      D_details_per_block. -->
 <!-- `data-tools` is the resolved tool-line form — "short" or "verbose". Every
      tool block carries both forms and style.css shows the one this attribute
      names, so a flip is a single attribute write and no block re-renders;
-     there is no JS behind it beyond that write. See DECISIONS.md
+     there is no JS behind it beyond that write. See design/decisions.md
      D_both_forms_in_the_block. -->
 <html lang="en" data-theme="<%= theme %>" data-thinking="<%= thinking %>"
       data-tools="<%= tools %>" data-conversation="<%= conversation %>">
@@ -46,7 +46,7 @@
        SVG; the 32px PNG is the fallback. iOS reads only `apple-touch-icon` for
        the home screen, ignores the manifest's icons there, and composites
        transparency onto black — which is why every PNG here carries an opaque
-       plate rather than a bare mascot. See DECISIONS.md D_icon_plate.
+       plate rather than a bare mascot. See design/decisions.md D_icon_plate.
 
        `theme-color` is rendered per theme rather than left to the manifest, so
        iOS's status bar matches the palette the cookie actually resolved to;
