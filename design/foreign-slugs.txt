@@ -13,8 +13,5 @@ D_opaque_request_params    ../pikuri
 D_probe_when_unknown       ../pikuri
 D_tool_summary_lines       ../pikuri
 
-D_config_default           ../pikuri-tui
-D_drop_deltas_while_hidden ../pikuri-tui
-D_kinded_regions           ../pikuri-tui
-D_no_hidden_marker         ../pikuri-tui
-D_verbose_toggle           ../pikuri-tui
+D_density_thunks           ../pikuri-tui
+D_short_tool_lines         ../pikuri-tui

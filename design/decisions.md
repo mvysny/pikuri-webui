@@ -818,8 +818,8 @@ the server at all, which is the one thing the number was for.
 
 **Context.** pikuri-tui shortens tool lines to
 `WebSearch(rails 8 credentials)` / `OK, 4.2 kB` and keeps the raw form a
-keypress away — its `D_verbose_toggle` for the reachability argument,
-`D_kinded_regions` for the machinery: a register of kinded blocks plus
+keypress away — its `D_short_tool_lines` for the reachability argument,
+`D_density_thunks` for the machinery: a register of kinded blocks plus
 `#rerender(kind:)` redraws every tool line on a flip, because a terminal
 block is text that has to be recomputed. This shell rendered the verbose
 form only.
@@ -914,7 +914,7 @@ it, `/thinking` picks the default.
 
 **Context.** pikuri-tui hides reasoning behind one flag: `[ui]
 show_thinking` sets the starting value and a toggle flips the whole pane,
-drawing *nothing* where a hidden block was (its `D_no_hidden_marker` —
+drawing *nothing* where a hidden block was (`D_density_thunks` —
 grey filler earns nothing, and a terminal has no cheap per-block
 affordance). Porting that shape was the obvious move.
 
@@ -925,7 +925,7 @@ collapsed row is both the "reasoning happened here" signal and the way
 in: short feedback that thinking occurred, subtle enough not to disturb
 the conversation.
 
-**So pikuri-tui's `D_no_hidden_marker` inverts here, on its own argument.** The TUI
+**So pikuri-tui's no-marker call (`D_density_thunks`) inverts here, on its own argument.** The TUI
 rejected a marker because a line you cannot click is filler. A browser
 makes that same row clickable, which turns it from filler into the
 affordance — it pays for its line twice. The preference also keeps one
@@ -942,15 +942,15 @@ looks wrong, show me *that* step's reasoning" is the case that matters,
 and a global switch cannot express it.
 
 **Rejected: a server-side visibility gate** (the shape pikuri-tui's
-`D_kinded_regions` register serves). It would put a display preference in
+`D_density_thunks` register serves). It would put a display preference in
 server state, which is per-browser by decision — two tabs with different
 preferences would fight over one transcript. The TUI needed that register
 because a hidden region's text had to be *recomputed*; every block here is
 already complete HTML in the DOM, so none of the machinery has an
 equivalent and {Web::Transcript} gained nothing.
 
-**Rejected: dropping `ThinkingDelta` while collapsed**, the TUI's
-pikuri-tui's `D_drop_deltas_while_hidden`. The server cannot drop a delta for one tab
+**Rejected: dropping `ThinkingDelta` while collapsed**, as the TUI does
+(`D_density_thunks`). The server cannot drop a delta for one tab
 and keep it for another without a per-connection filter, and
 `D_server_authoritative_transcript` says the transcript is one picture.
 The TUI dropped deltas to avoid *rendering* work on a hidden pane; the
@@ -1077,8 +1077,9 @@ to the browser ("each browser owns its own view state"). The file says
 what a browser that has never expressed a preference sees; nothing about
 the agent changes, and no two sources ever describe one connection.
 
-This is also the shape pikuri-tui's `D_config_default` already has — file
-sets the default, the runtime toggle overrides and is never written back
+This is also the shape pikuri-tui already has — its `[ui]` table sets the
+default, the runtime toggle overrides and is never written back (a rule of
+`Shared::Config`, not a decision entry over there)
 — with the cookie standing in for the TUI's session.
 
 **Rejected: a session cookie** (no `max-age`, dying with the browser
