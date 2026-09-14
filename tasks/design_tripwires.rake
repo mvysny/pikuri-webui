@@ -5,7 +5,7 @@
 # in `rake check` — the agent's inner loop and CI both — rather than firing a session later.
 # It needs bash and git, which the ruby:3.3 CI image has because the build clones ../pikuri.
 
-desc 'Design docs: cited slugs resolve, AGENTS.md under 34 KB, CLAUDE.md is the shim'
+desc 'Design docs: cited slugs resolve, headings and caps hold, CLAUDE.md is a symlink'
 task :design_tripwires do
   sh 'design/verify_design_tripwires.sh'
 end

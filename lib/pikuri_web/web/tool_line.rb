@@ -21,7 +21,8 @@ module PikuriWeb
     # (+D_both_forms_in_the_block+).
     #
     # The short form is the *tool's*: +display_name+, +argument+ and +summary+
-    # arrive on the event, composed upstream (+../pikuri+ +D_tool_summary_lines+).
+    # arrive on the event, composed upstream (+../pikuri+, its decisions
+    # register under tool summary lines).
     # Defanging them and capping them to a width only a renderer knows are the two
     # jobs left here. The verbose form is ours end to end, off the raw +name+ /
     # +arguments+ / +content+ beside them.

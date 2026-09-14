@@ -1,13 +1,12 @@
 # Architecture
 
-The bird's-eye map of the code as it is: how the pieces are wired, and the flows that cross
-several of them. **The code and its YARD headers are the authority; this file describes
-them.** When they disagree, fix this file.
-
-Keep it short. Anything true of one class belongs in that class's header, and which class
-lives where is `AGENTS.md`'s module map — an agent needs that every turn. This file holds
-only what no single symbol can: dependency direction, the threading and data-flow story, and
-where to start reading. Cite `R_` for what must hold and `D_` for why; argue nothing here.
+How the pieces compose — what no single symbol can say and what would be expensive to overturn:
+dependency direction and wiring, the threading and data-flow story, the flows a newcomer needs,
+where to start reading. **Normative: the code conforms.** Change this file first, then the code.
+Not here: why (`decisions.md` — cite the `D_`), what upstream does (`research.md` — cite the
+`R_`), one symbol's behaviour (its YARD header), the module map (`AGENTS.md`). Only the sections
+with content; the first entry in each is the ruler. Cap 12 KB — over it, research or YARD-header
+content has crept in.
 
 ## Wiring
 
@@ -15,7 +14,7 @@ where to start reading. Cite `R_` for what must hold and `D_` for why; argue not
   service locator, nothing reloaded (`D_dev_flag_no_reload`).
 - **One conversation factory builds every agent** — transport, system prompt, listener stack,
   the four tools — so the trifecta report printed at boot is true of every agent in the
-  process (`R_chat_only`).
+  process (**A chat, not an agent with hands on your machine**).
 - **Dependencies point toward data.** `Web` may name anything; nothing under `agents/` or
   `conversations/` may name a constant under `web/`, so a renderer can never be summoned from
   inside the agent loop (`D_namespaces`, checked by `spec/pikuri_web/namespaces_spec.rb`).

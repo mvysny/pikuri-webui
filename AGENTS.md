@@ -1,114 +1,40 @@
-# AGENTS.md
-
-This file is loaded on every turn of every session, so it is an **index, not a manual**:
-one-line invariants and pointers, never the explanation behind one. The argument lives in
-`design/decisions.md`, the mechanism in the chokepoint's YARD header, and a rule true of one
-symbol in that symbol's own header. **Cap: 34 KB** here, 10 KB for a nested file — when it
-gets close, garbage-collect by *moving* a line to one of those homes, never by summarising it
-here, and trim every new line to the shape of the first one in its section. Two nested files
-load on top of this one when work touches their tree: `lib/pikuri_web/AGENTS.md` (the class
-map) and `public/AGENTS.md` (the client). Each has a `CLAUDE.md` beside it holding exactly
-`@AGENTS.md` — nothing else ever goes in a `CLAUDE.md`, even though `/init` and the `#`
-shortcut target that name.
+# pikuri-web — AGENTS.md
 
 ## What this is
 
-A Sinatra web front-end wrapping the [pikuri](https://codeberg.org/mvysny/pikuri) library —
-the browser sibling of [pikuri-tui](../pikuri-tui/). `bin/pikuri-web-chat` binds the same
-`Pikuri::Agent` and the same `Pikuri::Tool` set as the TUI's chat shell; the conversation
-pane / input field / status bar become a server-rendered page kept live over one SSE
-connection. All LLM transport, tool execution, agent loop control and prompts are pikuri's.
-We own the web shell only — an SSE listener, a turn runner, and the routes, templates and
-static files around them.
+Web front-end for [pikuri](https://codeberg.org/mvysny/pikuri) — a Ruby
+LLM agent framework. The browser sibling of
+[pikuri-tui](https://codeberg.org/mvysny/pikuri-tui): same agent, same
+tools, rendered as a server-driven chat page instead of a terminal.
+
+Pikuri owns the agent loop, tool execution, and LLM transport. This
+project owns nothing but the web shell: a transcript, an input field,
+and a status bar — Sinatra + server-side Markdown + one SSE stream.
+Diagnostic logs go to stderr. The JavaScript is dependency-free and
+hand-written; there is no Node, no bundler, no build step.
+
+## Promises
+
+- **The agent is pikuri's; this is a viewport onto it.** The loop, the tools and the transport are the library's; a capability that belongs in the agent belongs upstream.
+- **A chat, not an agent with hands on your machine.** The tool set cannot read your disk, run a command or touch a repository — untrusted content and egress, and *not* private data.
+- **No build step.** What ships to the browser is what is in `public/`: hand-written JavaScript, no dependency, no npm, no bundler.
 
 ## Design docs
 
-Rationale and reference live under `design/`; this file holds only what its header says it
-may. Each file has one audience and *what it is allowed to own*; every file's preamble states
-its entry shape and how to cite it. This section is the whole contract — nothing outside the
-repo is needed to follow it.
-
-| File | Owns | Loaded? |
+| File | Owns | Loaded |
 |---|---|---|
-| `README.md` | the operator: what this is, install, config, how to run, the trifecta promise | — |
-| `AGENTS.md` (this) | what you must not break from a distance; the module map; this table — its rules are in its header | **every turn** |
-| `design/requirements.md` | what must hold — `R_` entries, the README pitch's promises, stated not argued | lazy |
-| `design/architecture.md` | **the map** of the code as it is — wiring, flows, where to start; **the code and its YARD headers are the truth** | lazy |
-| `design/decisions.md` | why this and not that — `D_` entries, roads not taken | lazy |
-| `design/comparison.md` | what Open WebUI does, descriptively — prior art, not our reasoning | lazy |
+| `README.md` | the pitch, install, config, how to run | — |
+| `AGENTS.md` (this) | promises, invariants, the module map, conventions, commands | every turn |
+| `design/architecture.md` | how the pieces compose — wiring, threads, the flows; normative | lazy |
+| `design/decisions.md` | why this and not that — `D_` entries, FAQ-shaped | lazy |
+| `design/research.md` | what Open WebUI actually does — `R_` entries, each claim with provenance | lazy |
 | `design/ideas/` | not yet decided — one file per idea, `ls` is the index, deleted on graduation | transient |
-| YARD headers | per-symbol truth and its local rationale; a `bin/` script's flags and prerequisites | source of truth |
+| YARD headers | what one symbol does, why it is shaped so; a `bin/` script's flags and prerequisites | at the symbol |
 
-Rules that keep the split from drifting:
-
-- **One home per fact; the others link.** A one-line restatement that saves a jump is fine —
-  repeat the *fact*, defer the *explanation*. Compressing a `D_` entry into a bullet here is
-  a third copy, not a summary.
-- **`decisions.md` argues, `requirements.md` states, `architecture.md` composes and never
-  argues, `comparison.md` is about *them*.** A paragraph explaining *why* in any file but
-  `decisions.md` has drifted; move it and cite the `D_`. A fork belonging to the *library*
-  — the agent loop, a tool, Interloper's delivery boundary — is logged in
-  `../pikuri/DECISIONS.md`; cite it, don't re-argue it here.
-- **A `D_` is earned by what happened, not by having had an alternative:** it shaped what
-  this shell is, or it cost research the next person would otherwise redo. A testing library,
-  a version bump, git-vs-`find` in a script: a comment at the site of the choice, never an
-  entry. Only decisions already taken; ideas and open questions go to `design/ideas/`. A
-  shipped decision that is reversed keeps its entry as a tombstone. Nothing about `design/`
-  itself is an entry.
-- **An `R_` is a promise the README's pitch makes, made an official rule — and the owner
-  writes it.** An agent never adds, edits or retires one; it proposes, in conversation or as
-  a drafted entry in `design/ideas/`. The ruler: allow the opposite everywhere — is it still
-  the pitched project? "It cannot read your disk" → no → `R_`. "The transcript is
-  server-authoritative", "every route body is one task" → broken in places, same product →
-  an *invariant*: one line below, named in the promise's *Enforced by*, no `R_`.
-- **An invariant is one line below, and nothing more:** the rule, at most one clause of
-  consequence, `See D_<slug>` only when a `D_` exists — no fork, no cite; the agent has the
-  code. A line that will not fit belongs in the chokepoint's YARD header.
-- **Slugs:** `D_` decisions, `R_` requirements, `Q_` open questions inside `design/ideas/`
-  only — a durable doc never cites a `Q_`. Underscores throughout, backticked in prose, cited
-  by slug never by position; `grep '^## D_' design/decisions.md` is the index. A slug owned
-  by a sibling repo is declared in `design/foreign-slugs.txt` with the repo that defines it.
-- **`design/verify_design_tripwires.sh`** (also `rake design_tripwires`, part of `rake
-  check`) fails on any cited `D_` / `R_` without a heading, an oversized `AGENTS.md`, or a
-  `CLAUDE.md` that isn't the shim. Run it before committing a doc change.
-
-### Ideas & their graduation
-
-An idea file is named after what the idea *is*, and is a scratchpad exempt from this
-project's doc quality rules, because it is going to be deleted. **An idea graduates the
-moment it is acted on, and graduation is not done until the file is gone** — sidecar folder
-`design/ideas/<name>/` included, so read those too before deleting. Where the lasting nuggets
-land, in the order to try:
-
-- the choice made + the alternatives rejected → a `D_` entry if it passes the gate above;
-  otherwise a comment at the site of the choice
-- a promise the pitch makes that must hold from now on → a proposal for the owner, who writes
-  the `R_`; the invariant that keeps one → one line below
-- **a procedure — "change this and those move together"** → next to the thing it operates on,
-  as a script wherever one can run it (`bin/regen-icons`). A manual in prose can be neither
-  executed nor tested, and `decisions.md` is the wrong home in any case: past tense is a
-  decision, imperative future is a manual
-- how the pieces work together — wiring, a flow crossing several of them →
-  `design/architecture.md`
-- how one class works and why it is shaped that way → its YARD header
-- a new file or a changed responsibility → its line in the module map (here, or the module's
-  own `AGENTS.md`)
-- what a *user* must know — a flag, the trifecta promise, how to configure a model →
-  `README.md`
-- work deferred *as a consequence of a logged decision* → that entry's *Consequences*
-
-There is no `CHANGELOG` here; don't create one for a graduated idea.
-
-*Layout seeded from the `design-docs` skill (mvysny, `~/.claude/skills`); this project needs
-nothing from it.*
+Every fact lives in exactly one of these; the others link to it.
 
 ## Invariants
 
-What a change must not break from a distance.
-
-- **Reuse pikuri as the runtime; this project owns the web shell.** `Pikuri::Agent` is the
-  loop, `Pikuri::Tool::*` the tools, `Pikuri::Agent::Event` the stream we render; anything
-  beyond the listener, the runner and the routes around them is scope creep.
 - **No `Pikuri::*` type reaches what the browser sees.** Translation happens at
   {Web::SseListener}, {Agents::Runner}, {Conversations::HistoryReplay} and
   {Conversations::Store#save}, and it is a rule about types, never a folder. See
@@ -119,8 +45,7 @@ What a change must not break from a distance.
 - **The transcript is server-authoritative** — {Web::Transcript} holds the rendered blocks;
   never introduce client-only conversation state. See `D_server_authoritative_transcript`.
 - **`GET /events` subscribes *before* it snapshots, and the snapshot is one frame** — never a
-  `reset` plus a `block` each, which blinks the tail. The duplicate that ordering buys is what
-  covers the page-render-to-connect gap. See `D_subscribe_then_snapshot`.
+  `reset` plus a `block` each, which blinks the tail. See `D_subscribe_then_snapshot`.
 - **A saved conversation is `history.json` plus our `meta.json`, and nothing else.** Blocks
   are re-derived by replaying synthesized events, never stored, so old conversations get
   today's renderer. See `D_replay_from_history`.
@@ -161,10 +86,10 @@ What a change must not break from a distance.
   ours.** See `D_puma_thread_dump`.
 - **JavaScript is mechanics, never a renderer.** Markup or conversation content the server
   could have produced is the server's, always; the rule is about rendering and state, *not*
-  latency. See `R_no_build_step`, `D_no_js_build_step`.
+  latency. See **No build step**, `D_no_js_build_step`.
 - **A feature that owns a slice of the page owns a script file**, paired with the markup it
   renders from; anything crossing a boundary goes through `app.js`, never through another
-  feature's DOM. See `D_feature_owns_its_file`, and `public/AGENTS.md`.
+  feature's DOM. See `D_feature_owns_its_file`.
 - **One `index.erb` for the phone and the desktop; the difference is placement, so it is
   CSS's.** The 40rem breakpoint is written twice (`style.css`, `conversations.js`) and moves
   together; none may sit at or above 768px, which is iPad portrait. See
@@ -182,7 +107,13 @@ What a change must not break from a distance.
   busy.** {Agents::Runner#submit} injects when busy and never refuses for it; the one
   non-answer is a conversation deleted under it. See `D_interloper_mid_loop_input`.
 - **The chat script stays chat-only; new capability means a new sibling script** with its own
-  tool set and its own trifecta report. See `R_chat_only`, `D_chat_only_entry_point`.
+  tool set and its own trifecta report. See **A chat, not an agent with hands on your
+  machine**, `D_chat_only_entry_point`.
+- **The boot script is wiring, not logic.** A tool added there breaks the chat-only promise;
+  behaviour added there is a class that should have owned it.
+- **Flags are only what the config file has no home for.** `--turns`, `--server`, `--model`
+  and `--api-key-env` were removed deliberately and `--password` was refused outright;
+  re-adding one reopens a precedence rule or puts a secret in `ps`.
 - **A conversation owns its agent; a tab owns which one it views** — no sessions, no
   accounts, single-user for good, and `--bind` defaults to 127.0.0.1. See
   `D_conversation_owns_agent`, `D_single_shared_conversation`.
@@ -195,7 +126,7 @@ What a change must not break from a distance.
   alone, and `[ui] show_thinking` sets whether blocks *start* open. See
   `D_details_per_block`.
 - **Which reasoning blocks are open lives in `data-disclosure` on the block div**, outside
-  the html `upsert` rewrites 15×/s, or mid-turn expansion breaks silently. See
+  the html the `upsert` rewrites 15×/s, or mid-turn expansion breaks silently. See
   `D_disclosure_state_on_the_block_div`.
 - **A tool block carries the short line and the raw one both; CSS picks.** Both forms
   sanitize, the argument dump included — the TUI's `inspect` carve-out does not port. See
@@ -240,8 +171,7 @@ What a change must not break from a distance.
 Everything we ship is under `PikuriWeb::`; `lib/pikuri_web.rb` boots Zeitwerk over
 `lib/pikuri_web/` and carries `PikuriWeb.logger`. Four namespaces cut by *what a class
 produces*, plus the root for what belongs to no half (`D_namespaces`); each namespace module
-file carries its own admission rule. One line per module here — the class map is
-`lib/pikuri_web/AGENTS.md`.
+file carries its own admission rule.
 
 - `lib/pikuri_web/web/` — {Web}: everything whose output is what the browser sees.
 - `lib/pikuri_web/agents/` — {Agents}: running one LLM turn.
@@ -257,13 +187,16 @@ file carries its own admission rule. One line per module here — the class map 
   generates (the title corpus; the icon sizes and plate colour).
 - `views/index.erb`, `views/_sidebar.erb` — the page shell (both layouts, `#slash-menu`, the
   dialog `<template>`s) and the conversation list, also served alone for in-place refresh.
-- `public/` — the static root, served at the URL root. See `public/AGENTS.md`.
+- `public/js/` — the client: `app.js` is the composition root and the only crossing point, one
+  file per feature beside it, and `dom.js` knows no markup at all.
+- `public/` otherwise — the static root, served at the URL root: `style.css` holds both layouts
+  off one 40rem breakpoint, and `images/` the mascot plus the set `bin/regen-icons` plates.
 - `spec/pikuri_web/` — mirrors `lib/pikuri_web/`, namespace folders included; the specs that
   cross namespaces on purpose sit at its root.
 
 ## Conventions
 
-- **Tests:** rspec-core `describe`/`it` with minitest-style assertions (`assert_equal`,
+- **Tests: rspec-core `describe`/`it` with minitest-style assertions** (`assert_equal`,
   `refute`, …), the same as pikuri and pikuri-tui.
 - **A class and its spec stay one path apart**; `conversation_flow_spec.rb` and
   `client_contract_spec.rb` are the deliberate cross-namespace pair.
@@ -282,19 +215,18 @@ file carries its own admission rule. One line per module here — the class map 
 - **Library exceptions are logged, our bugs raise:** kramdown failures degrade to escaped
   text and `run_loop` failures return the UI to idle, but contract violations (double
   finalize, bad flush mode, a call from outside a task) raise.
+- **The client's hard-coded names are checked from Ruby:** `client_contract_spec.rb` reads
+  every script — globbed, never listed — and asserts each id, template, route, class and
+  command name still exists on the server's side.
 - **rack-test arrives as host `example.org`** — without `set :environment, :test` Sinatra
   403s it, so a spec asserting *absence* passes vacuously against "Host not permitted";
   confirm a new probe's no-fix failure by stashing the fix.
 - **Every thread we spawn names itself** (`Thread.current.name`), and a per-job borrow like
   the turn executor's names the thread for the job's duration.
-- **Doc comments** carry the per-symbol what *and* why, complete standalone; the
-  `writing-rdoc` skill has the rules.
-- **Components are self-sufficient** — no MVC/MVP layering, a component may reach a service
-  directly, and inheritance is for *being* a component, never for sharing code; the `cop`
-  skill has the rules.
 - **pikuri is pre-1.0 and this shell tracks its master**, so break freely in step with it:
   migrate on pikuri's `CHANGELOG.md` `**Breaking:**` entries, with pikuri-tui's HEAD as the
-  worked example for anything ambiguous. See `D_path_deps_on_pikuri_master`.
+  worked example for anything ambiguous — and expect a build green yesterday to break on
+  `bundle install` alone. See `D_path_deps_on_pikuri_master`.
 
 ## Commands
 
@@ -304,19 +236,29 @@ clones itself.
 - `bundle exec rake check` — the full check (the spec suite plus the doc tripwires), the
   default task, the cross-repo standard entry point, and what `.woodpecker.yml` runs.
 - `bundle exec rspec spec/pikuri_web/web/app_spec.rb` — one file; `-e 'name'` for one example.
-- `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`).
+- `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`),
+  also a CI job of its own.
 - `bin/pikuri-web-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on
   <http://localhost:4567>; needs `~/.config/pikuri/config.toml` with at least one `[[llm]]`.
 
-## Working on this codebase
+## Skills this project follows
 
-- **Flags are only what the config file has no home for.** `--turns`, `--server`, `--model`
-  and `--api-key-env` were removed deliberately and `--password` was refused outright;
-  re-adding one reopens a precedence rule or puts a secret in `ps`.
-- **A build that was green yesterday can break on `bundle install` alone**, because the
-  Gemfile follows pikuri master. Run `rake check` before assuming a failure is yours.
-- **The boot script is wiring, not logic.** A tool added there breaks a promise the README
-  has already made (`R_chat_only`); behaviour added there is a class that should have owned
-  it.
-- **Nothing here is verified on real iPhone hardware.** The layout was measured in a resized
-  desktop browser; `dvh`, the on-screen keyboard and `env(safe-area-inset-*)` are open.
+- **Doc comments carry the per-symbol what *and* why, complete standalone**; the
+  `writing-rdoc` skill has the rules.
+- **Components are self-sufficient** — no MVC/MVP layering, a component may reach a service
+  directly, and inheritance is for *being* a component, never for sharing code; the `cop`
+  skill has the rules.
+- **An idea is a scratchpad that is deleted when it is acted on**, its lasting nuggets moved
+  to the durable homes in the table above; the `ideas-folder` skill has the procedure.
+
+## Maintenance of this file
+
+Loaded every turn; cap 34 KB, a module's own `AGENTS.md` 10 KB. Over it, in this order:
+delete what has no home — status, history, class lists, what the code already says; trim
+each line to its fact plus one clause and send the explanation home — why →
+`design/decisions.md`, how across symbols → `design/architecture.md`, how in one symbol →
+its YARD header, what upstream does → `design/research.md`; only then a module's own
+`AGENTS.md`, peripheral modules first, never the core. Never paraphrase a lazy entry into a
+line here. `design/verify_design_tripwires.sh` checks the caps and the cites.
+
+*Layout from the `design-docs` skill (mvysny, `~/.claude/skills`).*

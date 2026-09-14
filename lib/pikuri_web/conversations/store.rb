@@ -57,7 +57,8 @@ module PikuriWeb
     #
     # Co-tenancy in one directory is safe by upstream contract rather than by
     # luck: +History#save+ never deletes and never enumerates the folder it
-    # writes into (pikuri +DECISIONS.md+ +D_history_attachments+).
+    # writes into (pikuri's own decisions register, under history
+    # attachments).
     #
     # Directories are created 0700: a conversation holds everything the user
     # typed plus whatever the tools fetched, unencrypted. That covers

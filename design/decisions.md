@@ -1,42 +1,70 @@
 # Decisions
 
-Why this project is the way it is: one entry per decision *already taken*,
-with the roads not taken. Not what the code does (the YARD headers), not
-what must hold (`requirements.md` for a promise the README makes,
-`AGENTS.md` for an invariant), not what a user needs (`README.md`). A fork
-inside the agent loop, a tool or LLM transport belongs to
-`../pikuri/DECISIONS.md` — cite it, don't re-argue it here.
-
-- Cite an entry by slug — `D_<slug>`, 1–4 snake_case words — never by
-  position. `grep '^## D_' design/decisions.md` is the index; there is no
-  ToC, and every `D_` cited in the repo resolves to a heading here unless
-  `design/foreign-slugs.txt` names the sibling repo that owns it.
-- **An entry is earned by what happened, not by having had an
-  alternative:** the decision shaped what this project is, or it cost
-  research the next person would otherwise redo — and *Rejected:* then says
-  what was *done* to rule the road out. A library among equals, the CI
-  host, a version bump: a comment at the site of the choice, never an
-  entry. Nothing about `design/` itself is one.
-- Shape: `## D_<slug> — <title>`, then **Status**, **Context**,
-  **Decision**, one **Rejected: …** paragraph per alternative,
-  **Consequences**. Deliberately no dates: git owns the edit history and
-  nobody reads this for the archaeology.
-- **Budget the parts, not the entry.** Status, Context, Decision and one
-  line per rejection are the compulsory core; a rejection earns a paragraph
-  only when its argument *surprised* you. An optional tail may hold a
-  measurement actually run, a mechanism that cannot be re-derived, or a
-  constraint binding future work — not prose re-explaining the decision.
-- Entries are mutable: refine in place, newest first, and the roads not
-  taken **stay**. A *shipped* decision that is reversed keeps its entry as a
-  tombstone (`Status: Superseded by D_<slug>`) and the replacement is
-  written fresh. **The oldest entry — at the bottom — is the ruler.**
+Why this project is the way it is and not otherwise — FAQ-shaped: each entry is a question and
+its current answer. Rewrite the answer when it changes; delete the entry when nobody asks any
+more. An entry is earned by what it would cost to reverse, or by research the next person would
+otherwise redo (cited as its `R_`). Not an entry: this red over that red, `get_foo` over
+`is_foo?`, the testing library, the CI host, a version bump — a comment at the site of the
+choice, or nothing; nothing about `design/` itself. A fork belonging to the *library* — the agent
+loop, a tool, Interloper's delivery boundary — is argued in pikuri's own register, not re-argued
+here. Cite by slug, `D_<slug>`, never by position; `grep '^## D_' design/decisions.md` is the
+index. The first entry is the ruler: every later one trims to its length. When you have written
+an entry, re-read it against the one above, check it says nothing the YARD headers already say,
+and cut what is left over.
 
 ---
 
-## D_gate_cookie — A passed prompt mints a cookie signed with the password itself
+## D_no_js_build_step — Why no bundler and no JavaScript dependencies, and why is script mechanics rather than a renderer?
 
-**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`. Lands the
-half `D_one_password_gate` deferred.
+The size budget this entry first carried is gone and the test that replaced it is sharper; how
+the client source is partitioned moved to `D_feature_owns_its_file`.
+
+**Context.** The page needs an `EventSource`, form wiring, and a way to
+place incoming fragments. That is the entire client-side job, because
+Markdown rendering happens server-side in kramdown.
+
+**Decision.** No npm, no bundler, no build step, no dependency. What
+JavaScript is *for* here:
+
+- **transport** — the `EventSource`, the `fetch` calls;
+- **platform mechanics only exposed to script** — `showModal()`, `inert`,
+  `scrollTop`, textarea measurement, `matchMedia`;
+- **per-browser state that must never reach the server** — theme, draft,
+  scroll position, which palette row is highlighted (`D_no_event_queue`).
+
+And what it is never: a **renderer**. Markup or conversation content the
+server could have produced is the server's, always. That clause is not new
+— it is what `D_server_authoritative_transcript` and `D_replay_from_history`
+have been resting on all along.
+
+**Which file a function belongs in is not this entry's business** —
+`D_feature_owns_its_file` owns that. The one clause of it this decision
+cares about is `public/js/dom.js`'s: it knows no markup at all, because a
+renderer is exactly what that file must never quietly become.
+
+**The qualifier: rendering and state, not latency.** Read absolutely, "if the
+server can do it, the server must" argues for fetching the slash palette's
+filtered rows on every keystroke — the server certainly *can*. The filter,
+the theme flip and the composer's auto-grow stay local because a round trip
+would make them feel wrong, not because the server could not do them. The
+rule governs where *rendering and state* live; it does not govern the
+interaction loop.
+
+**Rejected: a framework and a bundler** (or even a single npm
+dependency). It would add a toolchain, a lockfile, a `node_modules` and a
+build step to a project whose client-side job is a few hundred lines of
+mechanics — and the toolchain, not those lines, is what would then need
+maintaining. ES modules are the standing proof this costs nothing: `app.js`
+imports `dom.js` with the browser resolving it, no bundler in sight.
+
+**Consequences.** This is a live constraint on future work, not a
+starting condition: if a change appears to need an npm package, the
+answer is to render it on the server instead. It is also what keeps
+`--dev` cheap (`D_dev_flag_no_reload`) — there is nothing to rebuild.
+
+## D_gate_cookie — Why sign the gate cookie with the configured password itself rather than a stored secret?
+
+Lands the remember-me half `D_one_password_gate` deferred.
 
 **Context.** Measured on an iPhone, home-screen app: iOS does not keep
 Basic credentials for a standalone web app between launches, so every
@@ -83,12 +111,10 @@ whose only wrong answers are "shorter than a habit" and "forever".
 - The cookie is a bearer token in the clear over plain HTTP, exactly as
   the Basic header was. It is not a smaller exposure, just a rarer one.
 
-## D_one_password_gate — One password from the config file, browser-prompted; a gate, not accounts
+## D_one_password_gate — Why one config-file password behind the browser's own prompt rather than accounts?
 
-**Status:** Accepted, shipped in `lib/pikuri_web/web/gate.rb`,
-`Config#credentials` and `bin/pikuri-web-chat`. Overrules the
-"shipping auth" rejection in `D_single_shared_conversation`; the cookie
-that spares the prompt is `D_gate_cookie`.
+Overrules the "shipping auth" rejection in `D_single_shared_conversation`; the cookie that
+spares the prompt is `D_gate_cookie`.
 
 **Context.** Reaching the page from a phone means binding off loopback,
 and off loopback the port is the whole app: read, write and delete every
@@ -148,10 +174,7 @@ front of `public/` as well as the routes.
 - The deferred remember-me cookie was needed, and shipped:
   `D_gate_cookie`. The trigger fired on the first iPhone that tried it.
 
-## D_namespaces — Four namespaces cut by what a class *does*, and service never names `Web`
-
-**Status:** Accepted, shipped. `PikuriWeb::Web`, `::Agents`, `::Conversations`,
-`::Util`; `Config`, `BigAppLock` and `VERSION` stay at the root.
+## D_namespaces — Why four namespaces cut by what a class produces, and why may a service never name `Web`?
 
 **Context.** Nineteen classes sat flat under `PikuriWeb`. Coupling was already
 low — the wiring lives in `bin/pikuri-web-chat`, and most classes named one or
@@ -221,10 +244,7 @@ for every file in the tree.
 
 ---
 
-## D_titler_connection — `[titler]` names an `[[llm]]`, and no `[titler]` means no titling
-
-**Status:** Accepted, shipped. `Config#titler_llm` resolves `[titler] llm` against the
-`[[llm]]` list by `name`; `nil` switches the feature off.
+## D_titler_connection — Why must titling name its own `[[llm]]` rather than fall back to the primary connection?
 
 **Context.** A conversation was titled by its start stamp. Naming it from the
 opening message needs a model, and the first instinct was to reuse the
@@ -268,18 +288,14 @@ to come from somewhere, and picking it for a conversation is a legitimate thing
 to want — a conversation that does not think. The cost of leaving it visible is
 `D_shadowed_identity_pair`.
 
-## D_llm_params_passthrough — An `[[llm]]`'s `params` table goes to the server verbatim
+## D_llm_params_passthrough — Why does an `[[llm]]`'s `params` table reach the server verbatim rather than through named options?
 
-**Status:** Accepted and shipped; the config spelling outlived the mechanism
-that first carried it, exactly as planned. `Config::Llm#params` is any TOML
-table, and `Agents::ModelCatalog.from_llms` hands it to
-`Pikuri::Agent::ChatTransport#params`, which pikuri deep-merges into every
-request on that connection. The Faraday adapter this project shipped first
-(`Agents::RequestParams`) is **deleted**, along with our `faraday` dependency:
-pikuri grew the params channel this entry deferred asking for, so the
-alternative logged below as "rejected: asking pikuri first" is now simply what
-happened. What a parameter *means* stays nobody's business here — see pikuri's
-`D_opaque_request_params` for the upstream fork.
+The config spelling outlived the mechanism that first carried it, exactly as planned. The
+Faraday adapter this project shipped first (`Agents::RequestParams`) is **deleted**, along
+with our `faraday` dependency: pikuri grew the params channel this entry deferred asking for,
+so the road logged below as "rejected: asking pikuri first" is now simply what happened. What
+a parameter *means* stays nobody's business here — pikuri's own register carries that fork,
+under opaque request params.
 
 **Context.** Titling on the local 35B needs reasoning off, and that is not a
 detail: matched benchmark, same eight openers and the same agent, only the
@@ -377,11 +393,7 @@ a short title is still never *assumed*, and {Agents::Titler}'s caps and
 repo compiles against Faraday any more, so the shell is back to naming no HTTP
 library at all.
 
-## D_shadowed_identity_pair — Two `[[llm]]`s on one `[model, server]` pair: the first declared wins
-
-**Status:** Accepted, shipped. `Agents::ModelCatalog#initialize` folds `@by_key` over
-`choices.reverse`, so `#resolve` and `#name_for` answer with the earliest entry;
-boot logs the shadowed names.
+## D_shadowed_identity_pair — Why does the first `[[llm]]` declared win a shadowed `[model, api_base]` pair?
 
 **Context.** `D_per_conversation_model` made `[model, api_base]` a
 conversation's stored identity because a name is renameable and a model id alone
@@ -411,10 +423,7 @@ behaviour on config file ordering, which nothing states or checks.
 `model_catalog_spec.rb` is the only other thing standing between a plausible
 "simplification" back to `to_h` and the silent failure above.
 
-## D_canary_severity — Reasoning tokens on a title are diagnostic only, and the level follows declared intent
-
-**Status:** Accepted, shipped. `Agents::Titler` reads `thinking_tokens` off
-`Event::Tokens` and logs at most once per process.
+## D_canary_severity — Why are reasoning tokens on a title diagnostic only, rather than grounds for discarding it?
 
 **Context.** The degradation mode of a thinking-off parameter is *silently not
 applied* (`D_llm_params_passthrough`), so it wants a signal. pikuri already
@@ -444,10 +453,7 @@ because a passthrough cannot know that `chat_template_kwargs.enable_thinking`
 *means* thinking. This is `D_llm_params_passthrough`'s bill coming due, and it
 costs one spurious line in a config that set `params` for something else.
 
-## D_lazy_retro_titling — A stored conversation is titled when it is opened, never by a sweep
-
-**Status:** Accepted, shipped. `Agents::Runner#restore!` posts the titling job for
-a stored conversation still carrying its start stamp.
+## D_lazy_retro_titling — Why is a stored conversation titled when it is opened rather than by a sweep?
 
 **Context.** Titling only new conversations leaves every conversation from
 before the feature stamp-titled with no path to a name. A title needs the
@@ -489,13 +495,10 @@ guard means a title lost to an unreachable server is not retried on the next
 message (whose text is not the opener), but *is* retried when the conversation
 is opened in a fresh process.
 
-## D_max_concurrent_requests — A `[[server]]` table sizes the permits; `--turns` retires
+## D_max_concurrent_requests — Why does a `[[server]]` table size the permits rather than a `--turns` flag?
 
-**Status:** Accepted, shipped. **Refines `D_upstream_request_throttle`**, whose
-`--turns` flag this deletes and whose "why size explicitly" argument no longer
-holds. `Config::Server(id, url, api_key, max_concurrent_requests)` is the
-schema; boot calls `ServerPermits.limit(s.url, s.max_concurrent_requests)` for
-each server that names one.
+Refines `D_upstream_request_throttle`, whose `--turns` flag this deletes and whose "why size
+explicitly" argument no longer holds.
 
 **Context.** Two pressures arrived together.
 
@@ -510,7 +513,7 @@ Independently, pikuri fixed the thing `--turns` existed for. That flag's
 remaining duty was the permit count, justified by *"an `[[llm]]` carrying an
 explicit `context_window` skips the `/props` probe, so its server would go
 unsized, and unsized means unlimited."* That premise is now false:
-`../pikuri/DECISIONS.md` `D_probe_when_unknown` skips the probe only when the
+pikuri skips the probe only when the
 cap is stated **and** the server is already sized. An unsized server always
 gets probed, so it always gets llama.cpp's own `total_slots`.
 
@@ -579,22 +582,23 @@ user reads it, not in a default that silently contradicts `/props`.
   or a file full of plaintext keys would keep passing with the `chmod 600`
   advisory silently disarmed.
 
-## D_upstream_request_throttle — pikuri rations the server; this shell only sizes the pool
+## D_upstream_request_throttle — Why does pikuri ration the server while this shell only sizes the pool?
 
-**Status:** Accepted, shipped; **refined by `D_max_concurrent_requests`**,
-which moved the sizing off `--turns` and onto the `[[server]]` table. What
-stands is the split of duties: pikuri rations, this shell only sizes.
-**Supersedes `D_throttle_at_the_request`**, whose {ThrottledAdapter} this
-deletes.
+Refined by `D_max_concurrent_requests`, which moved the sizing off `--turns` and onto the
+`[[server]]` table; what stands is the split of duties — pikuri rations, this shell only
+sizes. Why not a throttle of our own: this shell ran one until pikuri master grew
+`Agent::ServerPermits` — a Faraday adapter holding a semaphore per `api_base`, sized off
+`--turns` — and two throttles on one connection is two sizings to keep in step. That adapter
+is deleted; the properties it had to hand over are the ones argued below.
 
-**Context.** `D_throttle_at_the_request` shipped a Faraday adapter as an
-explicit stopgap and named its own retirement condition: the principled home
+**Context.** This shell's own Faraday adapter shipped as an explicit
+stopgap and named its own retirement condition: the principled home
 for a throttle is a control on the agent loop, that home is pikuri's, and
 "when it lands, this entry is superseded and {ThrottledAdapter} retires". It
 landed — `Agent::ServerPermits` (a process-wide per-server permit registry)
 plus `Agent::RequestThrottle` (the acquire site, in ruby_llm's `instrumenter`
-slot on the agent's own `RubyLLM::Context`). See `../pikuri/DECISIONS.md`
-`D_llm_request_throttle` for the upstream argument and its measurements.
+slot on the agent's own `RubyLLM::Context`). See pikuri's own register, under
+the LLM request throttle, for the upstream argument and its measurements.
 
 **Decision.** Delete the adapter and take upstream's. Sizing is all this
 shell does, and it does it explicitly.
@@ -607,8 +611,8 @@ also fixes the two things the adapter could not:
 - **The wait is cancellable.** `ServerPermits::Semaphore#take` polls a
   `Control::Cancellable` on `SLICE_SECONDS`, so ■ lands on a turn parked in
   the queue instead of after the server finally answers it. That is
-  precisely the consequence `D_throttle_at_the_request` logged as accepted
-  and unfixable from an adapter.
+  precisely the consequence that adapter logged as accepted and
+  unfixable from where it sat.
 - **The key is normalized.** `http://x:8080`, `.../v1` and `.../v1/` are one
   server, so two `[[llm]]` entries written differently share a pool instead
   of silently getting one each. Our own pool keyed on the raw `api_base`.
@@ -621,8 +625,8 @@ the box reports, or one for a server the probe cannot reach.
 
 The original argument here was narrower and is now void: an explicit
 `context_window` used to skip the probe altogether, so an entry that opted out
-of the probe would silently opt out of the throttle. `../pikuri/DECISIONS.md`
-`D_probe_when_unknown` fixed that — see `D_max_concurrent_requests`, which is
+of the probe would silently opt out of the throttle. pikuri's probe-when-unknown rule
+fixed that — see `D_max_concurrent_requests`, which is
 what let the flag go.
 
 **Rejected: `ServerPermits.default` rather than `.limit`.** First-writer-wins
@@ -642,8 +646,8 @@ instrumenter's.
 
 **Consequences.**
 
-- **This reverses `D_throttle_at_the_request`'s "rejected: a process-global
-  registry keyed by server URL".** That rejection was `D_global_monitor`'s
+- **This reverses the adapter's own "rejected: a process-global registry
+  keyed by server URL".** That rejection was `D_global_monitor`'s
   rule — process-global mutable state either joins the domain or argues for
   its own lock — and the adapter dodged it with a subclass. The registry now
   arrives with its own `Mutex`, from a library whose thread-safety is its
@@ -662,14 +666,17 @@ instrumenter's.
   (`D_max_concurrent_requests`); everything else about a connection is still
   per entry.
 
-## D_path_deps_on_pikuri_master — Back to `path: '../pikuri'`, for a surface that is not released
+## D_path_deps_on_pikuri_master — Why path dependencies on `../pikuri` rather than released gems?
 
-**Status:** Accepted, shipped. **Supersedes `D_released_pikuri_gems`**,
-whose one-minor pin this removes; the CI clone step comes back with it.
+Why not released gems: this shell ran on pikuri 0.1.0 from RubyGems, pinned to one minor,
+until `Agent::ServerPermits` missed that release and the surface this shell needs was
+master-only again. A release is a snapshot a clone can reproduce without a sibling checkout, and
+that case is the one to re-make at the next pikuri release — with it the CI clone step goes
+away again.
 
 **Context.** `D_upstream_request_throttle` needs `Agent::ServerPermits`,
-which exists only on pikuri master — nothing on the 0.1 line has it. The pin
-`D_released_pikuri_gems` argued for was sound and is simply out of date: it
+which exists only on pikuri master — nothing on the 0.1 line has it. The pin on
+released gems was sound and is simply out of date: it
 rested on "pikuri 0.1.0 ships everything this shell needs", which stopped
 being true the moment the throttle landed upstream instead of here.
 
@@ -683,7 +690,7 @@ depth 1 before bundling. Upgrades are whatever master says, verified by
 one author. Master is what this shell validates against in any case.
 
 **Rejected: a per-machine `bundle config local.pikuri-core` with the Gemfile
-still pinned** — `D_released_pikuri_gems`' own suggestion, read in reverse.
+still pinned** — the released-gems pin's own suggestion, read in reverse.
 It works for a *convenience* (editing both repos together); it does not work
 for a dependency the committed code requires, because the committed Gemfile
 would then describe a build that cannot run and both a fresh clone and CI
@@ -704,122 +711,15 @@ for pikuri.
   reshape (`D_both_forms_in_the_block`'s consequences) and the step-limit
   removal.
 - **Revisit at the next pikuri release.** Nothing here argues against a pin
-  in principle, so when a release carries this surface, going back to
-  `D_released_pikuri_gems`' shape is a one-line change and a good one.
+  in principle, so when a release carries this surface, going back to a
+  pinned release is a one-line change and a good one.
 
-## D_throttle_at_the_request — The server's slots are rationed per completion, by a Faraday adapter, not by the turn pool
-
-**Status:** **Superseded by `D_upstream_request_throttle`.** Held while
-pikuri had no throttle of its own; pikuri master shipped one, and
-{ThrottledAdapter} is deleted. The reasoning below is why this shell built
-its own in the meantime, and which properties the replacement had to keep.
-
-**Context.** `--turns` was the executor's pool size, and a turn holds its
-thread across the whole `run_loop` — tool execution included. So a turn off
-running a `web_search` for five seconds kept the slot while the inference
-server sat idle, and at the default of 1 nothing else in the process could
-talk to it. The cap was a proxy for "requests the server is handling", and
-the proxy leaked exactly when a tool ran.
-
-**Decision.** Ration the thing being contended: hold a permit for the
-length of one HTTP completion request and give it back. `--turns` keeps its
-documented meaning — match it to llama.cpp's `--parallel` — and becomes
-literally true instead of approximately.
-
-The pool is keyed on `api_base`, **not** on the `[[llm]]` entry: two entries
-running different models on one box share that box's slots, because the
-slots belong to the server. Two servers get two pools.
-
-The executor is sized `2N` so a turn blocked in a tool has somewhere to
-wait without occupying a permit — that is the whole point, and at `1N` the
-change would buy nothing. Bounded rather than unbounded so a runaway cannot
-spawn threads without limit; a larger factor is harmless and buys nothing.
-
-**Measured** against a local llama.cpp, four identical completions:
-
-| permits | total | completions land at |
-|---|---|---|
-| 1 | 46.6 s | 11.6, 23.2, 34.9, 46.6 s |
-| 4 | 26.0 s | 25.9, 26.0, 26.0, 26.0 s |
-
-Evenly staggered at 1 (serialized), simultaneous at 4.
-
-**Why a Faraday adapter and not `Pikuri::Agent`.** The agent loop is
-pikuri's (`AGENTS.md`, the reuse rule), so the principled home for a
-throttle is a control on the loop — and that remains the better long-term
-answer: pikuri's own `Agent` yardoc invites hosts to run several agents on
-one thread each, and offers them nothing to keep those agents off one
-server's throat. Filed there as `ideas/llm-request-throttle.md`; when it
-lands, this entry is superseded and {ThrottledAdapter} retires. Rejected
-*for now* on two grounds: it blocks on a pikuri release against the
-one-minor pin (`D_released_pikuri_gems`), and the adapter turns out to have
-a property the upstream version would have to be careful to keep.
-
-**That property: an adapter cannot get the scope wrong.** A permit must
-cover exactly one completion. Widen it to a step or a whole `run_loop` and a
-parent holding the only permit deadlocks against a sub-agent waiting for
-one — the synthesizer runs from the `StepLimit::Exceeded` rescue, and
-sub-agent tools run between completions, so both are *outside* the
-completion and would wait forever. In an adapter there is nowhere to hoist
-the acquire to: the scope is one HTTP request, and a nested agent's request
-is a separate `#call` made after the parent's returned. The invariant that
-would need a regression test upstream is structural here.
-
-**Verified: the permit spans a streamed response.** The design would be
-worthless if `#call` returned at the first byte and the tokens arrived
-afterwards, since the permit would be released while the server was still
-generating. It does not — ruby_llm streams through Faraday's `on_data`,
-which net_http drives from inside the request. Measured on a 150-line
-streamed completion: the adapter spanned 33.69 s, `run_loop` totalled
-33.69 s, and all 491 delta events landed inside the adapter's window. A
-transport that ever streamed some other way would silently break this.
-
-**Rejected: a constructor argument for the semaphore.** The obvious shape,
-and unreachable. Faraday would allow it — `RackBuilder::Handler#build` is
-`klass.new(app, *args, **kwargs)` — but nothing between here and there
-passes any: ruby_llm builds the adapter as `faraday.adapter(adapter)`, and
-pikuri's seam (`ChatTransport#faraday_adapter` → `config.faraday_adapter=`)
-carries a single value. The class object is the only per-server thing that
-reaches the instance, so `.with_permits` returns a subclass holding the
-pool in a class-level ivar.
-
-**Rejected: a process-global registry keyed by server URL.** Would let one
-named class serve every server and read nicer in a backtrace. Not done: it
-is process-global mutable state, which `D_global_monitor` says must either
-join the domain or argue for its own lock — and this one cannot join the
-domain, because a task may not block and acquiring a permit is precisely
-blocking. A subclass per server has no global state to argue about.
-
-**Rejected: making the executor unbounded instead.** Removes the
-head-of-line problem without a throttle, but then nothing caps requests to
-the server at all, which is the one thing the number was for.
-
-**Consequences.**
-
-- **Waiting is not interruptible and the queue is not FIFO.**
-  `Concurrent::Semaphore` promises no fairness. Accepted: cancellation is a
-  tool-boundary stop that does not reach a completion today either, and
-  starvation across a few conversations on one desktop is not a real risk.
-  An upstream `Control::Throttle` could fix both, which is the remaining
-  argument for building it.
-- **Only `/chat/completions` pays a permit.** Anything else on the
-  connection passes through — the contended resource is the model's
-  generation slot, not the socket. `ContextWindowDetector`'s `/props` probe
-  builds its own connection and never sees the adapter.
-- **`:queued` now means two things**, both honest: no executor thread, or
-  no permit. The status bar does not distinguish them and does not need to.
-- The `faraday_adapter` seam is now load-bearing in production, not just in
-  `Pikuri::Testing`. A pikuri release that narrowed it would break this.
-
-## D_both_forms_in_the_block — A tool block carries the short line and the raw one both, and CSS picks
-
-**Status:** Accepted, shipped. {Web::ToolLine} renders both,
-`:root[data-tools]` shows one, `/toollines` writes the cookie.
+## D_both_forms_in_the_block — Why does a tool block carry the short line and the raw one both, with CSS picking?
 
 **Context.** pikuri-tui shortens tool lines to
 `WebSearch(rails 8 credentials)` / `OK, 4.2 kB` and keeps the raw form a
-keypress away — its `D_short_tool_lines` for the reachability argument,
-`D_density_thunks` for the machinery: a register of kinded blocks plus
+keypress away — its own register carries the reachability argument and
+the machinery: a register of kinded blocks plus
 `#rerender(kind:)` redraws every tool line on a flip, because a terminal
 block is text that has to be recomputed. This shell rendered the verbose
 form only.
@@ -876,7 +776,7 @@ toggles there is a settings bar, and the drawer is about conversations.
   string over the result — because the event carried nothing better. It now
   arrives on the event: pikuri's `Tool#display_name` / `#describe_call` /
   `Result#summary`, composed where the structure still exists
-  (`../pikuri/DECISIONS.md` `D_tool_summary_lines`), which retired both
+  (pikuri's own register, under tool summary lines), which retired both
   guesses and the divergence from pikuri-tui the first version of this entry
   argued for — a calculator's `4` reads as `4` because pikuri's calculator
   says so, not because {Web::ToolLine} measures its length. What is left here is
@@ -906,15 +806,11 @@ toggles there is a settings bar, and the drawer is about conversations.
   than off `summary` — {Web::ToolLine}`.for_result`'s rdoc holds why — and so is
   the cap, because a width is the renderer's alone to know.
 
-## D_details_per_block — Reasoning gets a disclosure per block; the config sets its default, not its visibility
-
-**Status:** Accepted, shipped. `Web::SseListener#disclose` wraps a
-`:thinking` block, `style.css` styles the row, `transcript.js` resolves
-it, `/thinking` picks the default.
+## D_details_per_block — Why a disclosure per reasoning block rather than one global show-thinking switch?
 
 **Context.** pikuri-tui hides reasoning behind one flag: `[ui]
 show_thinking` sets the starting value and a toggle flips the whole pane,
-drawing *nothing* where a hidden block was (`D_density_thunks` —
+drawing *nothing* where a hidden block was (its own argument —
 grey filler earns nothing, and a terminal has no cheap per-block
 affordance). Porting that shape was the obvious move.
 
@@ -925,7 +821,7 @@ collapsed row is both the "reasoning happened here" signal and the way
 in: short feedback that thinking occurred, subtle enough not to disturb
 the conversation.
 
-**So pikuri-tui's no-marker call (`D_density_thunks`) inverts here, on its own argument.** The TUI
+**So pikuri-tui's no-marker call inverts here, on its own argument.** The TUI
 rejected a marker because a line you cannot click is filler. A browser
 makes that same row clickable, which turns it from filler into the
 affordance — it pays for its line twice. The preference also keeps one
@@ -942,15 +838,15 @@ looks wrong, show me *that* step's reasoning" is the case that matters,
 and a global switch cannot express it.
 
 **Rejected: a server-side visibility gate** (the shape pikuri-tui's
-`D_density_thunks` register serves). It would put a display preference in
+density-thunk register serves). It would put a display preference in
 server state, which is per-browser by decision — two tabs with different
 preferences would fight over one transcript. The TUI needed that register
 because a hidden region's text had to be *recomputed*; every block here is
 already complete HTML in the DOM, so none of the machinery has an
 equivalent and {Web::Transcript} gained nothing.
 
-**Rejected: dropping `ThinkingDelta` while collapsed**, as the TUI does
-(`D_density_thunks`). The server cannot drop a delta for one tab
+**Rejected: dropping `ThinkingDelta` while collapsed**, as the TUI does.
+The server cannot drop a delta for one tab
 and keep it for another without a per-connection filter, and
 `D_server_authoritative_transcript` says the transcript is one picture.
 The TUI dropped deltas to avoid *rendering* work on a hidden pane; the
@@ -1000,10 +896,7 @@ in.
   payload, and `index.erb` and `transcript.js` wrap that payload in an
   identical div. Only the listener and `style.css` moved.
 
-## D_disclosure_state_on_the_block_div — Which reasoning blocks are open lives on the block div, outside the html the server rewrites
-
-**Status:** Accepted, shipped in `transcript.js` alongside
-`D_details_per_block`.
+## D_disclosure_state_on_the_block_div — Why does disclosure state live on the block div rather than inside the html the server rewrites?
 
 **Context.** `upsert` replaces a block's `innerHTML` on every streaming
 delta (`D_rerender_and_replace`), and pikuri coalesces those at 15 fps.
@@ -1055,10 +948,7 @@ fold. `GET /c/:id` serves those blocks already resolved
 `upsert`'s path a round trip later, which is where a stale page would be
 corrected.
 
-## D_ui_cookie_over_config — A `[ui]` preference is a per-browser cookie over a config default, and that is not the precedence rule the config decision forbids
-
-**Status:** Accepted, shipped as the `thinking` cookie resolved against
-`Config#show_thinking` in `GET /c/:id`.
+## D_ui_cookie_over_config — Why may a `[ui]` cookie outrank the config file when nothing else may?
 
 **Context.** `D_schema_complete_config` states it flatly: "anything the
 file has a home for comes from the file and nowhere else — no flag, no
@@ -1099,55 +989,7 @@ config file a half-truth.
 you cannot change without an editor and a restart is not a density
 control.
 
-## D_released_pikuri_gems — Released `pikuri-core` / `pikuri-pdf` from RubyGems, pinned to one minor
-
-**Status:** **Superseded by `D_path_deps_on_pikuri_master`.** Held while
-pikuri 0.1.0 shipped everything this shell needed; `Agent::ServerPermits`
-did not make that release, and the path dependencies are back. The argument
-below is not wrong, only out of date — it is the case to re-make at the next
-pikuri release.
-
-**Context.** The path dependencies bought one thing: master's unreleased
-surface — the boot-time trifecta report, `Interloper#on_change`,
-`Testing.fake_transport`. pikuri 0.1.0 ships all three, so the reason is
-spent, and what remains is the bill: a checkout every clone of this repo
-must also have at the right tip, a CI step that clones it, and a
-lockfile that can name no checksum for the two gems that matter most.
-
-**Decision.** `gem 'pikuri-core', '~> 0.1.0'` and the same for
-`pikuri-pdf`. One minor, not one major: pikuri is pre-1.0, where semver
-lets 0.2 break what 0.1 promised, so an upgrade is a deliberate edit made
-with pikuri's `CHANGELOG.md` open at its `**Breaking:**` entries —
-pikuri-tui's HEAD stays the worked example for anything ambiguous.
-
-**Rejected: `~> 0.1`.** Reads like the same pin and is not: it admits
-0.2, 0.3 and every break they are allowed to carry, silently, on whatever
-day someone runs `bundle update`. Pre-1.0 that is the whole risk surface.
-
-**Rejected: staying on path dependencies for the convenience of editing
-pikuri and this shell together.** That is a real workflow and it survives
-without the Gemfile: `bundle config local.pikuri-core` or a one-line
-uncommitted `path:` override does it per-machine, without every other
-clone — and CI — paying for a sibling checkout it does not want. The
-committed Gemfile should describe what this shell depends on, not one
-developer's desk.
-
-**Rejected: pinning `pikuri-core` alone and letting `pikuri-pdf` float.**
-Impossible by construction — pikuri-pdf's gemspec pins
-`pikuri-core = <exact version>` — and this is the lockstep
-`D_track_pikuri_master` cited as a reason to avoid released gems
-altogether. It is not one: the two gems are released together from one
-repo, so the constraint costs nothing as long as both lines here move in
-the same commit. Never bump one alone.
-
-**Consequences.** CI no longer clones anything, `Gemfile.lock` carries
-real checksums for both gems, and a pikuri upgrade is now two edited
-version constraints plus `bundle update pikuri-core pikuri-pdf`.
-
-## D_subscribe_then_snapshot — `GET /events` subscribes first and opens with the transcript, so the page-render-to-connect window loses nothing
-
-**Status:** Accepted, shipped in `Web::App#GET /events` + `Web::App#catch_up_frames`,
-`Web::Broadcaster#frame` and `transcript.js`'s `apply`.
+## D_subscribe_then_snapshot — Why does `GET /events` subscribe before it snapshots, and why is the snapshot one frame?
 
 **Context.** Loading a conversation takes two requests: `GET /c/:id`
 renders the transcript at T1, and the browser opens `GET /events` at T2 —
@@ -1237,13 +1079,10 @@ lands right back in this same window.
 
 ---
 
-## D_feature_owns_its_file — A feature that owns a slice of the page owns a script file, paired with the markup it renders from; `app.js` mounts and wires them
+## D_feature_owns_its_file — Why does a feature that owns a slice of the page own a script file, rather than everything living in `app.js`?
 
-**Status:** Accepted, shipped with `public/js/composer.js`, the first
-one, then `public/js/statusbar.js`, `public/js/transcript.js` and
-`public/js/conversations.js`. `app.js` is down to the spine, the theme
-and the wiring. Whether a fifth file is coming is not a question this
-line answers — *Extraction is earned* below is the gate.
+`app.js` is down to the spine, the theme and the wiring. Whether a fifth file is coming is not
+a question this entry answers — *Extraction is earned* below is the gate.
 
 **Context.** `public/js/app.js` had no organizing principle beyond
 "client-side". The composer's auto-grow sat three functions from the
@@ -1327,15 +1166,10 @@ the other consumer. Revisit if two features ever want the same short name.
 
 ---
 
-## D_icon_plate — Every rasterized app icon carries an opaque plate; only the master SVG is transparent
-
-**Status:** Accepted, shipped in `public/images/` (`kuri.svg`,
-`favicon.svg`, the five PNGs), `public/manifest.webmanifest`,
-`views/index.erb` and `Web::App`'s `mime_type :webmanifest`. Generated by
-`bin/regen-icons`.
+## D_icon_plate — Why does every rasterized app icon carry an opaque plate?
 
 **Context.** *Who* the icon is was decided upstream — Kuri the pika in
-the Talus coat, `../pikuri/DECISIONS.md` `D_kuri_mascot`. What lands on
+the Talus coat, in pikuri's own register. What lands on
 this side of that line is the consequence the drawing hands its hosts:
 Talus is a mid grey (`#a89c8e`), so there is no ground it reliably
 contrasts against, and each host has to say where the background comes
@@ -1391,11 +1225,7 @@ two.
 
 ---
 
-## D_per_conversation_model — A conversation's model is `[model, server]` in `meta.json`, minted onto the agent by the factory and written back at turn end from the agent's own transport
-
-**Status:** Accepted, shipped. `/model` switches a live conversation, a
-new conversation inherits the one the tab was reading, and the status
-bar names the connection.
+## D_per_conversation_model — Why is a conversation's model `[model, server]` in `meta.json` rather than one process-wide setting?
 
 **Context.** `Config` has always parsed every `[[llm]]`; only the first was
 ever used. pikuri's half was done too — `Agent#run_loop(user_message:,
@@ -1510,13 +1340,10 @@ a slow first token.
 
 ---
 
-## D_slash_command_palette — The catalog is the server's, the palette is the browser's, and a command never writes to the transcript
+## D_slash_command_palette — Why is the slash-command catalog the server's and the palette the browser's?
 
-**Status:** Accepted, shipped with `/new`, `/theme` and `/trifecta`;
-`/model` joined them (`D_per_conversation_model`) and is the first
-command gated on the config — `Web::SlashCommand.catalog(connections:)` drops
-it when there is nothing to pick between. The palette's mechanics live in
-`public/js/composer.js` (`D_feature_owns_its_file`).
+`/model` (`D_per_conversation_model`) was the first command gated on the config:
+`Web::SlashCommand.catalog(connections:)` drops it when there is nothing to pick between.
 
 **Context.** pikuri-tui has a slash palette (`Shared::SlashMenuPopup`) and it
 is the obvious thing to port: a list above the input, filtered as you type,
@@ -1625,12 +1452,10 @@ command, so `/usr/share/foo is broken` sends normally.
 
 ---
 
-## D_one_shell_two_layouts — One `index.erb` for the phone and the desktop; the difference is placement, so it is CSS's
+## D_one_shell_two_layouts — Why one `index.erb` for the phone and the desktop rather than two templates?
 
-**Status:** Accepted, shipped. The phone layout is the Claude-Mobile
-shape: `#topbar`'s ☰ opens `#drawer` as a full-screen conversation list,
-the composer is one growing row with a yellow ↑, and the status bar
-drops to a line of text.
+The phone layout is the Claude-Mobile shape: `#topbar`'s ☰ opens `#drawer` as a full-screen
+conversation list, and the status bar drops to a line of text.
 
 **Context.** The iPhone was the one target in `D_target_browsers` that
 did not work, and the shape asked for is visibly a different screen from
@@ -1730,14 +1555,11 @@ with `showModal()` for that is worse than the ten lines it saves.
   `env(safe-area-inset-*)`, and whether an always-visible per-row ✕
   mis-taps in practice (see `D_delete_no_undo`).
 
-## D_no_store_lock — `Conversations::Store` gets no lock; the folder is consistent by construction, and the store owns the whole write path
+## D_no_store_lock — Why does `Conversations::Store` get no lock?
 
-**Status:** Accepted. Nothing to ship *as a lock*: this is a decision
-not to build one. What did ship in the same pass is the thing that made
-the decision honest — {Conversations::Store#save} taking the history and
-owning the whole commit — plus the rdoc that stops overclaiming. The
-idea file that argued for the lock across three rewrites is graduated
-into this entry.
+Nothing shipped *as a lock*: this is a decision not to build one. What did ship in the same
+pass is what made the decision honest — {Conversations::Store#save} taking the history and
+owning the whole commit.
 
 **Context.** The store's consistency rested on a *discipline* nobody
 stated: writes went through {Agents::Runner}'s mutex, reads ran from
@@ -1835,11 +1657,9 @@ Four reasons, past the fact that it fixes nothing:
   written up in `D_delete_no_undo`'s consequences. A store lock would not
   have caught it — a lock per method is not a transaction.
 
-## D_no_multi_process_lock — A second process against one state root is a user mistake, not a supported configuration; last-writer-wins stands
+## D_no_multi_process_lock — Why no cross-process lock on the state root?
 
-**Status:** Accepted. Nothing to ship: this is a decision *not* to build
-a cross-process lock. The idea file that argued for one is graduated
-into this entry.
+Nothing shipped: this is a decision *not* to build a cross-process lock.
 
 **Context.** Two `pikuri-web-chat` processes on different ports share
 `~/.local/state/pikuri/pikuri-web-chat/conversations/`, and pikuri's
@@ -1902,14 +1722,12 @@ default than a warning in the README.
   and the argument above stops holding. Locking is then part of that
   change, not a separate idea.
 
-## D_no_event_queue — No owner thread: state is partitioned per conversation, browser state stays in the browser, and anything genuinely shared gets *one global* mechanism
+## D_no_event_queue — Why no owner thread and no event queue?
 
-**Status:** Superseded in part (2026-08-31) by `D_global_monitor`, which
-answers the *Reopened* question at the foot of this entry: one global
-re-entrant monitor, work as run-to-completion tasks. The accepted core
-below stands — the partition, browser-owned view state, the Broadcaster
-as an independent sink — but the per-object locks this entry kept have
-since been folded into that domain.
+`D_global_monitor` has since answered the *Reopened* question at the foot of this entry — one
+global re-entrant monitor, work as run-to-completion tasks. The core below stands — the
+partition, browser-owned view state, the Broadcaster as an independent sink — but the
+per-object locks this entry kept have been folded into that domain.
 
 **Context.** The standing plan was to give all mutable state a single
 owner thread, Tuile-style: every other thread posts a command, no locks,
@@ -2135,12 +1953,7 @@ block, you must `await`, and awaiting visibly yields. A Ruby owner thread
 *can* block, silently, at any call. Node gets the discipline from the
 language; we would have to get it from review.
 
-## D_conversation_owns_agent — A conversation owns its agent; a tab owns which conversation it views
-
-**Status:** Accepted, shipped. {Conversations::Registry} holds one
-{Agents::Runner} per conversation opened — its own `Agent`, `Interloper`,
-`Cancellable`, `TokenLog`, {Web::Transcript} and {Web::SseListener} — and
-{Web::Broadcaster} addresses frames per conversation.
+## D_conversation_owns_agent — Why does a conversation own its agent, and a tab only own which one it views?
 
 **Context.** Everything before this had *one* agent and one transcript, so
 "which conversation is live" was server state and every tab followed it
@@ -2212,12 +2025,12 @@ tabs alone; server-side last-viewed is this decision reversed.
   detached conversation. Probably not, but it is pikuri's class — check
   whether a listener stack can be rebuilt mid-life before assuming.
 
-## D_serial_turn_executor — Turns run on one shared executor, and its size is not a load cap
+## D_serial_turn_executor — Why is the turn executor's size not a load cap?
 
-**Status:** **Superseded in part by `D_upstream_request_throttle`**, then
-amended to drop sizing altogether. The executor itself stands: one shared
-pool injected into every {Agents::Runner}, still the admission gate that
-reports `:queued`. Two things below no longer describe the code.
+The executor itself stands: one shared pool injected into every {Agents::Runner}, still the
+admission gate that reports `:queued`. Sizing moved out of it — first to
+`D_upstream_request_throttle`, then off the pool altogether (`D_max_concurrent_requests`) —
+so two things below no longer describe the code.
 
 *The pool is unbounded* — `Concurrent::CachedThreadPool`, not
 `FixedThreadPool.new(turns * 2)`. `2N` was the compromise between two
@@ -2343,10 +2156,7 @@ owner thread must never block. See `D_no_event_queue`.
   reachable**, since more than one conversation can now render at once —
   see `D_conversation_owns_agent`'s consequences, which parked it at pool 1.
 
-## D_delete_no_undo — Deleting a conversation is irreversible, and the live one rolls onto a fresh conversation
-
-**Status:** Accepted, shipped as `Conversations::Store#delete`,
-`Agents::Runner#delete_conversation` and `POST /conversations/:id/delete`.
+## D_delete_no_undo — Why is deleting a conversation irreversible, with no undo and no trash?
 
 **Context.** `Conversations::Store` grew every verb but this one, so
 conversations accumulated until the user ran `rm -r`, which is what
@@ -2368,7 +2178,7 @@ flight (409), like selecting and starting a conversation.
 The conversation folder is ours end to end — nothing but pikuri and this
 shell writes there — so a delete removes the directory wholesale. That is
 deliberately unlike pikuri's refusal to sweep a single unreferenced
-attachment (pikuri `DECISIONS.md` `D_history_attachments`): declining to delete a
+attachment (pikuri's own register, under history attachments): declining to delete a
 *file* someone may have put beside the history is compatible with
 removing the *conversation* it belongs to. Attachments are never shared
 between conversations, so nothing is refcounted.
@@ -2466,11 +2276,10 @@ deleting.
 - Deleting is the whole answer to retention: still no cap and no
   auto-prune. `rm -r` on the state folder remains a complete reset.
 
-## D_target_browsers — Firefox on the desktop, Safari on iPad and iPhone; greenfield only, no polyfills
+## D_target_browsers — Why only Firefox on the desktop and Safari on iPad and iPhone?
 
-**Status:** Accepted. All three targets have a layout
-(`D_one_shell_two_layouts`); the iPhone's is unverified on a real device
-— see Consequences.
+All three targets have a layout (`D_one_shell_two_layouts`); the iPhone's is unverified on a
+real device — see Consequences.
 
 **Context.** The delete button's hover-reveal was the first change whose
 correctness depended on which browsers count, and "modern browsers" is
@@ -2521,9 +2330,7 @@ unanswered, and in practice it means testing on whatever is open.
 - A change that needs a polyfill or a build step to reach a fourth browser
   is out of scope twice over — here and under `D_no_js_build_step`.
 
-## D_replay_from_history — Store only pikuri's history; re-derive the transcript by replaying synthesized events
-
-**Status:** Accepted, shipped as {Conversations::HistoryReplay}.
+## D_replay_from_history — Why store only pikuri's history and re-derive the transcript, rather than save the rendered blocks?
 
 **Context.** A saved conversation has two layers: the *model* half
 (messages, tool calls, results, thinking, attachments — `history.json`,
@@ -2576,9 +2383,7 @@ canary for a rename or a reordering upstream.
 
 ---
 
-## D_shutdown_on_state_stop — Close the Broadcaster from Puma's `:state, :stop`, the last hook before the graceful wait
-
-**Status:** Accepted, shipped in `bin/pikuri-web-chat`.
+## D_shutdown_on_state_stop — Why close the Broadcaster from Puma's `:state, :stop` rather than `at_exit` or Sinatra's INT trap?
 
 **Context.** Ctrl+C hung for as long as a browser tab stayed open. Every
 open `EventSource` parks a Puma request thread in the `GET /events` drain
@@ -2614,9 +2419,7 @@ wait belongs in the same `:state` hook. `Web::Broadcaster#close` must stay
 idempotent and must keep refusing new subscribers — the invariant lives
 in its YARD header.
 
-## D_dev_flag_no_reload — `--dev` is Sinatra's development mode, not code reloading
-
-**Status:** Accepted, shipped in `bin/pikuri-web-chat`.
+## D_dev_flag_no_reload — Why is `--dev` Sinatra's development mode rather than code reloading?
 
 **Context.** A dev flag on a web server usually promises reloading. Here
 it can't: the agent, its listener stack and the runner thread are
@@ -2636,10 +2439,7 @@ in-process reloading). Re-wiring the live agent is the actual
 requirement, and no amount of reloading does it — the flag would name a
 guarantee it cannot keep.
 
-## D_theme_cookie — Theme is a browser cookie, resolved server-side at `GET /`
-
-**Status:** Accepted, shipped in `public/style.css`, `views/index.erb`
-and `public/js/app.js`.
+## D_theme_cookie — Why is theme a browser cookie resolved server-side rather than transcript state?
 
 **Context.** Adding a light theme raised where the preference lives. The
 transcript is server-authoritative (`D_server_authoritative_transcript`),
@@ -2697,10 +2497,7 @@ contracted on. Both palettes carry a real yellow with a dark glyph
 (≥8:1) rather than a darkened one with white — the light theme's button
 has to still read as yellow.
 
-## D_chat_only_entry_point — The trifecta promise belongs to the boot script, not to the project
-
-**Status:** Accepted, shipped; `bin/pikuri-web` renamed to
-`bin/pikuri-web-chat`, matching pikuri-tui's `bin/pikuri-tui-chat`.
+## D_chat_only_entry_point — Why does the trifecta promise belong to the boot script rather than to the project?
 
 **Context.** The README never said which shape this shell offers — OS
 agent, coding agent, or chat. It's a chat, and that turned out to be the
@@ -2733,11 +2530,10 @@ attacker-chosen URL. The boot-time trifecta report stays the *checkable*
 answer for whatever tools a script actually wired, so a sibling script
 does not need this entry re-argued — it needs its own report.
 
-## D_per_shell_state_root — Every shell keeps its state under one folder named after itself
+## D_per_shell_state_root — Why does every shell keep its state under a folder named after itself?
 
-**Status:** Accepted, shipped. Reverses the layout the first
-conversation-store commit shipped, which put `conversations/` directly
-under `Pikuri::Paths.state`.
+Reverses the layout the first conversation-store commit shipped, which put `conversations/`
+directly under `Pikuri::Paths.state`.
 
 **Context.** `Pikuri::Paths.state` is shared: pikuri writes there, and so
 will pikuri-tui and every sibling script AGENTS.md anticipates
@@ -2775,10 +2571,7 @@ whatever it is, it is a decision rather than an accident of layout. This
 folder is also the reset: `rm -r` on it returns the shell to first-run
 state and touches nothing else.
 
-## D_schema_complete_config — One config file for every pikuri shell, whole schema, secrets nowhere else
-
-**Status:** Accepted, shipped as {Config}, a port of pikuri-tui's
-`Shared::Config`.
+## D_schema_complete_config — Why one config file for every pikuri shell, carrying the whole schema?
 
 **Context.** A machine can run pikuri-tui and pikuri-web side by side,
 and both want the same model connections and the same search-provider
@@ -2884,36 +2677,10 @@ to accept the file, never to grow the feature behind a key; that would be a
 decision of its own, and the toggle would be a `[ui]` cookie under
 `D_ui_cookie_over_config` before it were ever a config read.
 
-## D_track_pikuri_master — Path dependencies on `../pikuri`, not released gems
+## D_diagnostics_to_stderr — Why do diagnostics stay on stderr rather than reaching the browser?
 
-**Status:** **Superseded by `D_released_pikuri_gems`.** Held while the
-surface this shell needed existed only on master; pikuri 0.1.0 released
-it, and the path dependencies are gone.
-
-**Context.** This shell already wanted master's surface — the boot-time
-trifecta report and `Interloper#on_change`, neither of which was in a
-release.
-
-**Decision.** Track pikuri master by path. Upgrades follow pikuri's
-`CHANGELOG.md`, whose `**Breaking:**` entries carry the migrations, with
-pikuri-tui's HEAD as the worked example for anything ambiguous.
-
-**Rejected: pinning released gems and waiting.** `pikuri-pdf` pins
-`pikuri-core` in lockstep, so a released pdf gem refuses the next version
-bump — pinning buys stability for exactly one release and then blocks.
-
-**Rejected: bisecting pikuri-tui's git history to find a migration.**
-Its history is mostly Tuile churn this project doesn't share; the
-changelog is the cheaper and more accurate source.
-
-**Consequences.** CI must clone `../pikuri` before bundling — without it
-the path dependency fails the build outright.
-
-## D_diagnostics_to_stderr — The browser shows the conversation; diagnostics stay on stderr
-
-**Status:** Accepted, shipped. This *reverses* a design that shipped in
-the original scaffold: `LogIO`, a Ctrl+L toggle and a collapsible in-page
-log panel, all removed.
+This *reverses* a design that shipped in the original scaffold: `LogIO`, a Ctrl+L toggle and a
+collapsible in-page log panel, all removed.
 
 **Context.** The scaffold piped pikuri's per-subsystem loggers and
 `PikuriWeb.logger` into a collapsible panel in the page, on the theory
@@ -2939,9 +2706,7 @@ every new block kind and every theme change then has to carry.
 "show me what went wrong in the browser" want is a new decision, not a
 resurrection of `LogIO`.
 
-## D_worker_thread_agent_loop — The agent loop owns a worker thread; thread-safety lives in the sinks
-
-**Status:** Accepted, shipped as {Agents::Runner}.
+## D_worker_thread_agent_loop — Why does the agent loop run as a job on the executor rather than on a request thread?
 
 **Context.** The agent loop blocks on the LLM for the length of a turn.
 Sinatra hands each request a pooled Puma thread.
@@ -2968,11 +2733,7 @@ far side of it.
 hang; see `D_shutdown_on_state_stop`. Any new sink the listener writes to
 must be thread-safe on its own, because no caller synchronizes.
 
-## D_interloper_mid_loop_input — Mid-loop input goes through `Control::Interloper`, input stays enabled while busy
-
-**Status:** Accepted, shipped in {Agents::Runner}; the queued-count push was
-completed with `Interloper#on_change`, and the end-of-turn restart closed
-the stranding window.
+## D_interloper_mid_loop_input — Why does mid-loop input go through `Control::Interloper` rather than queue a new turn?
 
 **Context.** pikuri-tui deferred mid-loop input. A web page makes the
 want sharper: the input field is right there while the agent is working,
@@ -3029,14 +2790,12 @@ it. The boundary itself is pikuri's decision, not ours — as of 0.0.7 it
 moved off `after_tool_result` to tool-batch completion, and AGENTS.md's
 documented caveat had to be corrected to match.
 
-## D_pikuri_free_core — No `Pikuri::*` type reaches what the browser sees; server-side classes use them freely
+## D_pikuri_free_core — Why may no `Pikuri::*` type reach what the browser sees?
 
-**Status:** Accepted, shipped as "three adapters plus the boot script";
-widened to include {Conversations::HistoryReplay}; **restated as a boundary rather than
-a list of classes**, when {Conversations::Store#save} took over writing
-`history.json` and therefore took a `Pikuri::Agent::History`. The count
-was never the invariant — "translation happens at named boundaries, and
-nowhere else" is — and the list of names had begun to read as the rule.
+Restated as a boundary rather than a list of classes, when {Conversations::Store#save} took
+over writing `history.json` and therefore took a `Pikuri::Agent::History`. The count was never
+the invariant — "translation happens at named boundaries, and nowhere else" is — and the list
+of names had begun to read as the rule.
 
 **Context.** This project tracks pikuri closely
 (`D_path_deps_on_pikuri_master`), and pikuri is pre-1.0, so its surface
@@ -3079,9 +2838,7 @@ server-side, because its schema is the *file's*, not pikuri's
 (`D_schema_complete_config`) — the boundary licenses pikuri types where
 they help, it does not require them.
 
-## D_rerender_and_replace — Re-render the whole message per delta; don't port the TUI's block-cutter
-
-**Status:** Accepted, shipped as {Web::StreamingMessage}.
+## D_rerender_and_replace — Why re-render the whole message per delta rather than port the TUI's block-cutter?
 
 **Context.** pikuri-tui streams assistant output through a
 `StreamingMarkdownBuffer` — a block-cutter with committed-prefix
@@ -3112,9 +2869,7 @@ both.
 chat scale and would not be for a very long single message; that is the
 tripwire to watch if this ever changes.
 
-## D_server_authoritative_transcript — The server holds rendered blocks; SSE carries only deltas
-
-**Status:** Accepted, shipped as {Web::Transcript}.
+## D_server_authoritative_transcript — Why does the server hold the rendered blocks rather than the browser?
 
 **Context.** A browser front-end has to answer three things at once:
 page reload, a second tab, and `EventSource`'s automatic reconnect.
@@ -3136,13 +2891,11 @@ the rule the theme cookie had to be argued *against* (`D_theme_cookie`)
 rather than quietly excepted from. Blocks are stored rendered, so a
 change to how a block renders does not retroactively re-render history.
 
-## D_single_shared_conversation — One *live* agent, one transcript, loopback by default
+## D_single_shared_conversation — Why one live agent and one transcript, on loopback by default?
 
-**Status:** Accepted, shipped; narrowed when a sidebar of stored
-conversations shipped. "One conversation" now means one **live**
-conversation — the browser can switch which stored conversation that is,
-and every tab follows, because there is still exactly one agent and one
-transcript.
+Narrowed when a sidebar of stored conversations shipped: "one conversation" now means one
+**live** conversation — the browser can switch which stored conversation that is, and every
+tab follows, because there is still exactly one agent and one transcript.
 
 **Selection clause repealed and shipped.** Viewing is now a
 per-tab, per-URL concern (`GET /c/:id`), rows are links, and sending into
@@ -3197,58 +2950,7 @@ would look like multi-user support while delivering none of it.
 constraint rather than a veto: one password for everyone, gating the port
 and claiming nothing about who is asking. The shared inbox stays shared.
 
-## D_no_js_build_step — No bundler and no dependencies; JS is mechanics, never a renderer
-
-**Status:** Accepted, shipped; amended twice since — the size budget is
-gone and the test that replaces it is sharper, and how the client source
-is partitioned moved to `D_feature_owns_its_file`.
-
-**Context.** The page needs an `EventSource`, form wiring, and a way to
-place incoming fragments. That is the entire client-side job, because
-Markdown rendering happens server-side in kramdown.
-
-**Decision.** No npm, no bundler, no build step, no dependency. What
-JavaScript is *for* here:
-
-- **transport** — the `EventSource`, the `fetch` calls;
-- **platform mechanics only exposed to script** — `showModal()`, `inert`,
-  `scrollTop`, textarea measurement, `matchMedia`;
-- **per-browser state that must never reach the server** — theme, draft,
-  scroll position, which palette row is highlighted (`D_no_event_queue`).
-
-And what it is never: a **renderer**. Markup or conversation content the
-server could have produced is the server's, always. That clause is not new
-— it is what `D_server_authoritative_transcript` and `D_replay_from_history`
-have been resting on all along.
-
-**Which file a function belongs in is not this entry's business** —
-`D_feature_owns_its_file` owns that. The one clause of it this decision
-cares about is `public/js/dom.js`'s: it knows no markup at all, because a
-renderer is exactly what that file must never quietly become.
-
-**The qualifier: rendering and state, not latency.** Read absolutely, "if the
-server can do it, the server must" argues for fetching the slash palette's
-filtered rows on every keystroke — the server certainly *can*. The filter,
-the theme flip and the composer's auto-grow stay local because a round trip
-would make them feel wrong, not because the server could not do them. The
-rule governs where *rendering and state* live; it does not govern the
-interaction loop.
-
-**Rejected: a framework and a bundler** (or even a single npm
-dependency). It would add a toolchain, a lockfile, a `node_modules` and a
-build step to a project whose client-side job is a few hundred lines of
-mechanics — and the toolchain, not those lines, is what would then need
-maintaining. ES modules are the standing proof this costs nothing: `app.js`
-imports `dom.js` with the browser resolving it, no bundler in sight.
-
-**Consequences.** This is a live constraint on future work, not a
-starting condition: if a change appears to need an npm package, the
-answer is to render it on the server instead. It is also what keeps
-`--dev` cheap (`D_dev_flag_no_reload`) — there is nothing to rebuild.
-
-## D_puma_thread_dump — Thread dumps come from Puma's own backtrace signal; our threads name themselves
-
-**Status:** Accepted, shipped (2026-08-31).
+## D_puma_thread_dump — Why diagnose a wedge with Puma's own backtrace signal rather than a handler of ours?
 
 **Context.** Ruby has no `jstack`: when this server wedges — a `/events`
 drain loop parked on a queue nobody pushes, a turn stuck in `run_loop`
@@ -3292,10 +2994,9 @@ on-demand is the tool.
 - README's "When it looks stuck" documents the signal; it is the
   operator-facing half of this entry.
 
-## D_global_monitor — One serialization domain: a global re-entrant monitor, work as run-to-completion tasks
+## D_global_monitor — Why one global re-entrant monitor with run-to-completion tasks, rather than a lock per seam?
 
-**Status:** Accepted, shipped (2026-08-31). Answers the *Reopened* tail of
-`D_no_event_queue`; that entry's accepted core — the partition,
+Answers the *Reopened* tail of `D_no_event_queue`; that entry's core — the partition,
 browser-owned view state, the Broadcaster as an independent sink — stands.
 
 **Context.** The reopening named the hole: the partition supplies

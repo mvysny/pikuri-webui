@@ -664,8 +664,8 @@ bundle exec rspec        # the spec suite alone
 
 Why the code is the way it is lives under [`design/`](design/): the
 decisions and the roads not taken in
-[`decisions.md`](design/decisions.md), what must hold in
-[`requirements.md`](design/requirements.md), the wiring and the flows in
-[`architecture.md`](design/architecture.md), and how this compares with
-Open WebUI in [`comparison.md`](design/comparison.md). `AGENTS.md` is the
-must-not-break list a contributor — or their agent — reads first.
+[`decisions.md`](design/decisions.md), the wiring and the flows in
+[`architecture.md`](design/architecture.md), and what Open WebUI
+actually does in [`research.md`](design/research.md). `AGENTS.md` is the
+promises-and-must-not-break list a contributor — or their agent — reads
+first.
