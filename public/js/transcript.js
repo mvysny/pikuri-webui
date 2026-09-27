@@ -6,6 +6,7 @@
  *     es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
  *     es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
  *     transcript.setThinkingDefault(false);   // /thinking → collapsed
+ *     transcript.follow();                    // this tab just sent a message
  *
  * Every block arrives as ready-made HTML — kramdown ran on the server
  * (D_no_js_build_step) and this places fragments, never builds them.
@@ -19,16 +20,17 @@
  * A `:thinking` block's html carries a `<details><summary>` the server wrote
  * (Web::Disclosure). A streamed one always arrives `open` — the listener is
  * shared by every tab and cannot know a per-browser preference — and this file
- * resolves it before the browser paints it, per **Reasoning disclosure** below.
- * The blocks already in the page at mount are left alone: `GET /c/:id` knows
- * the browser it renders for and served them resolved.
+ * resolves it before the browser paints it, then leaves it to the reader, per
+ * **Reasoning disclosure** below. The blocks already in the page at mount are
+ * left alone: `GET /c/:id` knows the browser it renders for and served them
+ * resolved.
  *
  * Call once.
  *
  * @returns {{upsert: (block: {id: string, kind: string, html: string}) => void,
  *   apply: (blocks: {id: string, kind: string, html: string}[]) => void,
  *   remove: (id: string) => void, reset: () => void,
- *   setThinkingDefault: (open: boolean) => void}}
+ *   setThinkingDefault: (open: boolean) => void, follow: () => void}}
  */
 export const initTranscript = () => {
   const transcript = document.getElementById('transcript');
@@ -39,42 +41,39 @@ export const initTranscript = () => {
   const nearBottom = () =>
     transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 40;
 
-  // == Reasoning disclosure
-  //
-  // Whether a block is open lives as `data-disclosure` on the *block div*, and
-  // that is load-bearing rather than incidental: `upsert` replaces a block's
-  // innerHTML on every delta, so a `<details open>` inside it is destroyed and
-  // rebuilt ~15 times a second while reasoning streams. An attribute on the
-  // div — which upsert reuses and never rebuilds — survives all of it, so
-  // clicking a block open mid-turn sticks. Moving this inside the html payload
-  // breaks only mid-turn expansion, which no spec here can catch.
-  //
-  // Absent attribute means "follow the default", which is what makes
-  // setThinkingDefault a delete rather than a walk-and-set of two states.
-
   const defaultOpen = () => root.dataset.thinking !== 'collapsed';
 
-  const wanted = (el) =>
-    el.dataset.disclosure ? el.dataset.disclosure === 'open' : defaultOpen();
+  // Parses a payload once, so `fill` can take it apart before placing it.
+  const scratch = document.createElement('template');
 
-  const applyDisclosure = (el) => {
+  // == Reasoning disclosure
+  //
+  // A `<details>` already in the div is never rebuilt: it and its `<summary>`
+  // stay, and only what follows the summary is swapped in from the new
+  // payload (D_details_survive_rewrites). Replacing the whole innerHTML looks
+  // equivalent and breaks clicking a streaming block: a click is a press and a
+  // release on the *same* element, and at 15 rewrites a second the summary
+  // under the pointer is usually a different one by the time the button comes
+  // up, so no click happens at all. A synthetic or instant click never
+  // straddles a rewrite, which is how this hides from a quick check. The
+  // surviving element also carries `open` itself, so there is no state to
+  // re-apply after a rewrite.
+  //
+  // A fresh `<details>` arrives `open` (the stored form) and is resolved to
+  // this browser's default before the browser paints it.
+  const fill = (el, html) => {
+    scratch.innerHTML = html;
     const details = el.querySelector('details');
-    if (details) details.open = wanted(el);
-  };
-
-  // `toggle` does not bubble, hence the capture phase. It also fires
-  // asynchronously, so a flag set around the programmatic `details.open = …`
-  // above would already be false by now — instead this writes an override only
-  // when the element disagrees with what applyDisclosure would have set, which
-  // is true of a user's click and false of our own write.
-  transcript.addEventListener('toggle', (e) => {
-    const details = e.target;
-    if (details.tagName !== 'DETAILS') return;
-    const el = details.closest('.block');
-    if (el && details.open !== wanted(el)) {
-      el.dataset.disclosure = details.open ? 'open' : 'closed';
+    const incoming = scratch.content.querySelector('details');
+    if (details && incoming) {
+      incoming.querySelector('summary')?.remove();
+      details.replaceChildren(details.querySelector('summary'), ...incoming.childNodes);
+      return;
     }
-  }, true);
+    el.replaceChildren(scratch.content);
+    const fresh = el.querySelector('details');
+    if (fresh) fresh.open = defaultOpen();
+  };
 
   // Create-or-fill one block div, without placing it and without scrolling —
   // both are the caller's, so `apply` can place a whole snapshot and scroll
@@ -86,8 +85,7 @@ export const initTranscript = () => {
       el.id = id;
       el.className = `block ${kind}`;
     }
-    el.innerHTML = html;
-    applyDisclosure(el);
+    fill(el, html);
     return el;
   };
 
@@ -142,8 +140,8 @@ export const initTranscript = () => {
     },
 
     /**
-     * Sets whether reasoning blocks start open, and moves the blocks already on
-     * screen to match by dropping their per-block overrides — collapse-all /
+     * Sets whether reasoning blocks start open, and moves every block already on
+     * screen to match, whatever was clicked open or shut — collapse-all /
      * expand-all rather than a default for future blocks only
      * (D_details_per_block).
      *
@@ -152,10 +150,19 @@ export const initTranscript = () => {
      */
     setThinkingDefault(open) {
       root.dataset.thinking = open ? 'expanded' : 'collapsed';
-      transcript.querySelectorAll('.block.thinking').forEach((el) => {
-        delete el.dataset.disclosure;
-        applyDisclosure(el);
+      transcript.querySelectorAll('.block.thinking > details').forEach((details) => {
+        details.open = open;
       });
+    },
+
+    /**
+     * Pins the pane to the bottom, so the blocks that follow scroll into view.
+     * For a message this tab just sent: the reader wants to see it land even
+     * when a reasoning block expanded since has left them far above the tail,
+     * where `upsert` would otherwise leave them be.
+     */
+    follow() {
+      transcript.scrollTop = transcript.scrollHeight;
     },
 
     /** Drops one block; a block the page never rendered is not an error. */

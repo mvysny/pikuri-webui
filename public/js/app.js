@@ -129,6 +129,7 @@ const reportUnknownCommand = (name) => {
 initComposer({
   conversation: viewing,
   onunknown: reportUnknownCommand,
+  onsend: transcript.follow,
   onsendfailed: () => statusbar.say('not sent'),
   commands: {
     '/new': conversations.start,

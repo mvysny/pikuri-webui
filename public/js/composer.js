@@ -26,10 +26,12 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  *   stays gated in the one place that decides it.
  * @param {(text: string) => void} [opts.onunknown] a `/word` matching no row.
  *   The buffer is left alone, so the typo can be fixed instead of retyped.
+ * @param {() => void} [opts.onsend] a message is going out, before its post;
+ *   what it renders arrives later over SSE, not from here.
  * @param {() => void} [opts.onsendfailed] a message that did not go out; the
  *   text is already back in the box by then, this is only the telling.
  */
-export const initComposer = ({ conversation, commands = {}, onunknown, onsendfailed }) => {
+export const initComposer = ({ conversation, commands = {}, onunknown, onsend, onsendfailed }) => {
   const form = document.getElementById('composer');
   const input = document.getElementById('prompt');
   const menu = document.getElementById('slash-menu');
@@ -92,6 +94,7 @@ export const initComposer = ({ conversation, commands = {}, onunknown, onsendfai
     input.value = '';
     autogrow();
     input.focus();
+    onsend?.();
 
     const body = new FormData();
     body.set('conversation', conversation);

@@ -125,9 +125,9 @@ Every fact lives in exactly one of these; the others link to it.
 - **Reasoning is collapsible per block and never hidden** — `<details>` is `:thinking`'s
   alone, and `[ui] show_thinking` sets whether blocks *start* open. See
   `D_details_per_block`.
-- **Which reasoning blocks are open lives in `data-disclosure` on the block div**, outside
-  the html the `upsert` rewrites 15×/s, or mid-turn expansion breaks silently. See
-  `D_disclosure_state_on_the_block_div`.
+- **A rewrite keeps a block's `<details>` and `<summary>` and swaps only the rest** — a
+  summary rebuilt 15×/s swallows real clicks, and a synthetic click never shows it. See
+  `D_details_survive_rewrites`.
 - **A tool block carries the short line and the raw one both; CSS picks.** Both forms
   sanitize, the argument dump included — the TUI's `inspect` carve-out does not port. See
   `D_both_forms_in_the_block`.

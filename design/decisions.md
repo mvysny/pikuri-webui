@@ -733,7 +733,7 @@ display preference, and a tab that flips disturbs no other tab.
 **Rejected: `O_verbose_in_a_details`** — the short line as a
 `<summary>`, the raw dump as the body. Tempting to the point of being the
 obvious move, because `D_details_per_block` had just shipped the whole
-mechanism, `data-disclosure` included. Three reasons it loses, and the
+mechanism. Three reasons it loses, and the
 first is the one a future reader would not reconstruct: that entry
 shipped with `:thinking` is the **only** kind that gets a disclosure, on
 the argument that a disclosure is an inviting pattern to reach for — this
@@ -875,78 +875,76 @@ in.
   otherwise watches a screen of reasoning fold away, ~100 ms in, on every
   conversation switch. A CSS gate off `data-thinking` was the other
   candidate and lost: `details[open]` with its content hidden is a control
-  that closes when clicked to open, and the `toggle` event that would write
-  the override fires a task later.
+  that closes when clicked to open.
 - **The runtime toggle is collapse-all / expand-all**, not
-  default-for-future-blocks-only: `/thinking` drops every per-block
-  override and moves the whole transcript. The alternative leaves the
+  default-for-future-blocks-only: `/thinking` sets every block, whatever
+  was clicked, and moves the whole transcript. The alternative leaves the
   transcript in a mixed state nobody chose and stops the command feeling
   like a density control.
-- **Nothing touches the scroll**, deliberately. Every disclosure change
-  moves the document height — a global toggle by a lot — so a pinned pane
-  can unpin and a scrolled-up reader's view can shift; tuile gave the TUI
-  this free via `set_region_text`'s clamping. No equivalent was built
-  because the right feel differs per case: yanking the view to the bottom
-  after a deliberate click is plausibly worse than leaving it, and
-  guessing means feel-code no spec can justify. Revisit if the pane stops
-  following a stream while pinned, or a collapse leaves the reader
-  staring at whitespace.
+- **A disclosure change never touches the scroll; sending re-pins it.**
+  Every disclosure change moves the document height — a global toggle by
+  a lot — so a pinned pane can unpin and a scrolled-up reader's view can
+  shift; tuile gave the TUI this free via `set_region_text`'s clamping.
+  Yanking the view to the bottom after a deliberate click is plausibly
+  worse than leaving it, so a click moves nothing. The cost shows on the
+  *next* turn: expand a long block at the tail and the pane sits
+  thousands of pixels above it, where `upsert` rightly declines to follow
+  — so your own message and its answer land out of sight. Hence
+  `transcript.follow()` on every send from this tab: a message you just
+  sent is one you want to watch land. Revisit if a collapse leaves the
+  reader staring at whitespace.
 - The block-kind contract is **two** places for a change like this, not
   the three `AGENTS.md` names: a kind's markup travels inside the html
   payload, and `index.erb` and `transcript.js` wrap that payload in an
   identical div. Only the listener and `style.css` moved.
 
-## D_disclosure_state_on_the_block_div — Why does disclosure state live on the block div rather than inside the html the server rewrites?
+## D_details_survive_rewrites — Why does a rewrite keep a block's `<details>` rather than replace the whole html?
 
-**Context.** `upsert` replaces a block's `innerHTML` on every streaming
-delta (`D_rerender_and_replace`), and pikuri coalesces those at 15 fps.
-A `<details>` inside that payload is therefore destroyed and rebuilt
-about every 67 ms while reasoning streams.
+**Context.** `upsert` refills a block on every streaming delta
+(`D_rerender_and_replace`), and pikuri coalesces those at 15 fps. A
+reasoning block's payload is a `<details><summary>` around the body, so a
+plain `innerHTML` swap destroys and rebuilds the summary about every 67 ms
+while reasoning streams.
 
-**Decision.** The open state lives as `data-disclosure` on the **block
-div** — which `upsert` reuses and never rebuilds — and an *absent*
-attribute means "follow the default". `transcript.js` re-applies it to
-the freshly-written `<details>` after each rewrite.
+**Decision.** When the block div already holds a `<details>` and the new
+payload has one, `transcript.js` keeps the element and its `<summary>` and
+swaps in only what follows the summary. The element's own `open` is then
+the state: nothing to store beside it, nothing to re-apply. A fresh
+`<details>` arrives `open` (the stored form) and is set to the browser's
+default before it is painted; `/thinking` sets every block's `open`.
 
-This is required rather than an optimization, because a collapsed
-default puts the likeliest first action straight on the broken path: the
-user sees `▸ thinking`, clicks to peek mid-turn, and the next delta would
-slam it shut. Open-by-default has the mirror problem, where only
-*collapsing* fights the rewrite.
+**The trap, which is why this is written down.** A click is a press and a
+release on the *same* element. With the summary rebuilt at 15 fps, the one
+under the pointer is usually a different element by the time the button
+comes up, and the browser fires no click at all — the reader sees the
+triangle ignore them. A synthetic `el.click()` or an instant scripted click
+never straddles a rewrite, so the whole-`innerHTML` version passes a quick
+check, and there is no JS runtime in this suite to go red
+(`D_no_js_build_step`). Verified instead in Firefox against the real
+module with a press held 120 ms: every click on a streaming block toggled
+it, where the whole-html swap lost about half.
 
-**The trap, which is why this is written down.** `el.innerHTML = html`
-looks like it can carry the state, and moving the attribute inside the
-payload leaves everything working *except* mid-turn expansion — a case no
-spec in this repo can catch, since there is no JS runtime here
-(`D_no_js_build_step`). Verified instead in a real browser against the
-real module: a click survived 19 consecutive rewrites, in both
-directions, with a no-override sibling still following the default.
+**Rejected: the whole-html swap with the state on the block div**
+(`data-disclosure`, re-applied after each rewrite). It keeps a click that
+lands from being slammed shut by the next delta, which is half the
+problem; it cannot make the click land.
 
-**Rejected: replacing only an inner `.thinking-body`** so the
-`<details>` is never rebuilt. It works, and it requires the script to
-know that `:thinking` blocks have a body slot — markup knowledge in JS,
-which is the half of `D_no_js_build_step` that is not negotiable.
+**Rejected: a slot class such as `.thinking-body`** for the part to
+replace. That is this app's markup known in JS. Keeping the element HTML
+itself defines — `<details>` and its `<summary>` — is platform semantics,
+the same knowledge `open` already needed.
 
-**Rejected: a state map keyed by block id.** The stable div already *is*
-the map, and a side table would need its own eviction on `#remove` /
-`#reset`. State dying with the element is a feature: a reopened
+**Rejected: a state map keyed by block id.** The surviving element already
+*is* the state, and a side table would need its own eviction on `#remove`
+/ `#reset`. State dying with the element is a feature: a reopened
 conversation starts fresh.
-
-**Rejected: recording the override from the `toggle` event with a
-"programmatic" flag.** `<details>`'s toggle event fires
-*asynchronously*, so a flag set around `details.open = …` is already
-false when the handler runs. What ships instead writes an override only
-when the element disagrees with what the default would have set — true of
-a user's click, false of our own write. The event also does not bubble,
-hence the capture-phase listener.
 
 **Consequence.** The server-rendered snapshot never passes through
 `upsert`, and `transcript.js` does *not* resolve it at mount either: the
 script runs after the first paint, so any mount-time pass is a visible
 fold. `GET /c/:id` serves those blocks already resolved
-(`D_details_per_block`), and the `snapshot` frame re-places them through
-`upsert`'s path a round trip later, which is where a stale page would be
-corrected.
+(`D_details_per_block`), and the `snapshot` frame refills them through the
+same keep-the-`<details>` path, so a reader's clicks survive it.
 
 ## D_ui_cookie_over_config — Why may a `[ui]` cookie outrank the config file when nothing else may?
 
@@ -2847,7 +2845,8 @@ obvious move for a sibling front-end is to port it.
 
 **Decision.** Don't. {Web::StreamingMessage} accumulates the source and
 re-renders **all** of it through kramdown per (rate-limited) delta; the
-browser replaces one div's `innerHTML`. What *is* kept is the TUI
+browser refills one div, keeping a `<details>` it already holds
+(`D_details_survive_rewrites`). What *is* kept is the TUI
 buffer's lifecycle contract, because that part is about correctness
 rather than cost: deltas are preview-only, the bookend `finalize` carries
 the authoritative content (fast-path when equal), and the object is dead
