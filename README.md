@@ -299,7 +299,8 @@ tool_lines = "verbose"     # start on the raw form; "short" is the default
 
 ## Conversations
 
-**+ new conversation** in the status bar starts a fresh one and takes this
+**+ new conversation** in the status bar, or Ctrl+Shift+O (⌘⇧O on an iPad
+keyboard) as in Claude's own web app, starts a fresh one and takes this
 tab to it. It is never refused, because a new conversation touches no
 existing one: a turn already running — including in the conversation you
 are leaving — carries on untouched, and other tabs stay where they are.

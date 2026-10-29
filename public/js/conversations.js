@@ -17,6 +17,9 @@
  * looks like. `#new-conversation` sits in `#drawer-footer` beside
  * `#theme-toggle`, which is the root's: the id is the contract, not the nesting.
  *
+ * Ctrl+Shift+O (⌘⇧O) starts a conversation from anywhere on the page, the input
+ * included, as the button does.
+ *
  * Call once. Cleanup: nothing drops the `keydown` this puts on `document` or
  * the `matchMedia` change listener — both are meant to live as long as the page.
  *
@@ -69,7 +72,17 @@ export const initConversations = ({ conversation }) => {
   newBtn.addEventListener('click', start);
   openBtn.addEventListener('click', () => setDrawer(true));
   closeBtn.addEventListener('click', () => setDrawer(false));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setDrawer(false); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') setDrawer(false);
+    // Claude's own new-chat chord: Ctrl on Linux, ⌘ on an iPad's keyboard.
+    // Matched on `key`, not `code`, so it follows the letter on any layout;
+    // a held chord's repeats would each mint a conversation.
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && !e.repeat
+        && e.key.toLowerCase() === 'o') {
+      e.preventDefault();
+      start();
+    }
+  });
   // Leaving the phone layout with the drawer open would strand `inert` on a chat
   // column nothing covers any more. Keep the query in sync with style.css's own
   // breakpoint.
