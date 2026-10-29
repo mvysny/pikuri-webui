@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'sinatra/base'
+require 'socket'
 
 module PikuriWeb
   module Web
@@ -167,7 +168,9 @@ module PikuriWeb
         content_type 'text/event-stream'
         headers 'Cache-Control' => 'no-cache'
         conversation = params['conversation'].to_s
+        socket = env['puma.socket']
         stream do |out|
+          uncork(socket)
           queue, catch_up = settings.big_app_lock.run do
             [settings.broadcaster.subscribe(conversation), catch_up_frames(conversation)]
           end
@@ -310,6 +313,30 @@ module PikuriWeb
         halt 404, 'no such conversation' if runner.nil?
 
         runner
+      end
+
+      # Release the +TCP_CORK+ Puma puts on a response's socket, so each SSE
+      # frame leaves as it is written.
+      #
+      # Puma corks when it starts writing a response and uncorks when the body
+      # ends — which an event stream never does. Corked, Linux holds a short
+      # write for up to 200 ms, so every frame reached the browser that late:
+      # a sent message, a status change, and the streamed deltas, batched to
+      # ~5 updates a second against the 15 fps pikuri coalesces to. Uncorking
+      # once is enough; Puma corks again only for the next response.
+      #
+      # Mirrors Puma's own +uncork_socket+, so a TLS socket is reached through
+      # +to_io+, and a host or spec without Puma's socket is left alone.
+      #
+      # @param socket [Object, nil] +env['puma.socket']+
+      # @return [void]
+      def uncork(socket)
+        return unless defined?(Socket::TCP_CORK)
+
+        io = socket.respond_to?(:to_io) ? socket.to_io : nil
+        io.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_CORK, 0) if io.is_a?(TCPSocket)
+      rescue IOError, SystemCallError => e
+        PikuriWeb.logger.debug("uncorking the event stream failed (#{e.class}: #{e.message})")
       end
 
       # What a just-connected tab needs to be level with the server: the whole

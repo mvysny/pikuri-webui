@@ -593,6 +593,24 @@ RSpec.describe PikuriWeb::Web::App do
       get '/events', conversation: 'never-opened'
       assert_equal ['status'], last_response.body.scan(/event: (\w+)/).flatten
     end
+
+    # Puma corks a response's socket until the body ends, which an event stream
+    # never does — so every frame sat in the kernel for its 200 ms cork ceiling.
+    # A real socket, because the cork is the kernel's and nothing else holds it.
+    it "uncorks Puma's socket so each frame leaves as it is written" do
+      skip 'TCP_CORK is Linux-only' unless defined?(Socket::TCP_CORK)
+
+      server = TCPServer.new('127.0.0.1', 0)
+      socket = TCPSocket.new('127.0.0.1', server.addr[1])
+      socket.setsockopt(Socket::IPPROTO_TCP, Socket::TCP_CORK, 1)
+
+      get '/events', { conversation: live.id }, 'puma.socket' => socket
+
+      assert_equal 0, socket.getsockopt(Socket::IPPROTO_TCP, Socket::TCP_CORK).int
+    ensure
+      socket&.close
+      server&.close
+    end
   end
 
   context 'POST /messages' do
