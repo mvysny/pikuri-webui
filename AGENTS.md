@@ -225,13 +225,13 @@ file carries its own admission rule.
   the turn executor's names the thread for the job's duration.
 - **pikuri is pre-1.0 and this shell tracks its master**, so break freely in step with it:
   migrate on pikuri's `CHANGELOG.md` `**Breaking:**` entries, with pikuri-tui's HEAD as the
-  worked example for anything ambiguous — and expect a build green yesterday to break on
-  `bundle install` alone. See `D_path_deps_on_pikuri_master`.
+  worked example for anything ambiguous. A bump is `bundle update pikuri-core pikuri-pdf`
+  plus `rake check`, committed with its lock. See `D_git_dep_on_pikuri_master`.
 
 ## Commands
 
-A clone needs `../pikuri` beside it at master — the Gemfile's path dependency, which CI
-clones itself.
+pikuri comes from its Codeberg repo at the commit `Gemfile.lock` pins; no sibling checkout
+is needed. To edit both repos together, point Bundler's per-machine local override at one.
 
 - `bundle exec rake check` — the full check (the spec suite plus the doc tripwires), the
   default task, the cross-repo standard entry point, and what `.woodpecker.yml` runs.

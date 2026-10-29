@@ -48,19 +48,25 @@ go *find* one.
 
 ## Install
 
-pikuri itself is a **path dependency on a sibling checkout**, not a
-released gem — this shell uses `Agent::ServerPermits`, which no pikuri
-release carries yet. So clone the two side by side:
-
 ```sh
-git clone https://codeberg.org/mvysny/pikuri.git
 git clone https://codeberg.org/mvysny/pikuri-web.git
 cd pikuri-web
 bundle install
 ```
 
-`../pikuri` at master is what `bundle install` reads; `bundle exec rake
-check` is how you find out whether master still fits.
+pikuri itself is a **git dependency on its master branch**, not a
+released gem — this shell uses `Agent::ServerPermits`, which no pikuri
+release carries yet. `bundle install` fetches it at the commit
+`Gemfile.lock` pins; `bundle update pikuri-core pikuri-pdf` moves to
+master's tip, and `bundle exec rake check` tells you whether it still fits.
+
+Hacking on pikuri at the same time? Point Bundler at your own checkout
+(it must be on `master`):
+
+```sh
+bundle config set local.pikuri-core ../pikuri
+bundle config set local.pikuri-pdf ../pikuri
+```
 
 ## Run
 

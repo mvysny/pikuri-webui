@@ -666,35 +666,26 @@ instrumenter's.
   (`D_max_concurrent_requests`); everything else about a connection is still
   per entry.
 
-## D_path_deps_on_pikuri_master — Why path dependencies on `../pikuri` rather than released gems?
-
-Why not released gems: this shell ran on pikuri 0.1.0 from RubyGems, pinned to one minor,
-until `Agent::ServerPermits` missed that release and the surface this shell needs was
-master-only again. A release is a snapshot a clone can reproduce without a sibling checkout, and
-that case is the one to re-make at the next pikuri release — with it the CI clone step goes
-away again.
+## D_git_dep_on_pikuri_master — Why a git dependency on pikuri master rather than released gems or a sibling checkout?
 
 **Context.** `D_upstream_request_throttle` needs `Agent::ServerPermits`,
-which exists only on pikuri master — nothing on the 0.1 line has it. The pin on
-released gems was sound and is simply out of date: it
-rested on "pikuri 0.1.0 ships everything this shell needs", which stopped
-being true the moment the throttle landed upstream instead of here.
+which exists only on pikuri master — nothing on the 0.1 line has it. This
+shell ran on pikuri 0.1.0 from RubyGems until then, and it later ran on a
+path dependency on a sibling `../pikuri` checkout.
 
-**Decision.** `gem 'pikuri-core', path: '../pikuri'` and the same for
-`pikuri-pdf`, both on the sibling checkout; `.woodpecker.yml` clones it at
-depth 1 before bundling. Upgrades are whatever master says, verified by
+**Decision.** `git 'https://codeberg.org/mvysny/pikuri.git', branch:
+'master'` for `pikuri-core` and `pikuri-pdf`. `Gemfile.lock` pins the
+commit, and `bundle update pikuri-core pikuri-pdf` moves it, verified by
 `rake check`.
 
 **Rejected: waiting for pikuri 0.2.0.** The honest version of "wait" is
 "block this change on a release cut to unblock it", between two repos with
 one author. Master is what this shell validates against in any case.
 
-**Rejected: a per-machine `bundle config local.pikuri-core` with the Gemfile
-still pinned** — the released-gems pin's own suggestion, read in reverse.
-It works for a *convenience* (editing both repos together); it does not work
-for a dependency the committed code requires, because the committed Gemfile
-would then describe a build that cannot run and both a fresh clone and CI
-would fail.
+**Rejected: a path dependency on `../pikuri`** — what this entry used to
+argue for. A clone could not build alone and CI had to clone the sibling
+itself. The lock pinned nothing, so whatever the checkout held went into
+the build, and master could break this shell on any `bundle install`.
 
 **Rejected: vendoring `ServerPermits` / `RequestThrottle` into `lib/`.** A
 third copy of a throttle, in the one area `AGENTS.md`'s reuse rule reserves
@@ -702,14 +693,13 @@ for pikuri.
 
 **Consequences.**
 
-- CI clones `../pikuri` again, and `Gemfile.lock` carries no checksum for
-  the two gems that matter most. Both are what the pin bought; both are back
-  on the bill.
-- **Master can break this shell on any `bundle install`.** `rake check` is
-  what catches it and pikuri's `CHANGELOG.md` `**Breaking:**` entries carry
-  the migration — which is how this change also paid for master's tool-event
-  reshape (`D_both_forms_in_the_block`'s consequences) and the step-limit
-  removal.
+- **A pikuri bump is a commit of its own**, the lock diff included.
+  pikuri's `CHANGELOG.md` `**Breaking:**` entries carry the migration, and
+  `rake check` is what says it is done.
+- **Editing both repos together** is Bundler's local override, per machine
+  and never committed: `bundle config set local.pikuri-core ../pikuri` (and
+  the same for `pikuri-pdf`). The checkout must sit on `master`, and the lock
+  then follows its HEAD.
 - **Revisit at the next pikuri release.** Nothing here argues against a pin
   in principle, so when a release carries this surface, going back to a
   pinned release is a one-line change and a good one.
@@ -2796,7 +2786,7 @@ the invariant — "translation happens at named boundaries, and nowhere else" is
 of names had begun to read as the rule.
 
 **Context.** This project tracks pikuri closely
-(`D_path_deps_on_pikuri_master`), and pikuri is pre-1.0, so its surface
+(`D_git_dep_on_pikuri_master`), and pikuri is pre-1.0, so its surface
 moves under this shell by design. What that costs depends
 entirely on *where* the types are: a pikuri type in the rendering path
 prices an upgrade at a sweep of every file the browser's state flows

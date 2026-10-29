@@ -38,8 +38,7 @@ variables:
 
 steps:
   # --- the doc layer, on its own ---
-  # `rake check` runs these too, but that needs the sibling clone and a full
-  # bundle first; the tripwires need only bash and git, so a doc failure
+  # `rake check` runs these too, but that needs a full bundle first; the tripwires need only bash and git, so a doc failure
   # reports in seconds instead of behind the build. The language images carry
   # neither shell nor git, hence buildpack-deps:scm.
   - name: docs
@@ -70,24 +69,11 @@ steps:
     commands:
       - ruby -v
 
-      # --- the sibling checkout the Gemfile points at ---
-      # pikuri-core / pikuri-pdf are path dependencies on ../pikuri (this
-      # shell tracks pikuri master again, not a release), and CI checks out
-      # only this repo — without the clone, bundle install fails outright.
-      # Depth 1 of master: the same tip a developer's sibling checkout has.
-      # Retried because a Codeberg 504 here has reddened an otherwise green
-      # build; the final `test` is what turns three dead attempts into a
-      # failure.
-      - |
-        for attempt in 1 2 3; do
-          git clone --depth 1 https://codeberg.org/mvysny/pikuri.git ../pikuri && break
-          echo "clone attempt $attempt failed - retrying in 10s"
-          rm -rf ../pikuri
-          sleep 10
-        done
-        test -d ../pikuri/.git
-
       # --- install + check ---
+      # pikuri-core / pikuri-pdf come from pikuri's git repo at the commit
+      # Gemfile.lock pins, so bundler fetches them itself — and the cache
+      # above holds that checkout too, keyed on the same lock. `--retry`
+      # covers the Codeberg 504s that once reddened an otherwise green build.
       # `rake check` is the cross-repo standard full-verification command —
       # the same one a contributor runs locally, so CI cannot drift from it.
       - bundle install --jobs 4 --retry 3

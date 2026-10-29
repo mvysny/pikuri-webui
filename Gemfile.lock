@@ -1,5 +1,7 @@
-PATH
-  remote: ../pikuri
+GIT
+  remote: https://codeberg.org/mvysny/pikuri.git
+  revision: 4b78957713422df116746c53cc9170cd40e3a67a
+  branch: master
   specs:
     pikuri-core (0.1.0)
       faraday (~> 2.9)

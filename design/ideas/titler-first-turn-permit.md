@@ -2,7 +2,7 @@
 
 Status: **verified with a fake server (2026-10-29); fix not chosen.** Spotted while fixing pikuri-core's
 first-turn echo, where the user turn is now emitted before the `/props` probe
-(`D_deferred_cap_probe` in pikuri's `design/decisions.md`).
+(the deferred cap probe entry in pikuri's `design/decisions.md`).
 
 The `[titler]` agent (`lib/pikuri_web/agents/titler.rb`) can sit on the same
 `[[server]]` as the conversation's model. When that server has

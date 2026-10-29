@@ -27,18 +27,21 @@ gem 'zeitwerk', '~> 2.7'
 # pikuri-tui's chat shell: bin/pikuri-web-chat binds Pikuri::Agent +
 # Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
 #
-# A path dependency on the sibling checkout, not a released version: this
-# shell is back on pikuri master for its unreleased surface — Agent::
-# ServerPermits, the per-server LLM request throttle that replaced this
-# project's own Faraday adapter (`D_upstream_request_throttle`);
-# ChatTransport's `params`, which replaced the second one
-# (`D_llm_params_passthrough`); and the tool display strings the
-# transcript's tool lines now render.
+# A git dependency on pikuri master, not a released version: this shell
+# needs unreleased surface — Agent::ServerPermits, the per-server LLM
+# request throttle that replaced this project's own Faraday adapter
+# (`D_upstream_request_throttle`); ChatTransport's `params`, which
+# replaced the second one (`D_llm_params_passthrough`); and the tool
+# display strings the transcript's tool lines now render. Gemfile.lock
+# pins the commit; `bundle update pikuri-core pikuri-pdf` moves it
+# (`D_git_dep_on_pikuri_master`).
 # pikuri-pdf rides the same checkout because its gemspec pins
 # `pikuri-core = <exact version>` in lockstep — a released pikuri-pdf
 # would refuse the moment master bumps core's version.
-gem 'pikuri-core', path: '../pikuri'
-gem 'pikuri-pdf', path: '../pikuri'
+git 'https://codeberg.org/mvysny/pikuri.git', branch: 'master' do
+  gem 'pikuri-core'
+  gem 'pikuri-pdf'
+end
 
 # Server-side Markdown → HTML for assistant/thinking content. The web
 # analogue of the TUI's TTY::Markdown: rendering happens on the server
