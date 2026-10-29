@@ -178,9 +178,9 @@ big_app_lock = PikuriWeb::BigAppLock.new
 conversation_factory = lambda do |conversation|
   # The connection this conversation saved, or inherited from the one the tab
   # was reading. Resolving it *here* rather than parking it as a pending switch
-  # matters because Agent's constructor probes the context window: minting on
-  # the wrong server would show the wrong cap until the first turn, and pay a
-  # second probe to correct it.
+  # puts the agent on the right connection from the start: the status bar reads
+  # the model and the stated cap off the agent's own transport, so minting on
+  # the wrong one would show both wrong until the first turn applied the switch.
   choice = catalog.resolve(model: conversation.model_at_mint, server: conversation.server_at_mint)
   # A connection edited out of config.toml since this conversation last spoke.
   # The pair is all there is to name it by — its [[llm]] name went with it.
