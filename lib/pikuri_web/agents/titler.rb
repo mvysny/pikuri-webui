@@ -114,9 +114,11 @@ module PikuriWeb
         # block — reduce to "drop everything up to the close".
         text = raw.to_s.split('</think>').last.to_s
         # Before the caps, so a bidi override cannot survive by sitting past the
-        # cut. Escaping downstream would stop markup, not reordering.
-        line = Pikuri::Sanitizer.sanitize(text).text.lines.first.to_s.strip
-        return nil if line.empty?
+        # cut. Escaping downstream would stop markup, not reordering. The first
+        # line *with something on it*: ruby_llm 2 hands content over verbatim,
+        # so the blank line a model puts after its close tag arrives too.
+        line = Pikuri::Sanitizer.sanitize(text).text.lines.map(&:strip).find { |l| !l.empty? }
+        return nil if line.nil?
 
         capped = line.split(/\s+/).first(MAX_WORDS).join(' ')
         capped.length > MAX_CHARS ? capped[0, MAX_CHARS].rstrip : capped

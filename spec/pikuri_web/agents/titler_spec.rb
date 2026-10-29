@@ -50,6 +50,12 @@ describe PikuriWeb::Agents::Titler do
       assert_equal 'Sinatra Versus Roda', titler(leaked).title_for('x')
     end
 
+    # The other leak shape probing has seen, with the blank line a model puts
+    # after the tag — which ruby_llm 2 no longer trims away for us.
+    it 'skips the blank lines after a bare leading close tag' do
+      assert_equal 'Sinatra Versus Roda', titler("</think>\n\n  Sinatra Versus Roda\n").title_for('x')
+    end
+
     it 'answers nil for a reply with nothing usable in it' do
       assert_nil titler("   \n  ").title_for('x')
       assert_nil titler('</think>').title_for('x')
