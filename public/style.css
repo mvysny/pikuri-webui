@@ -510,7 +510,47 @@ body {
 
 #send:hover { filter: brightness(1.08); }
 
-#cancel { color: var(--error); }
+#cancel { color: var(--error); position: relative; }
+
+/* The ring around ■ is the turn's indeterminate progress — Material's circular
+   spinner, Android's ring-around-a-stop-square. It needs no state of its own:
+   ■ is shown exactly while `busy`, so the ring spins exactly as long. It is
+   drawn over the button's 1px border: a conic arc from --arc-tail to
+   --arc-head, masked down to a 2px band. The arc's two ends chase each other
+   while the whole ring turns on a second, non-dividing period, so successive
+   cycles never line up the same way. */
+@property --arc-tail { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+@property --arc-head { syntax: '<angle>'; inherits: false; initial-value: 10deg; }
+
+#cancel::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(from var(--arc-tail),
+    var(--accent) calc(var(--arc-head) - var(--arc-tail)), transparent 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  pointer-events: none;
+  animation: cancel-arc 1.4s ease-in-out infinite, cancel-spin 2.2s linear infinite;
+}
+
+/* The tail ends a full turn past where it began, so 100% joins 0% seamlessly. */
+@keyframes cancel-arc {
+  0%   { --arc-tail: 0deg;   --arc-head: 10deg; }
+  50%  { --arc-tail: 20deg;  --arc-head: 280deg; }
+  100% { --arc-tail: 360deg; --arc-head: 370deg; }
+}
+
+@keyframes cancel-spin { to { transform: rotate(360deg); } }
+
+/* Under reduced motion the ring keeps turning, slowly and at a fixed length:
+   a still ring would not say the turn is alive. */
+@media (prefers-reduced-motion: reduce) {
+  #cancel::before {
+    --arc-head: 270deg;
+    animation: cancel-spin 3s linear infinite;
+  }
+}
 
 button {
   background: var(--bg-raised);
