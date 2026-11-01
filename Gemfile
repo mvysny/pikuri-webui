@@ -61,7 +61,7 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 # ships no license. tomlrb is MIT and actively maintained. We parse TOML
 # into a Hash and validate that Hash by hand (the schema is tiny); no
 # JSON Schema gem.
-gem 'tomlrb', '~> 2.0'
+gem 'tomlrb', '~> 3.0'
 
 # Thread pool for agent turns. A turn blocks on the LLM for minutes, so it
 # runs as a job on an executor rather than on a Sinatra request thread —
