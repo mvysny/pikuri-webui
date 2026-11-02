@@ -2258,7 +2258,7 @@ deleting.
   next turn end. Fixed by {Conversations::Registry#open_id}: resolve and open
   are one step under the monitor `#delete` already holds, so either the
   delete finds a runner to refuse or retire, or the open finds nothing to
-  resolve. `#open(conversation)` itself is unguarded still, and is now only
+  resolve. `#runner_for(conversation)` itself is unguarded still, and is now only
   reached by `#create`, holding a conversation it just minted. Found by
   reading during the `D_no_event_queue` seam audit, not by a report.
 - Deleting is the whole answer to retention: still no cap and no
@@ -3115,9 +3115,9 @@ reaches, though the server-side half now also sits in one task), and
   domain.
 - New shared state joins the domain (guarded + `assert!`) or states the
   reason for its own lock the way {Web::Broadcaster}'s header does.
-- The registry's `#open` footgun (audit PROBE 7) was untouched by the
+- The registry's `#open` footgun (audit PROBE 7; the method is `#runner_for` now) was untouched by the
   mechanism — the stale `Conversation` is held *across* tasks — and was
-  closed right after it by structure instead: `#open` is private, so every
+  closed right after it by structure instead: it is private, so every
   caller goes through `#open_id` (re-resolves in its own task) or
   `#create` (opens what it just minted), and PROBE 7's premise is gone.
 - The request-to-request seams, which no server-side mechanism reaches,

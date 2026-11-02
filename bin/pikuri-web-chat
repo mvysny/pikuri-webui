@@ -268,7 +268,7 @@ conversation_factory = lambda do |conversation|
 end
 
 registry = PikuriWeb::Conversations::Registry.new(store: conversations, factory: conversation_factory,
-                                               lock: big_app_lock)
+                                                  lock: big_app_lock)
 
 # The advisory lethal-trifecta map, printed once at boot: which of private
 # data / untrusted content / egress this tool set actually holds, and

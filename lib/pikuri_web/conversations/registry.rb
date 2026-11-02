@@ -60,7 +60,7 @@ module PikuriWeb
       #
       #   runner = registry.open_id(params['conversation'])
       #
-      # {#find} then {#open} as two caller-side calls would leave a window for
+      # {#find} then {#runner_for} as two caller-side calls would leave a window for
       # {#delete}: the folder goes, and the open that follows mints a live
       # runner for it anyway — back in the sidebar as an unsaved resident, and
       # written to disk again at its next turn end. {Agents::Runner#discard!}
@@ -75,7 +75,7 @@ module PikuriWeb
       def open_id(id)
         @lock.assert!
         conversation = find(id)
-        conversation && open(conversation)
+        conversation && runner_for(conversation)
       end
 
       # Mint a brand-new conversation and open it.
@@ -93,7 +93,7 @@ module PikuriWeb
       def create(from: nil)
         @lock.assert!
         model, server = from && resident(from)&.model
-        open(@store.create(model: model, server: server))
+        runner_for(@store.create(model: model, server: server))
       end
 
       # Forget a conversation and remove its folder. Irreversible: no undo, no
@@ -128,7 +128,7 @@ module PikuriWeb
 
       # Resolve an id to a conversation — resident or saved.
       #
-      # Callers pass this rather than an id into {#open} / {#delete}, so no
+      # Callers pass this rather than an id into {#runner_for} / {#delete}, so no
       # caller ever turns user input into a path.
       #
       # @param id [String]
@@ -181,7 +181,7 @@ module PikuriWeb
       #
       # @param conversation [Store::Conversation]
       # @return [Agents::Runner]
-      def open(conversation)
+      def runner_for(conversation)
         @lock.assert!
         @runners[conversation.id] ||= @factory.call(conversation).tap(&:restore!)
       end

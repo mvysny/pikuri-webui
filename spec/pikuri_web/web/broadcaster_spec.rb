@@ -37,7 +37,7 @@ RSpec.describe PikuriWeb::Web::Broadcaster do
       queue = broadcaster.subscribe('c-1')
       broadcaster.broadcast(event: :block, data: { id: 'b1' }, conversation: 'c-1')
       broadcaster.broadcast(event: :remove, data: { id: 'b1' }, conversation: 'c-1')
-      assert_equal %w[block remove], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] }
+      assert_equal(%w[block remove], drain_frames(queue).map { |f| f[/event: (\w+)/, 1] })
     end
   end
 

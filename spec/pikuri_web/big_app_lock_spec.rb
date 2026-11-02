@@ -15,13 +15,13 @@ RSpec.describe PikuriWeb::BigAppLock do
     end
 
     it 're-enters: a task may open a task' do
-      assert_equal :ok, lock.run { lock.run { :ok } }
+      assert_equal(:ok, lock.run { lock.run { :ok } })
     end
   end
 
   context '#assert!' do
     it 'passes inside a task' do
-      assert_nil lock.run { lock.assert! }
+      assert_nil(lock.run { lock.assert! })
     end
 
     it 'raises outside one' do

@@ -91,10 +91,11 @@ gem 'erubi', '~> 1.13'
 
 # Types are written once, as YARD tags; sord compiles them into the committed
 # sig/pikuri_web.rbs, and `rake sig` (part of `rake check`) fails on any tag
-# sord cannot type. redcarpet renders the Markdown that .yardopts selects.
-# The same trio, at the same versions, as pikuri-tui.
+# sord cannot type. redcarpet renders the Markdown that .yardopts selects;
+# rubocop is `rake check`'s style gate. Versions track pikuri-tui's.
 group :development do
   gem 'redcarpet', '~> 3.6'
+  gem 'rubocop', '~> 1.92', require: false
   gem 'sord', '~> 7.1', require: false
   gem 'yard', '~> 0.9.45'
 end

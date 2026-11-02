@@ -665,7 +665,7 @@ are printed to stderr.
 ## Test
 
 ```sh
-bundle exec rake check   # the spec suite, the sord signatures, the doc-layer tripwires; what CI runs
+bundle exec rake check   # specs, sord signatures, rubocop, doc tripwires; what CI runs
 bundle exec rspec        # the spec suite alone
 ```
 

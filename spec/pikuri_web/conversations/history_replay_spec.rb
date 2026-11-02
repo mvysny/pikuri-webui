@@ -56,7 +56,7 @@ RSpec.describe PikuriWeb::Conversations::HistoryReplay do
       )
 
       assert_equal %w[ToolCall ToolResult ToolCall ToolResult], kinds(events)
-      assert_equal %w[calculator 4 fetch a\ page],
+      assert_equal ['calculator', '4', 'fetch', 'a page'],
                    [events[0].name, events[1].content, events[2].name, events[3].content]
     end
 

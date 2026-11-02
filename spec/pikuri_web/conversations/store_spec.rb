@@ -167,7 +167,7 @@ RSpec.describe PikuriWeb::Conversations::Store do
       save(conversation, SpyHistory.new, updated_at: Time.utc(2026, 8, 27, 13, 20, 0))
 
       assert_equal '2026-08-27T13:20:00Z', meta_of(conversation).fetch('updated_at')
-      assert_equal ['meta.json'], conversation.dir.children.map { |c| c.basename.to_s }
+      assert_equal(['meta.json'], conversation.dir.children.map { |c| c.basename.to_s })
     end
   end
 

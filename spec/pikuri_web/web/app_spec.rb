@@ -43,6 +43,7 @@ RSpec.describe PikuriWeb::Web::App do
       @selected << name
       @select_outcome
     end
+
     def cancel = @cancels += 1
     def busy? = @busy
 
@@ -51,6 +52,7 @@ RSpec.describe PikuriWeb::Web::App do
         tokens: 'ctx 12.3k/32k (38%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
         model: 'local', model_pending: nil, model_missing: nil }
     end
+
     # Unrendered, the way the real runner hands it over: the route runs it
     # through TrifectaView, so this stands in for Pikuri::Agent::Trifecta and
     # only #render is ever reached.
@@ -73,13 +75,13 @@ RSpec.describe PikuriWeb::Web::App do
       @delete_outcome = :deleted
     end
 
-    def open(conversation) = @runners[conversation.id] ||= FakeRunner.new(conversation, lock: @lock)
+    def runner_for(conversation) = @runners[conversation.id] ||= FakeRunner.new(conversation, lock: @lock)
     def resident(id) = @runners[id]
     def find(id) = @list.find { |c| c.id == id }
 
     def open_id(id)
       conversation = find(id)
-      conversation && open(conversation)
+      conversation && runner_for(conversation)
     end
 
     def create(from: nil)
@@ -87,7 +89,7 @@ RSpec.describe PikuriWeb::Web::App do
       @created_from << from
       conversation = ConversationRows.row("minted-#{@created}", "minted #{@created}")
       @list.unshift(conversation)
-      open(conversation)
+      runner_for(conversation)
     end
 
     def delete(conversation)
@@ -147,7 +149,7 @@ RSpec.describe PikuriWeb::Web::App do
   let(:tool_lines) { :short }
 
   # The runner GET /c/:id would open for the default conversation.
-  let(:runner) { registry.open(live) }
+  let(:runner) { registry.runner_for(live) }
 
   def app = described_class
 
@@ -165,7 +167,7 @@ RSpec.describe PikuriWeb::Web::App do
     described_class.set :tool_lines, tool_lines
   end
 
-  def get_live = get("/c/#{live.id}")
+  def visit_live = get("/c/#{live.id}")
 
   context 'GET /' do
     it 'redirects to the newest conversation, so every tab lands on a real URL' do
@@ -188,14 +190,14 @@ RSpec.describe PikuriWeb::Web::App do
         runner.transcript.add(kind: :user, html: 'hello there')
         runner.transcript.add(kind: :assistant, html: '<p>general kenobi</p>')
       end
-      get_live
+      visit_live
       assert last_response.ok?
       assert_includes last_response.body, '<div class="block user" id="b1">hello there</div>'
       assert_includes last_response.body, '<div class="block assistant" id="b2"><p>general kenobi</p></div>'
     end
 
     it 'renders the status bar from this conversation runner' do
-      get_live
+      visit_live
       assert_includes last_response.body, 'idle'
       # Both halves of the context readout, each in the span that paints it.
       assert_includes last_response.body, '<span id="status-tokens-ctx">ctx 12.3k/32k (38%)</span>'
@@ -206,7 +208,7 @@ RSpec.describe PikuriWeb::Web::App do
     # conversation on every fetch and on the EventSource itself, so no form in
     # the page carries a second copy of it.
     it 'names the conversation for app.js to subscribe to' do
-      get_live
+      visit_live
       assert_includes last_response.body, %(data-conversation="#{live.id}")
     end
 
@@ -217,20 +219,20 @@ RSpec.describe PikuriWeb::Web::App do
 
     it 'serves a conversation while a turn is in flight in it' do
       runner.busy = true
-      get_live
+      visit_live
       assert last_response.ok?
       assert_includes last_response.body, 'running'
     end
 
     it 'defaults to the dark theme with no cookie' do
-      get_live
+      visit_live
       assert_includes last_response.body, 'data-theme="dark"'
       assert_includes last_response.body, '☀ light'
     end
 
     it 'honours a light theme cookie' do
       set_cookie 'theme=light'
-      get_live
+      visit_live
       assert_includes last_response.body, 'data-theme="light"'
       assert_includes last_response.body, '☾ dark'
     end
@@ -240,22 +242,22 @@ RSpec.describe PikuriWeb::Web::App do
     # can only be the dark default, so the resolved theme has to override it
     # here, or a light-theme user gets a dark bar over a paper-white page.
     it 'renders theme-color from the resolved theme, not the manifest default' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<meta name="theme-color" content="#1e1f22">'
       set_cookie 'theme=light'
-      get_live
+      visit_live
       assert_includes last_response.body, '<meta name="theme-color" content="#fbfbfa">'
     end
 
     it 'links the icons and the manifest the install path needs' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<link rel="icon" href="/images/favicon.svg" type="image/svg+xml">'
       assert_includes last_response.body, '<link rel="apple-touch-icon" href="/images/apple-touch-icon.png">'
       assert_includes last_response.body, '<link rel="manifest" href="/manifest.webmanifest">'
     end
 
     it 'renders the whole slash-command catalog for app.js to filter in place' do
-      get_live
+      visit_live
       PikuriWeb::Web::SlashCommand.catalog(connections: models.size).each do |command|
         assert_includes last_response.body, %(data-command="#{command.name}")
         assert_includes last_response.body, command.description
@@ -263,7 +265,7 @@ RSpec.describe PikuriWeb::Web::App do
     end
 
     it 'lists every connection in the model dialog, with its model id and window' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<template id="tpl-model">'
       assert_includes last_response.body, 'data-model="remote"'
       assert_includes last_response.body, '<span class="picker-detail">qwen3.6 · 32k</span>'
@@ -272,7 +274,7 @@ RSpec.describe PikuriWeb::Web::App do
     end
 
     it 'renders the status bar with the model, so the dialog can read it back' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<span id="status-model" data-missing="">local</span>'
       assert_includes last_response.body, '<span id="status-model-pending"></span>'
     end
@@ -281,32 +283,32 @@ RSpec.describe PikuriWeb::Web::App do
       let(:models) { [{ name: 'local', model: 'qwen3.6', context_window: nil }] }
 
       it 'leaves /model out of the palette — there is nothing to pick between' do
-        get_live
+        visit_live
         refute_includes last_response.body, 'data-command="/model"'
         assert_includes last_response.body, 'data-command="/theme"'
       end
 
       it 'still names the connection on the status bar' do
-        get_live
+        visit_live
         assert_includes last_response.body, '>local</span>'
       end
     end
 
     it 'ships the trifecta report in the page, so /trifecta costs no route' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<template id="tpl-trifecta">'
       assert_includes last_response.body, 'Trifecta: 2 of 3 legs'
     end
 
     it 'names the known commands in the unknown-command dialog' do
-      get_live
+      visit_live
       assert_includes last_response.body,
                       'Known commands: /new, /model, /theme, /thinking, /toollines, /trifecta.'
     end
 
     it 'falls back to the default theme for an unknown cookie value' do
       set_cookie 'theme=neon'
-      get_live
+      visit_live
       assert_includes last_response.body, 'data-theme="dark"'
     end
 
@@ -316,7 +318,7 @@ RSpec.describe PikuriWeb::Web::App do
     # the first paint.
     context 'the reasoning-disclosure default' do
       it 'renders the configured default with no cookie' do
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-thinking="expanded"'
       end
 
@@ -325,21 +327,23 @@ RSpec.describe PikuriWeb::Web::App do
         before { lock.run { runner.transcript.add(kind: :thinking, html: stored) } }
 
         it 'serves it open to an expanded browser, as stored' do
-          get_live
+          visit_live
           assert_includes last_response.body, %(<div class="block thinking" id="b1">#{stored}</div>)
         end
 
-        let(:closed) { '<div class="block thinking" id="b1"><details><summary>thinking</summary><p>hmm</p></details></div>' }
+        let(:closed) do
+          '<div class="block thinking" id="b1"><details><summary>thinking</summary><p>hmm</p></details></div>'
+        end
 
         it 'serves it closed to a collapsed browser, so nothing folds after the paint' do
           set_cookie 'thinking=collapsed'
-          get_live
+          visit_live
           assert_includes last_response.body, closed
         end
 
         it 'folds for the configured default too, not only for a cookie' do
           described_class.set :show_thinking, false
-          get_live
+          visit_live
           assert_includes last_response.body, closed
         end
       end
@@ -348,31 +352,31 @@ RSpec.describe PikuriWeb::Web::App do
         let(:show_thinking) { false }
 
         it 'renders that instead — the file is what a browser with no preference sees' do
-          get_live
+          visit_live
           assert_includes last_response.body, 'data-thinking="collapsed"'
         end
 
         it 'still lets a cookie outrank it (D_ui_cookie_over_config)' do
           set_cookie 'thinking=expanded'
-          get_live
+          visit_live
           assert_includes last_response.body, 'data-thinking="expanded"'
         end
       end
 
       it 'honours a collapsed cookie over the configured default' do
         set_cookie 'thinking=collapsed'
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-thinking="collapsed"'
       end
 
       it 'falls back to the configured default for an unknown cookie value' do
         set_cookie 'thinking=sideways'
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-thinking="expanded"'
       end
 
       it 'offers both states in the picker the command opens' do
-        get_live
+        visit_live
         assert_includes last_response.body, '<template id="tpl-thinking">'
         assert_includes last_response.body, 'data-thinking="expanded">Expanded<'
         assert_includes last_response.body, 'data-thinking="collapsed">Collapsed<'
@@ -383,7 +387,7 @@ RSpec.describe PikuriWeb::Web::App do
     # attribute is what style.css picks by, so it is the whole of the flip.
     context 'the tool-line form' do
       it 'renders the configured default with no cookie' do
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-tools="short"'
       end
 
@@ -391,26 +395,26 @@ RSpec.describe PikuriWeb::Web::App do
         let(:tool_lines) { :verbose }
 
         it 'renders that instead' do
-          get_live
+          visit_live
           assert_includes last_response.body, 'data-tools="verbose"'
         end
 
         it 'still lets a cookie outrank it (D_ui_cookie_over_config)' do
           set_cookie 'tools=short'
-          get_live
+          visit_live
           assert_includes last_response.body, 'data-tools="short"'
         end
       end
 
       it 'honours a verbose cookie over the configured default' do
         set_cookie 'tools=verbose'
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-tools="verbose"'
       end
 
       it 'falls back to the configured default for an unknown cookie value' do
         set_cookie 'tools=terse'
-        get_live
+        visit_live
         assert_includes last_response.body, 'data-tools="short"'
       end
 
@@ -421,13 +425,13 @@ RSpec.describe PikuriWeb::Web::App do
         let(:tool_lines) { :terse }
 
         it 'falls back to short rather than rendering it' do
-          get_live
+          visit_live
           assert_includes last_response.body, 'data-tools="short"'
         end
       end
 
       it 'offers both forms in the picker the command opens' do
-        get_live
+        visit_live
         assert_includes last_response.body, '<template id="tpl-toollines">'
         assert_includes last_response.body, 'data-tools="short">Short<'
         assert_includes last_response.body, 'data-tools="verbose">Verbose<'
@@ -438,13 +442,13 @@ RSpec.describe PikuriWeb::Web::App do
     # refused, and a fresh conversation touches no existing one.
     it 'never disables the new-conversation button' do
       runner.busy = true
-      get_live
+      visit_live
       assert_includes last_response.body, '+ new conversation'
       refute_match(/id="new-conversation"[^>]*disabled/, last_response.body)
     end
 
     it 'titles the page and the top bar with the conversation' do
-      get_live
+      visit_live
       assert_includes last_response.body, '<title>the open one · pikuri-web</title>'
       assert_includes last_response.body, '<span id="topbar-title">the open one</span>'
     end
@@ -452,12 +456,12 @@ RSpec.describe PikuriWeb::Web::App do
     # Sending mid-turn injects, so the arrow cannot become the stop button —
     # that would cost the injection (D_interloper_mid_loop_input).
     it 'keeps send and stop as two controls, revealing stop only while busy' do
-      get_live
+      visit_live
       assert_match(/id="send"/, last_response.body)
       assert_match(/id="cancel"[^>]*hidden/, last_response.body)
 
       runner.busy = true
-      get_live
+      visit_live
       assert_match(/id="send"/, last_response.body)
       refute_match(/id="cancel"[^>]*hidden/, last_response.body)
     end
@@ -465,7 +469,7 @@ RSpec.describe PikuriWeb::Web::App do
     # One shell, two layouts (D_one_shell_two_layouts): the phone's chrome is
     # in every response, and only CSS decides which half is showing.
     it 'ships the drawer chrome and the top bar to every browser' do
-      get_live
+      visit_live
       assert_includes last_response.body, 'id="drawer"'
       assert_includes last_response.body, 'id="drawer-open"'
       assert_includes last_response.body, 'id="drawer-close"'
@@ -477,7 +481,7 @@ RSpec.describe PikuriWeb::Web::App do
     before { registry.list = [live, stored] }
 
     it 'renders a row per conversation, with its age' do
-      get_live
+      visit_live
       assert_includes last_response.body, 'the open one'
       assert_includes last_response.body, 'yesterday&#39;s'
       assert_includes last_response.body, 'just now'
@@ -491,13 +495,13 @@ RSpec.describe PikuriWeb::Web::App do
     end
 
     it 'links each row, because opening a conversation is a side-effect-free GET' do
-      get_live
+      visit_live
       assert_includes last_response.body, %(href="/c/#{stored.id}")
       refute_includes last_response.body, '/select'
     end
 
     it 'keeps delete a POST, in its own form beside the link' do
-      get_live
+      visit_live
       assert_includes last_response.body, %(<form method="post" action="/conversations/#{stored.id}/delete">)
       assert_equal 2, last_response.body.scan('class="conversation-delete"').size
     end
@@ -505,8 +509,8 @@ RSpec.describe PikuriWeb::Web::App do
     # The affordance the whole feature needs: a turn running in a row you are
     # not looking at has to be visible, or you would never know.
     it 'marks a busy row busy, and refuses delete on that row alone' do
-      registry.open(stored).busy = true
-      get_live
+      registry.runner_for(stored).busy = true
+      visit_live
 
       # Twice on that row: the dot, and the delete button explaining its refusal.
       assert_includes last_response.body, 'class="conversation-busy"'
@@ -517,7 +521,7 @@ RSpec.describe PikuriWeb::Web::App do
 
     it 'labels a conversation it cannot read instead of dating it' do
       registry.list = [ConversationRows.row('2026-08-25T08-00-00Z-aaaa', '2026-08-25 10:00', supported: false)]
-      get "/c/2026-08-25T08-00-00Z-aaaa"
+      get '/c/2026-08-25T08-00-00Z-aaaa'
       assert_includes last_response.body, 'class="conversation current unsupported"'
       assert_includes last_response.body, 'unsupported format'
     end
@@ -624,12 +628,12 @@ RSpec.describe PikuriWeb::Web::App do
     # rather than rejecting it.
     it 'accepts a message for a conversation while another one is working' do
       registry.list = [live, stored]
-      registry.open(live).busy = true
+      registry.runner_for(live).busy = true
 
       post '/messages', prompt: 'meanwhile', conversation: stored.id
 
       assert_equal 204, last_response.status
-      assert_equal ['meanwhile'], registry.open(stored).submitted
+      assert_equal ['meanwhile'], registry.runner_for(stored).submitted
     end
 
     it 'accepts a message for a conversation already working, to inject' do

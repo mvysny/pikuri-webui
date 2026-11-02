@@ -65,8 +65,8 @@ describe PikuriWeb::Agents::Titler do
     # attacking, and the title reaches the sidebar as plain text in four places
     # where escaping stops markup but not a bidi override.
     it 'sanitizes the title rather than trusting escaping downstream' do
-      title = titler("Report‮fdp.txt").title_for('x')
-      refute_includes title, "‮"
+      title = titler('Report‮fdp.txt').title_for('x')
+      refute_includes title, '‮'
     end
 
     # One Titler serves every conversation for the life of the process, so a

@@ -109,7 +109,7 @@ RSpec.describe 'the client/server contract' do
   # single-connection config, which drops /model from the palette but leaves
   # the map app.js hands the composer exactly as it is.
   it 'arms every catalogued command in the composer it configures, and none besides' do
-    arms = client_js.scan(/^\s*'(\/[\w-]+)':/).flatten
+    arms = client_js.scan(%r{^\s*'(/[\w-]+)':}).flatten
     assert_equal PikuriWeb::Web::SlashCommand::CATALOG.map(&:name).sort, arms.sort
   end
 end

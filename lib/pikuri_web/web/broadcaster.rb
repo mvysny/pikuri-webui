@@ -145,10 +145,10 @@ module PikuriWeb
       # @param conversation [String, nil] +nil+ selects every subscriber
       # @yieldparam queue [Thread::Queue] one selected subscriber's queue
       # @return [void]
-      def each_queue(conversation)
+      def each_queue(conversation, &block)
         @mutex
           .synchronize { @subscribers.select { |s| conversation.nil? || s.conversation == conversation }.map(&:queue) }
-          .each { |queue| yield queue }
+          .each(&block)
         nil
       end
     end

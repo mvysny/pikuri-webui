@@ -90,7 +90,7 @@ RSpec.describe PikuriWeb::Agents::ModelCatalog do
     end
 
     it 'keeps the shadowed entry pickable and listed' do
-      assert_equal %w[Local\ Qwen\ 3.6 qwen-titler], shadowing.rows.map { |r| r[:name] }
+      assert_equal(['Local Qwen 3.6', 'qwen-titler'], shadowing.rows.map { |r| r[:name] })
       refute_empty shadowing.find('qwen-titler').transport.params
     end
   end

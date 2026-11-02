@@ -277,7 +277,6 @@ module PikuriWeb
       def release_thinking
         @thinking = nil
       end
-
     end
   end
 end

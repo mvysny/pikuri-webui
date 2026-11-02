@@ -2749,7 +2749,7 @@ module PikuriWeb
       # 
       #   runner = registry.open_id(params['conversation'])
       # 
-      # {#find} then {#open} as two caller-side calls would leave a window for
+      # {#find} then {#runner_for} as two caller-side calls would leave a window for
       # {#delete}: the folder goes, and the open that follows mints a live
       # runner for it anyway — back in the sidebar as an unsaved resident, and
       # written to disk again at its next turn end. {Agents::Runner#discard!}
@@ -2796,7 +2796,7 @@ module PikuriWeb
 
       # Resolve an id to a conversation — resident or saved.
       # 
-      # Callers pass this rather than an id into {#open} / {#delete}, so no
+      # Callers pass this rather than an id into {#runner_for} / {#delete}, so no
       # caller ever turns user input into a path.
       # 
       # _@param_ `id`
@@ -2827,7 +2827,7 @@ module PikuriWeb
       # one; nothing else may reach this.
       # 
       # _@param_ `conversation`
-      def open: (Store::Conversation conversation) -> Agents::Runner
+      def runner_for: (Store::Conversation conversation) -> Agents::Runner
     end
 
     # Turns a saved conversation back into the +Pikuri::Agent::Event+ stream that

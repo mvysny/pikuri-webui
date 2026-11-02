@@ -68,7 +68,7 @@ OPENERS = {
     ORDER BY o.total DESC;
     ```
   MSG
-  'kyoto' => "Plan a 6-day trip to Kyoto in April. I want temples and good food, " \
+  'kyoto' => 'Plan a 6-day trip to Kyoto in April. I want temples and good food, ' \
              "and I'd rather avoid the worst of the crowds."
 }.freeze
 
@@ -99,10 +99,12 @@ def run(titler, cases)
     title = titler.title_for(opener)
     seconds = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
     words = title.nil? ? 0 : title.split.size
-    puts format("  %-#{width}s  %5.1fs  %dw  %s", label, seconds, words, title.inspect)
+    puts format("  %<label>-#{width}s  %<seconds>5.1fs  %<words>dw  %<title>s",
+                label: label, seconds: seconds, words: words, title: title.inspect)
     seconds
   end
-  puts format('  %s  total %.1fs, mean %.1fs', ' ' * width, elapsed.sum, elapsed.sum / elapsed.size)
+  puts format('  %<pad>s  total %<total>.1fs, mean %<mean>.1fs',
+              pad: ' ' * width, total: elapsed.sum, mean: elapsed.sum / elapsed.size)
 end
 
 config = begin

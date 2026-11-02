@@ -104,22 +104,22 @@ RSpec.describe PikuriWeb::Web::ToolLine do
   # "safeexe.png" while really ending in ".exe" — the whole trick.
   context 'sanitizing' do
     it 'neutralizes a bidi override in an argument' do
-      html = call(name: 'fetch', arguments: { url: "safe‮gnp.exe" }).to_html
+      html = call(name: 'fetch', arguments: { url: 'safe‮gnp.exe' }).to_html
       assert_includes html, 'u{202e}'
-      refute_includes html, "‮"
+      refute_includes html, '‮'
     end
 
     # A tool composes its display strings out of the same model text, and
     # defangs nothing — it cannot know what chrome will show them.
     it 'neutralizes the display strings a tool composed, not just the raw dump' do
       html = described_class.for_call(name: 'fetch', arguments: {},
-                                      display_name: "Fe‮tch", argument: "safe‮gnp.exe").to_html
+                                      display_name: 'Fe‮tch', argument: 'safe‮gnp.exe').to_html
       assert_includes html, 'u{202e}'
-      refute_includes html, "‮"
+      refute_includes html, '‮'
     end
 
     it 'neutralizes a summary a tool composed out of the observation' do
-      refute_includes result('ok', summary: "Scraped‮ 4 kB").to_html, "‮"
+      refute_includes result('ok', summary: 'Scraped‮ 4 kB').to_html, '‮'
     end
 
     # The carve-out that does not port: pikuri-tui leaves the verbose argument
@@ -127,26 +127,26 @@ RSpec.describe PikuriWeb::Web::ToolLine do
     # and passes zero-width characters straight through. So both forms
     # sanitize here, the argument dump included.
     it 'neutralizes a zero-width character inspect would have passed through' do
-      html = call(name: 'fetch', arguments: { url: "in​visible" }).to_html
+      html = call(name: 'fetch', arguments: { url: 'in​visible' }).to_html
       assert_includes html, 'u{200b}'
-      refute_includes html, "​"
+      refute_includes html, '​'
     end
 
     it 'neutralizes the tool name as well as its arguments' do
-      refute_includes call(name: "ca‭lc", arguments: {}).to_html, "‭"
+      refute_includes call(name: 'ca‭lc', arguments: {}).to_html, '‭'
     end
 
     it 'neutralizes an observation' do
-      html = result("Deleted‮ txet").to_html
+      html = result('Deleted‮ txet').to_html
       assert_includes html, 'u{202e}'
-      refute_includes html, "‮"
+      refute_includes html, '‮'
     end
 
     # Sanitize, then cap, in that order: a cut landing inside `\u{202e}` would
     # leave a fragment that means nothing.
     it 'caps after sanitizing, so a cut cannot land inside an escape' do
       line = call(display_name: 'Fetch', argument: "#{'x' * 55}‮yyy")
-      refute_includes line.short, "‮"
+      refute_includes line.short, '‮'
     end
   end
 

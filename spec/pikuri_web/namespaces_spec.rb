@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require 'set'
-
 # Guards the one-way rule of D_namespaces: the service namespaces may not name
 # anything under Web. Parses rather than greps, so a class named in a doc
 # comment — Agents::Runner documents its injected collaborators by type — is

@@ -204,10 +204,10 @@ RSpec.describe PikuriWeb::Web::SseListener do
     # The sanitizing lives in ToolLine and is specced there; this asserts only
     # that the listener goes through it rather than escaping on its own.
     it 'reaches the transcript sanitized, not merely escaped' do
-      listener.on_event(tool_result("Deleted‮ txet"))
+      listener.on_event(tool_result('Deleted‮ txet'))
       html = transcript.to_a.fetch(0).html
       assert_includes html, 'u{202e}'
-      refute_includes html, "‮"
+      refute_includes html, '‮'
     end
   end
 

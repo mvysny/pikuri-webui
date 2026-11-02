@@ -453,7 +453,7 @@ describe PikuriWeb::Config do
   describe 'layering (XDG_CONFIG_DIRS < XDG_CONFIG_HOME)' do
     it 'deep-merges tables so a higher layer adding mcp keeps the lower layer sandbox' do
       with_dirs do |home, sys|
-        write_config(sys, "[code]\nsandbox = false\n")        # lower priority
+        write_config(sys, "[code]\nsandbox = false\n") # lower priority
         write_config(home, "[[code.mcp]]\nid = \"x\"\nurl = \"u\"\n") # higher priority
         c = described_class.load(env: env_for(home, dirs: sys))
         refute c.sandbox            # survives from the system file
@@ -779,7 +779,7 @@ describe PikuriWeb::Config do
     end
 
     it 'wraps malformed TOML in Config::Error' do
-      e = expect_error("this is = = not toml")
+      e = expect_error('this is = = not toml')
       assert_includes e.message, 'failed to read'
     end
   end

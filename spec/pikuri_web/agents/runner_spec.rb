@@ -203,7 +203,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
     # unreachable transport into a restart spin.
     it 'restarts nothing after a turn that raised' do
       interloper.inject_user_message('late')
-      def agent.run_loop(user_message:, transport: nil) = raise('transport exploded')
+      def agent.run_loop(**) = raise('transport exploded')
 
       capture_log do
         runner.submit('first')
@@ -225,7 +225,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
       interloper.drain! # what Agent does at the next tool-batch boundary
 
       frames = drain_frames(queue)
-      assert_equal %w[status], frames.map { |f| f[/event: (\w+)/, 1] }
+      assert_equal(%w[status], frames.map { |f| f[/event: (\w+)/, 1] })
       assert_includes frames.fetch(0), '"pending":0'
 
       agent.release
@@ -437,7 +437,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
       meter(cap: 32_768) # as the loop thread would, one round-trip in
 
       frames = drain_frames(queue)
-      assert_equal %w[status], frames.map { |f| f[/event: (\w+)/, 1] }
+      assert_equal(%w[status], frames.map { |f| f[/event: (\w+)/, 1] })
       assert_includes frames.fetch(0), 'ctx 8.2k/32k (26%)'
       assert_includes frames.fetch(0), '"state":"running"', 'measured mid-turn, not at the end'
     end
@@ -719,7 +719,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
 
   context 'worker errors' do
     it 'logs run_loop failures and returns to idle' do
-      def agent.run_loop(user_message:, transport: nil) = raise 'transport exploded'
+      def agent.run_loop(**) = raise 'transport exploded'
       log = StringIO.new
       PikuriWeb.logger = Logger.new(log)
       begin

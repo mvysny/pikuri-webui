@@ -118,8 +118,8 @@ RSpec.describe 'conversations end to end' do
 
       first.submit('What is 2 + 2?')
 
-      refute_empty lock.run { first.transcript.to_a }
-      assert_empty lock.run { second.transcript.to_a }
+      refute_empty(lock.run { first.transcript.to_a })
+      assert_empty(lock.run { second.transcript.to_a })
       # Not silence: the sidebar signal is addressed to every tab on purpose,
       # because the first conversation's row now has a dot. What must never
       # arrive is a frame carrying the first conversation's content or status.
@@ -199,7 +199,7 @@ RSpec.describe 'conversations end to end' do
 
     it 'restores nothing, quietly, for a conversation never saved' do
       fresh = registry.create
-      assert_empty lock.run { fresh.transcript.to_a }
+      assert_empty(lock.run { fresh.transcript.to_a })
     end
   end
 

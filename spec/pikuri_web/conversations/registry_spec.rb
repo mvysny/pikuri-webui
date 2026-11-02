@@ -43,7 +43,7 @@ RSpec.describe PikuriWeb::Conversations::Registry do
   let(:lock) { PikuriWeb::BigAppLock.new }
   let(:registry) { guard(described_class.new(store: store, factory: factory, lock: lock), lock) }
 
-  # #open itself is private (a caller-held Conversation can be stale — see its
+  # #runner_for is private (a caller-held Conversation can be stale — see its
   # doc), so minting is exercised through the two public doors: #create for a
   # brand-new conversation, #open_id for one that is resident or saved.
   context 'minting' do
@@ -150,7 +150,7 @@ RSpec.describe PikuriWeb::Conversations::Registry do
       conversation = registry.create.conversation
       rows = registry.rows
 
-      assert_equal [conversation.id], rows.map { |r| r[:conversation].id }
+      assert_equal([conversation.id], rows.map { |r| r[:conversation].id })
       refute rows.fetch(0).fetch(:busy)
     end
 
@@ -231,7 +231,7 @@ RSpec.describe PikuriWeb::Conversations::Registry do
       conversation = registry.default
 
       refute_nil registry.resident(conversation.id)
-      assert_equal [conversation.id], registry.rows.map { |r| r[:conversation].id }
+      assert_equal([conversation.id], registry.rows.map { |r| r[:conversation].id })
     end
 
     it 'returns the newest existing one rather than minting' do

@@ -237,8 +237,8 @@ file carries its own admission rule.
 pikuri comes from its Codeberg repo at the commit `Gemfile.lock` pins; no sibling checkout
 is needed. To edit both repos together, point Bundler's per-machine local override at one.
 
-- `bundle exec rake check` — the full check (the spec suite, the sord signatures, the doc
-  tripwires), the default task, the cross-repo standard entry point, and what
+- `bundle exec rake check` — the full check (the spec suite, the sord signatures, rubocop,
+  the doc tripwires), the default task, the cross-repo standard entry point, and what
   `.woodpecker.yml` runs.
 - `bundle exec rspec spec/pikuri_web/web/app_spec.rb` — one file; `-e 'name'` for one example.
 - `bundle exec rake sig` — regenerate `sig/pikuri_web.rbs` after a YARD change, and commit it;
