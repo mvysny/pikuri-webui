@@ -65,10 +65,9 @@ gem 'tomlrb', '~> 3.0'
 # Maps the parsed TOML onto PikuriWeb::Config's Data classes, checking every
 # value against the type its YARD tag gives. Typemap reads those types from
 # sig/pikuri_web.rbs through rbs's parser, so rbs is a runtime gem here (about
-# 0.2 s of `require` at boot). On typemap's git main until its first release,
-# the same pin pikuri-tui rides.
+# 0.2 s of `require` at boot).
 gem 'rbs', '~> 4.2'
-gem 'typemap', git: 'https://github.com/mvysny/typemap.git', branch: 'main'
+gem 'typemap', '~> 0.1'
 
 # Thread pool for agent turns. A turn blocks on the LLM for minutes, so it
 # runs as a job on an executor rather than on a Sinatra request thread —

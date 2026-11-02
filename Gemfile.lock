@@ -15,13 +15,6 @@ GIT
       pdf-reader (~> 2.15)
       pikuri-core (= 0.1.0)
 
-GIT
-  remote: https://github.com/mvysny/typemap.git
-  revision: ffe46853003f5ec91691999478eee3686f2ca92c
-  branch: main
-  specs:
-    typemap (0.1.0)
-
 GEM
   remote: https://rubygems.org/
   specs:
@@ -178,6 +171,7 @@ GEM
     tsort (0.2.0)
     ttfunk (1.8.0)
       bigdecimal (~> 3.1)
+    typemap (0.1.0)
     unicode-display_width (3.3.0)
       unicode-emoji (~> 4.3)
     unicode-emoji (4.3.0)
@@ -214,7 +208,7 @@ DEPENDENCIES
   sinatra (~> 4.1)
   sord (~> 7.1)
   tomlrb (~> 3.0)
-  typemap!
+  typemap (~> 0.1)
   yard (~> 0.9.45)
   zeitwerk (~> 2.7)
 
@@ -294,7 +288,7 @@ CHECKSUMS
   tomlrb (3.0.0) sha256=e7122820cbb9b940d1758eecb6d1d4ee97c582efa37f06e0100a97cb17a566f5
   tsort (0.2.0) sha256=9650a793f6859a43b6641671278f79cfead60ac714148aabe4e3f0060480089f
   ttfunk (1.8.0) sha256=a7cbc7e489cc46e979dde04d34b5b9e4f5c8f1ee5fc6b1a7be39b829919d20ca
-  typemap (0.1.0)
+  typemap (0.1.0) sha256=3a4ce25f6450a283f78a661b8e3c401bc5c8b980a64b832e6fe16f7e61d13231
   unicode-display_width (3.3.0) sha256=4b7aa66a4b11db50f6f7e98411215cd0dd10eaecb665d36eec5bcacb3fa0b613
   unicode-emoji (4.3.0) sha256=11c02fa73290378c066bb0562cd4c87d8e1b706fbbe0059ca12746a4244de8ce
   uri (1.1.2) sha256=89292e98eabbef6248b0a0ed5e7e398e152f83f17560023a6d94a7f492b169fb
