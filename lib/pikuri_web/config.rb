@@ -59,9 +59,9 @@ module PikuriWeb
   # the file from then on (+D_ui_cookie_over_config+).
   #
   # pikuri-tui owns what grows in this table, so it is the one table that is
-  # lenient: a key this shell does not read is logged and dropped before the
-  # mapping, and +tool_lines+ is checked to be a String, never against a list
-  # of forms (+D_schema_complete_config+).
+  # lenient: {UiTable} says +unknown :ignore+, so Typemap drops a key this
+  # shell does not read, silently, and +tool_lines+ is checked to be a String,
+  # never against a list of forms (+D_schema_complete_config+).
   #
   # == The +[titler]+ table, and +[[llm]]+ +params+
   #
@@ -471,8 +471,9 @@ module PikuriWeb
       def initialize(sandbox: DEFAULT_SANDBOX, confirm: DEFAULT_CONFIRM, mcp: []) = super
     end
 
-    # The +[ui]+ table, its unread keys already dropped (the class header has
-    # the why).
+    # The +[ui]+ table; a key it has no member for is dropped, never raised
+    # on, so one pikuri-tui adds cannot stop this shell from booting (the
+    # class header has the why).
     #
     # @!attribute [r] show_thinking
     #   @return [Boolean] see {Config#show_thinking}
@@ -480,6 +481,10 @@ module PikuriWeb
     #   @return [String] see {Config#tool_lines}; any String, its vocabulary
     #     being pikuri-tui's
     UiTable = Data.define(:show_thinking, :tool_lines) do
+      extend Typemap::Constrain
+
+      unknown :ignore
+
       # @param show_thinking [Boolean] see {#show_thinking}
       # @param tool_lines [String] see {#tool_lines}
       def initialize(show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES.to_s) = super
@@ -589,7 +594,7 @@ module PikuriWeb
         merged = deep_merge(merged, parsed)
       end
 
-      root = map(drop_unread_ui_keys(merged))
+      root = map(merged)
       raise Error, no_connection_message(any_loaded, env) if root.llm.empty?
 
       by_id = root.server.to_h { |s| [s.id, s] }
@@ -763,24 +768,6 @@ module PikuriWeb
       end
     end
 
-    # Log and drop the +[ui]+ keys {UiTable} has no member for, so a key
-    # pikuri-tui adds never stops this shell from booting (the class header
-    # has the why). A +ui+ that is not a table is left for the mapping to
-    # reject.
-    #
-    # @param merged [Hash{String => Object}] the merged raw TOML
-    # @return [Hash{String => Object}] +merged+, or a copy with +ui+ trimmed
-    def self.drop_unread_ui_keys(merged)
-      ui = merged['ui']
-      return merged unless ui.is_a?(Hash)
-
-      unread = ui.keys - UiTable.members.map(&:to_s)
-      return merged if unread.empty?
-
-      PikuriWeb.logger.info("config: ignoring [ui] key(s) this shell does not read: #{unread.join(', ')}")
-      merged.merge('ui' => ui.except(*unread))
-    end
-
     # @param merged [Hash{String => Object}] the merged TOML
     # @return [Root]
     # @raise [Error] on any schema violation, its message starting with the
@@ -875,7 +862,7 @@ module PikuriWeb
     end
 
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
-                         :drop_unread_ui_keys, :map, :resolve_llm, :resolve_server, :server_is_now_an_id,
+                         :map, :resolve_llm, :resolve_server, :server_is_now_an_id,
                          :resolve_titler, :no_connection_message
   end
 end

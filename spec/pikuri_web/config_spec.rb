@@ -533,7 +533,7 @@ describe PikuriWeb::Config do
     # Permissive on purpose: pikuri-tui owns what grows in [ui] and its own
     # rdoc already names `markdown` as the next key. Raising here would be the
     # same boot failure with a later date.
-    it 'logs and ignores a [ui] key this shell does not read' do
+    it 'ignores a [ui] key this shell does not read' do
       with_dirs do |home, _|
         write_config(home, "[ui]\nshow_thinking = false\nmarkdown = false\n")
         c = described_class.load(env: env_for(home))

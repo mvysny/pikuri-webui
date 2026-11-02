@@ -1643,9 +1643,9 @@ module PikuriWeb
   # the file from then on (+D_ui_cookie_over_config+).
   # 
   # pikuri-tui owns what grows in this table, so it is the one table that is
-  # lenient: a key this shell does not read is logged and dropped before the
-  # mapping, and +tool_lines+ is checked to be a String, never against a list
-  # of forms (+D_schema_complete_config+).
+  # lenient: {UiTable} says +unknown :ignore+, so Typemap drops a key this
+  # shell does not read, silently, and +tool_lines+ is checked to be a String,
+  # never against a list of forms (+D_schema_complete_config+).
   # 
   # == The +[titler]+ table, and +[[llm]]+ +params+
   # 
@@ -1845,16 +1845,6 @@ module PikuriWeb
     # 
     # _@return_ — a new hash; neither input is changed
     def self.deep_merge: (::Hash[String, Object] lower, ::Hash[String, Object] higher) -> ::Hash[String, Object]
-
-    # Log and drop the +[ui]+ keys {UiTable} has no member for, so a key
-    # pikuri-tui adds never stops this shell from booting (the class header
-    # has the why). A +ui+ that is not a table is left for the mapping to
-    # reject.
-    # 
-    # _@param_ `merged` — the merged raw TOML
-    # 
-    # _@return_ — +merged+, or a copy with +ui+ trimmed
-    def self.drop_unread_ui_keys: (::Hash[String, Object] merged) -> ::Hash[String, Object]
 
     # _@param_ `merged` — the merged TOML
     def self.map: (::Hash[String, Object] merged) -> Root
@@ -2418,8 +2408,9 @@ module PikuriWeb
       attr_reader mcp: ::Array[McpTable]
     end
 
-    # The +[ui]+ table, its unread keys already dropped (the class header has
-    # the why).
+    # The +[ui]+ table; a key it has no member for is dropped, never raised
+    # on, so one pikuri-tui adds cannot stop this shell from booting (the
+    # class header has the why).
     # 
     # @!attribute [r] show_thinking
     #   @return [Boolean] see {Config#show_thinking}
@@ -2427,6 +2418,8 @@ module PikuriWeb
     #   @return [String] see {Config#tool_lines}; any String, its vocabulary
     #     being pikuri-tui's
     class UiTable < Data
+      extend Typemap::Constrain
+
       # _@param_ `show_thinking` — see {#show_thinking}
       # 
       # _@param_ `tool_lines` — see {#tool_lines}
