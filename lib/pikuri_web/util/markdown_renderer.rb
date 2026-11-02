@@ -17,6 +17,8 @@ module PikuriWeb
       # kramdown options for LLM output: GFM input (backtick fences, pipe
       # tables — LLMs don't emit kramdown's native syntax), no hard wraps
       # (LLM paragraphs are reflowable prose).
+      #
+      # @return [Hash{Symbol => Object}]
       KRAMDOWN_OPTIONS = { input: 'GFM', hard_wrap: false }.freeze
 
       module_function

@@ -85,7 +85,7 @@ module PikuriWeb
       # the agent's worker thread; see the class docs for why no marshaling
       # is needed.
       #
-      # @param event [Pikuri::Agent::Event::Base]
+      # @param event [Data]
       # @return [void]
       def on_event(event)
         case event

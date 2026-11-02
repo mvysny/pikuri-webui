@@ -196,6 +196,8 @@ module PikuriWeb
     #     Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it,
     #     which is also how "the operator steered this connection" is read.
     Llm = Data.define(:name, :server, :model, :api_key, :context_window, :params) do
+      # @param params [Hash{String => Object}] see {#params}; frozen here
+      # @param rest [Hash{Symbol => Object}] the other members, by name
       def initialize(params: {}, **rest)
         super(params: params.freeze, **rest)
       end
@@ -226,6 +228,11 @@ module PikuriWeb
     #     stdio server's subprocess (merged over the inherited
     #     environment), frozen. Always empty for an HTTP server.
     McpServer = Data.define(:id, :command, :url, :headers, :env) do
+      # @param id [String] see {#id}
+      # @param command [Array<String>, nil] see {#command}
+      # @param url [String, nil] see {#url}
+      # @param headers [Hash{String => String}] see {#headers}; frozen here
+      # @param env [Hash{String => String}] see {#env}; frozen here
       def initialize(id:, command: nil, url: nil, headers: {}, env: {})
         super(id: id, command: command, url: url, headers: headers.freeze, env: env.freeze)
       end
@@ -254,6 +261,9 @@ module PikuriWeb
     #     preferring Brave. Only the shape is checked here — an unknown name
     #     or an engine named without its key is pikuri's refusal.
     Search = Data.define(:brave_key, :exa_key, :engines) do
+      # @param brave_key [String, nil] see {#brave_key}
+      # @param exa_key [String, nil] see {#exa_key}
+      # @param engines [Array<String>, nil] see {#engines}; frozen here
       def initialize(brave_key: nil, exa_key: nil, engines: nil)
         super(brave_key: brave_key, exa_key: exa_key, engines: engines&.freeze)
       end
@@ -297,7 +307,10 @@ module PikuriWeb
 
     # Config file basename and the per-app subdirectory under each XDG
     # config root. Shared verbatim with pikuri-tui — same file.
+    #
+    # @return [String]
     FILENAME   = 'config.toml'
+    # @return [String]
     XDG_SUBDIR = 'pikuri'
 
     # Load and resolve the layered configuration.
@@ -434,6 +447,9 @@ module PikuriWeb
     # +/etc/xdg+) is +:+-separated with earlier entries ranking higher, so
     # we append them reversed; +$XDG_CONFIG_HOME+ (default +~/.config+)
     # outranks all of them. No project-local layer — see the class header.
+    #
+    # @param env [#[]] environment, for the +XDG_CONFIG_*+ variables
+    # @return [Array<String>] candidate file paths, lowest priority first
     def self.candidate_paths(env)
       paths = []
       dirs = env['XDG_CONFIG_DIRS'].to_s.empty? ? '/etc/xdg' : env['XDG_CONFIG_DIRS']
@@ -448,6 +464,10 @@ module PikuriWeb
     # is group/other-accessible — a plaintext secret should be +chmod 600+.
     # Only files that actually contain a secret are checked, so a
     # world-readable but secret-free /etc/xdg config raises no noise.
+    #
+    # @param path [String] the file +parsed+ came from
+    # @param parsed [Hash{String => Object}] its raw TOML
+    # @return [void]
     def self.warn_loose_perms(path, parsed)
       return unless holds_secret?(parsed)
 
@@ -466,6 +486,7 @@ module PikuriWeb
     # and pre-merge, on raw TOML, so it sees the table the key is *written*
     # in rather than the {Llm} it is later resolved into.
     #
+    # @param parsed [Hash{String => Object}] one file's raw TOML
     # @return [Boolean] true when the parsed file carries any literal secret
     #   (a +[[server]]+ +api_key+, a +[web]+ +password+, a +[search]+
     #   +brave_key+/+exa_key+, or an +[[code.mcp]]+
@@ -489,6 +510,10 @@ module PikuriWeb
     # Parse one file, wrapping any failure (read error, TOML syntax) in
     # {Error} with the path attached — a library exception we surface at
     # boot rather than let escape as a bare backtrace.
+    #
+    # @param path [String] the file to read
+    # @return [Hash{String => Object}] its raw TOML
+    # @raise [Error] on a read failure or a TOML syntax error
     def self.parse_file(path)
       Tomlrb.parse(File.read(path))
     rescue StandardError => e
@@ -497,12 +522,19 @@ module PikuriWeb
 
     # Recursive merge: tables merge key-by-key; scalars and arrays take the
     # right-hand (higher-priority) value wholesale.
+    #
+    # @param lower [Hash{String => Object}] the lower-priority layer
+    # @param higher [Hash{String => Object}] the higher-priority layer
+    # @return [Hash{String => Object}] a new hash; neither input is changed
     def self.deep_merge(lower, higher)
       lower.merge(higher) do |_key, lo, hi|
         lo.is_a?(Hash) && hi.is_a?(Hash) ? deep_merge(lo, hi) : hi
       end
     end
 
+    # @param merged [Hash{String => Object}] the merged raw TOML
+    # @return [void]
+    # @raise [Error] on an unknown top-level key or a table of the wrong shape
     def self.validate_top!(merged)
       unknown = merged.keys - %w[server llm search code ui titler web]
       raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
@@ -618,6 +650,10 @@ module PikuriWeb
     # them need a key, is pikuri's to say. Re-deciding it here would copy
     # pikuri's engine list into this Pikuri-free class, to rot the next time
     # a provider lands.
+    #
+    # @param table [Hash{String => Object}, nil] the raw +[search]+ table
+    # @return [Search]
+    # @raise [Error] on an unknown key or a value of the wrong shape
     def self.build_search(table)
       table ||= {}
       unknown = table.keys - %w[brave_key exa_key engines]
@@ -633,6 +669,9 @@ module PikuriWeb
       Search.new(brave_key: table['brave_key'], exa_key: table['exa_key'], engines: engines)
     end
 
+    # @param code [Hash{String => Object}] the raw +[code]+ table
+    # @return [void]
+    # @raise [Error] on an unknown key or a value of the wrong shape
     def self.validate_code!(code)
       unknown = code.keys - %w[sandbox confirm mcp]
       raise Error, "code: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
@@ -644,6 +683,10 @@ module PikuriWeb
       raise Error, 'code.mcp must be an array of tables (use [[code.mcp]])'
     end
 
+    # @param hash [Object] one raw +[[server]]+ entry; anything but a table raises
+    # @param index [Integer] its position, for error messages
+    # @return [Server]
+    # @raise [Error] on a malformed entry
     def self.build_server(hash, index)
       raise Error, "server[#{index}] must be a table" unless hash.is_a?(Hash)
 
@@ -667,6 +710,12 @@ module PikuriWeb
       Server.new(id: id, url: url, api_key: key, max_concurrent_requests: max)
     end
 
+    # @param hash [Object] one raw +[[llm]]+ entry; anything but a table raises
+    # @param index [Integer] its position, for error messages
+    # @param by_id [Hash{String => Server}] every {Server} the merged file
+    #   defined
+    # @return [Llm]
+    # @raise [Error] on a malformed entry or an unresolvable +server+
     def self.build_llm(hash, index, by_id)
       raise Error, "llm[#{index}] must be a table" unless hash.is_a?(Hash)
 
@@ -738,6 +787,9 @@ module PikuriWeb
                    "known: #{by_id.keys.map(&:inspect).join(', ')}"
     end
 
+    # @param url [String] the URL an old file left in an +[[llm]]+'s +server+
+    # @param api_key [String, nil] that entry's stray +api_key+
+    # @return [String] the migration advice, with a paste-ready +[[server]]+
     def self.server_is_now_an_id(url, api_key)
       block = +"[[server]]\nid  = \"myserver\"\nurl = #{url.inspect}\n"
       block << "api_key = #{api_key.inspect}\n" if api_key
@@ -760,6 +812,11 @@ module PikuriWeb
         "Write #{candidate_paths(env).last}:\n\n#{EXAMPLE_CONFIG}"
     end
 
+    # @param hash [Object] one raw +[[code.mcp]]+ entry; anything but a table
+    #   raises
+    # @param index [Integer] its position, for error messages
+    # @return [McpServer]
+    # @raise [Error] on a malformed entry
     def self.build_mcp(hash, index)
       raise Error, "code.mcp[#{index}] must be a table" unless hash.is_a?(Hash)
 
@@ -888,13 +945,22 @@ module PikuriWeb
 
     # First non-nil value — precedence resolution that treats +false+ as a
     # real value (so a +sandbox = false+ in a file is not skipped).
+    #
+    # @param values [Array<Object>] candidates, highest priority first
+    # @return [Object] the first non-nil one, or +nil+ when all are
     def self.pick(*values) = values.find { |v| !v.nil? }
 
+    # @param values [Array<String>] the ids or names to check
+    # @param label [String] what they are, for the error message
+    # @return [void]
+    # @raise [Error] naming every duplicate
     def self.check_unique!(values, label)
       dups = values.tally.select { |_, n| n > 1 }.keys
       raise Error, "duplicate #{label}(s): #{dups.join(', ')}" unless dups.empty?
     end
 
+    # @param value [Object] a raw TOML value
+    # @return [Boolean] whether it is a string with a non-blank character
     def self.non_empty_string?(value) = value.is_a?(String) && !value.strip.empty?
 
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,

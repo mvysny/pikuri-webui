@@ -86,16 +86,23 @@ module PikuriWeb
     class Store
       # Basename of the envelope whose *format* is ours. The +history.json+
       # beside it is pikuri's: {#save} causes it, nothing here parses it.
+      #
+      # @return [String]
       META_FILE = 'meta.json'
 
       # +meta.json+'s format version. Bumped only for a change an old reader
       # could not survive; {#list} refuses that one conversation rather than
       # crash the whole listing.
+      #
+      # @return [Integer]
       SCHEMA = 1
 
       # The start stamp an id opens with, +strftime+ing and matching halves of
       # the same format.
+      #
+      # @return [String]
       ID_TIME = '%Y-%m-%dT%H-%M-%SZ'
+      # @return [Regexp]
       ID = /\A(\d{4})-(\d\d)-(\d\d)T(\d\d)-(\d\d)-(\d\d)Z-[0-9a-f]+\z/
 
       # One conversation's identity and where it lives; no history of its own —
@@ -125,6 +132,9 @@ module PikuriWeb
                                  :model_at_mint, :server_at_mint) do
         # Defaulted because "no saved connection" is a real and ordinary state —
         # every conversation is in it until its first turn lands.
+        #
+        # @param model_at_mint [String, nil] see {#model_at_mint}
+        # @param server_at_mint [String, nil] see {#server_at_mint}
         def initialize(model_at_mint: nil, server_at_mint: nil, **) = super
       end
 
@@ -415,6 +425,9 @@ module PikuriWeb
 
       # 0700 explicitly rather than through +mkdir_p+'s +mode:+, which a umask
       # can widen.
+      #
+      # @param dir [Pathname] the directory to create, parents included
+      # @return [void]
       def mkdir_private(dir)
         FileUtils.mkdir_p(dir.to_path)
         FileUtils.chmod(0o700, dir.to_path)
@@ -422,6 +435,10 @@ module PikuriWeb
 
       # Sibling temp file plus rename, so a reader never sees a half-written
       # +meta.json+.
+      #
+      # @param path [Pathname] the file to replace
+      # @param content [String] its new content
+      # @return [void]
       def atomic_write(path, content)
         tmp = path.dirname / ".#{path.basename}.tmp"
         tmp.write(content)

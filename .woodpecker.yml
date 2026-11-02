@@ -79,6 +79,10 @@ steps:
       - bundle install --jobs 4 --retry 3
       - bundle exec rake check
 
+      # `rake check` regenerated sig/ from the YARD tags; a diff means a commit
+      # changed a tag without running `rake sig`.
+      - git diff --exit-code sig/
+
   - name: save-cache
     image: ruby:3.3
     when: *cache_only

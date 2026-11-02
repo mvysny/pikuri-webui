@@ -15,7 +15,9 @@ module PikuriWeb
     # no script should see. Closing it is a *page render's* edit — the one place
     # that knows which browser it is for — never the transcript's.
     module Disclosure
+      # @return [String]
       OPEN = '<details open><summary>thinking</summary>'
+      # @return [String]
       CLOSED = '<details><summary>thinking</summary>'
       private_constant :OPEN, :CLOSED
 

@@ -1,0 +1,2954 @@
+# Boot file: configures Zeitwerk for everything under +lib/pikuri_web/+
+# and eager-loads it. After +require 'pikuri_web'+, every constant
+# declared in this tree is defined and resolvable. Eager-loading at
+# boot keeps the rule "filename matches CamelCase constant" honest
+# (any mismatch fails fast at startup, not at first reference inside
+# a request).
+module PikuriWeb
+  VERSION: String
+
+  # Project-internal logger. Writes to $stderr, next to pikuri's own
+  # diagnostic loggers — the browser shows the conversation only.
+  def self.logger: () -> Logger
+
+  # _@param_ `value` — where diagnostics go from now on
+  def self.logger=: (Logger value) -> Logger
+
+  # The web shell: the Sinatra app, the SSE fan-out, the server-authoritative
+  # transcript, and the renderers that turn agent events into blocks.
+  # 
+  # Membership is decided by *what a class produces*, not by what it imports —
+  # {SseListener} belongs here because its output is HTML, though it subclasses
+  # +Pikuri::Agent::Listener::Base+. Reaching down into pikuri, {Agents} or
+  # {Conversations} is the sanctioned shape.
+  # 
+  # == The one-way rule
+  # 
+  # This namespace may name anything under +PikuriWeb+; nothing under {Agents}
+  # or {Conversations} may name anything under here. Where the service side
+  # needs to reach the browser it takes a collaborator injected at
+  # bin/pikuri-web-chat and never names its class.
+  # 
+  # == Not a thread boundary
+  # 
+  # "Web" says what a class produces, not which thread calls it: {SseListener},
+  # {Transcript} and {Broadcaster} are all touched from the turn worker under
+  # {BigAppLock} (+D_global_monitor+). Reading this namespace as "request thread
+  # only" is how an +assert!+ guard gets dropped as redundant.
+  module Web
+    # The Sinatra app: nine routes around the {Conversations::Registry} /
+    # {Broadcaster} pair, which the host injects via class-level settings before
+    # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
+    # 
+    #   PikuriWeb::Web::App.set :big_app_lock, lock
+    #   PikuriWeb::Web::App.set :registry,    registry
+    #   PikuriWeb::Web::App.set :broadcaster, broadcaster
+    #   PikuriWeb::Web::App.set :models,      catalog.rows   # what /model lists
+    # 
+    # Every route body that touches server state is one {BigAppLock} task, so
+    # what a route reads or mutates together cannot tear — the page snapshot is
+    # one consistent picture, and resolve + act is one step. Template rendering
+    # and the SSE drain loop stay outside the domain.
+    # 
+    # Every route names the conversation it acts on, and none of them refuse
+    # because *another* conversation is working: each has its own agent, and the
+    # shared executor queues a turn rather than rejecting it. Delete is the one
+    # exception, and it refuses only for the conversation actually in flight.
+    # 
+    # Pikuri-free by design (the seam rule): routes speak only ids, kinds,
+    # HTML strings and status hashes. Everything Pikuri-shaped sits behind
+    # Agents::Runner / SseListener.
+    # 
+    # Threading: +GET /events+ parks the serving thread in a queue-drain
+    # loop for the lifetime of the EventSource connection — one server
+    # thread per connected browser tab. Fine for a single-user localhost
+    # tool; bin/pikuri-web-chat raises Puma's thread pool to make room.
+    class App < Sinatra::Base
+      THEMES: ::Array[String]
+      DEFAULT_THEME: String
+      THINKING: ::Array[String]
+      TOOL_LINES: ::Array[String]
+
+      # _@return_ — the {THINKING} state a browser with no cookie gets.
+      def default_thinking: () -> String
+
+      # The snapshot's blocks with every reasoning disclosure in the state this
+      # browser's first paint needs ({Disclosure.collapse}).
+      # 
+      # Not left to +transcript.js+: a module script runs after the first paint,
+      # so a fold done there is a visible one — and nothing in the suite can go
+      # red for it, there being no JS runtime here.
+      # 
+      # _@param_ `blocks` — the transcript as stored
+      # 
+      # _@param_ `thinking` — one of {THINKING}
+      def disclosed: (::Array[Transcript::Block] blocks, String thinking) -> ::Array[Transcript::Block]
+
+      # _@return_ — the {TOOL_LINES} form a browser with no cookie gets:
+      # the config file's, or `short` when the file named a form this shell
+      # has no renderer for.
+      def default_tool_lines: () -> String
+
+      # Resolve an id and open it, 404ing on anything not listed — which is what
+      # keeps user input from ever becoming a path.
+      # 
+      # One registry call, not a resolve followed by an open: a delete landing
+      # between the two would be answered by minting a runner for the folder it
+      # just removed (`D_delete_no_undo`).
+      # 
+      # _@param_ `id`
+      def open_conversation: (String? id) -> Agents::Runner
+
+      # Release the +TCP_CORK+ Puma puts on a response's socket, so each SSE
+      # frame leaves as it is written.
+      # 
+      # Puma corks when it starts writing a response and uncorks when the body
+      # ends — which an event stream never does. Corked, Linux holds a short
+      # write for up to 200 ms, so every frame reached the browser that late:
+      # a sent message, a status change, and the streamed deltas, batched to
+      # ~5 updates a second against the 15 fps pikuri coalesces to. Uncorking
+      # once is enough; Puma corks again only for the next response.
+      # 
+      # Mirrors Puma's own +uncork_socket+, so a TLS socket is reached through
+      # +to_io+, and a host or spec without Puma's socket is left alone.
+      # 
+      # _@param_ `socket` — +env['puma.socket']+
+      def uncork: (Object? socket) -> void
+
+      # What a just-connected tab needs to be level with the server: the whole
+      # transcript as one +snapshot+ frame, an ordered block list the browser
+      # lays over what its page already rendered, dropping whatever the list
+      # does not name. Sent even when empty — that drop is the only way a tab
+      # which rendered its page just before a wipe loses the blocks the server
+      # has forgotten.
+      # 
+      # Runs in the same task as {Broadcaster#subscribe}, so no server-side gap
+      # remains between the two. The duplicate tolerance survives regardless,
+      # because the page render and this connection are still two HTTP requests
+      # (`D_subscribe_then_snapshot`): blocks are addressed by id, and
+      # {Transcript#clear} keeps its id counter so no id is ever reused.
+      # 
+      # Never a +reset+ followed by a +block+ each. The browser paints between
+      # event dispatches, so emptying the pane and refilling it blinks a
+      # transcript this tab has already rendered correctly — and no spec here
+      # can go red for it, there being no JS runtime in the suite.
+      # 
+      # _@param_ `conversation` — id; one nobody has opened has no transcript and needs no catch-up
+      # 
+      # _@return_ — formatted SSE frames
+      def catch_up_frames: (String conversation) -> ::Array[String]
+
+      # The sidebar's model.
+      # 
+      # +current+ is the row this tab has open (per tab, from the URL); +busy+ is
+      # whether that conversation has a turn in flight (server-wide, and true of
+      # as many rows as +--turns+ allows). They are independent: a turn running in
+      # a row you are not looking at is the point of the feature.
+      # 
+      # _@param_ `viewing` — id of the conversation this tab has open
+      # 
+      # _@return_ — +{id:, title:, ago:, current:, busy:, supported:}+
+      def conversation_rows: (viewing: String) -> ::Array[::Hash[untyped, untyped]]
+    end
+
+    # Rack middleware holding the one configured password in front of the whole
+    # app — routes and +public/+ both, which a +before+ filter would not reach:
+    # 
+    #   PikuriWeb::Web::App.use PikuriWeb::Web::Gate, config.credentials
+    # 
+    # Two doors, and the second one mints the key to the first: a request
+    # carrying a valid +auth+ cookie goes straight through, and anything else
+    # meets +Rack::Auth::Basic+ — a bare 401 with +WWW-Authenticate+, which the
+    # browser answers with its own prompt. Getting through that way sets the
+    # cookie, so the prompt is a once-per-browser event rather than a
+    # once-per-launch one (+D_gate_cookie+).
+    # 
+    # Still a *gate*, not accounts: one pair for everyone, no server-side
+    # session, no logout, no lockout (+D_one_password_gate+). There is
+    # deliberately no disabled mode either — a config file with no +[web]+
+    # table never +use+s this at all.
+    # 
+    # == The cookie
+    # 
+    #   auth=1775000000.9f86d081…   # <expiry>.<HMAC_SHA256(password, "auth|user|expiry")>
+    # 
+    # Signed with the configured password as the key, so nothing is stored
+    # server-side and changing the password (or the user) invalidates every
+    # outstanding cookie at once. {#mint} and {#verify} are the pair; a cookie
+    # past the halfway mark of its {WINDOW} is replaced on the way out, so an
+    # app in regular use never meets the expiry. +GET /events+ needs no special
+    # case — the browser sends the cookie on every later request, the
+    # EventSource included.
+    # 
+    # Thread-safe.
+    class Gate
+      REALM: String
+      COOKIE: String
+      WINDOW: Integer
+      TICKET: Regexp
+
+      # _@param_ `app` — the Rack app to gate.
+      # 
+      # _@param_ `credentials` — the one accepted pair, typically a {Config::Credentials}.
+      def initialize: (untyped app, untyped credentials) -> void
+
+      # _@param_ `env` — the Rack environment.
+      # 
+      # _@return_ — the gated app's response, or a
+      # 401 (no or wrong credentials) / 400 (a header that is not Basic).
+      def call: (::Hash[untyped, untyped] env) -> [Integer, ::Hash[untyped, untyped], _Each[untyped]]
+
+      # The cookie value admitting a browser for the next {WINDOW} seconds.
+      # 
+      # _@param_ `now` — the current unix time.
+      # 
+      # _@return_ — +"<expiry>.<mac>"+.
+      def mint: (Integer now) -> String
+
+      # The expiry a cookie carries, once its signature and freshness check out.
+      # 
+      # _@param_ `value` — the raw cookie value.
+      # 
+      # _@param_ `now` — the current unix time.
+      # 
+      # _@return_ — the expiry, or +nil+ for anything malformed,
+      # expired or wrongly signed — all of which fall through to the prompt
+      # rather than failing the request.
+      def verify: (String? value, Integer now) -> Integer?
+
+      # _@param_ `user` — the user name the browser sent.
+      # 
+      # _@param_ `password` — the password the browser sent.
+      # 
+      # _@return_ — whether both match the configured pair.
+      def correct?: (String user, String password) -> bool
+
+      # _@param_ `env` — the Rack environment.
+      # 
+      # _@param_ `now` — the current unix time.
+      # 
+      # _@param_ `refresh` — whether to mint a fresh cookie on the way out.
+      # 
+      # _@return_ — the gated app's response.
+      def admitted: (::Hash[untyped, untyped] env, Integer now, refresh: bool) -> [Integer, ::Hash[untyped, untyped], _Each[untyped]]
+
+      # _@param_ `response` — the gated app's response.
+      # 
+      # _@param_ `env` — the Rack environment.
+      # 
+      # _@param_ `now` — the current unix time.
+      # 
+      # _@return_ — +response+ with a fresh cookie set.
+      def with_cookie: ([Integer, ::Hash[untyped, untyped], _Each[untyped]] response, ::Hash[untyped, untyped] env, Integer now) -> [Integer, ::Hash[untyped, untyped], _Each[untyped]]
+
+      # _@param_ `expiry` — the unix time a cookie stops being good.
+      # 
+      # _@return_ — the hex HMAC that signs it.
+      def mac: (Integer expiry) -> String
+    end
+
+    # One tool event as the two lines a transcript block carries — the short form
+    # and the raw one — plus the markup that lets CSS pick between them:
+    # 
+    #   line = ToolLine.for_call(name: 'web_search', arguments: { query: 'rails 8 credentials' },
+    #                            display_name: 'WebSearch', argument: 'rails 8 credentials')
+    #   line.short     # => 'WebSearch(rails 8 credentials)'
+    #   line.verbose   # => '→ web_search(query="rails 8 credentials")'
+    #   line.to_html   # => '<span class="tool-short">WebSearch(…)</span><span class="tool-verbose">…'
+    # 
+    #   ToolLine.for_result(content: page, summary: 'Scraped 4.2 kB').short  # => 'Scraped 4.2 kB'
+    #   ToolLine.for_result(content: 'Error: exit 1', summary: 'Error: exit 1').error # => true
+    # 
+    # A block carries both forms and +:root[data-tools]+ shows one, so a flip
+    # re-renders nothing and the server holds no display preference
+    # (+D_both_forms_in_the_block+).
+    # 
+    # The short form is the *tool's*: +display_name+, +argument+ and +summary+
+    # arrive on the event, composed upstream (+../pikuri+, its decisions
+    # register under tool summary lines).
+    # Defanging them and capping them to a width only a renderer knows are the two
+    # jobs left here. The verbose form is ours end to end, off the raw +name+ /
+    # +arguments+ / +content+ beside them.
+    # 
+    # == Implementation details
+    # 
+    # Every string here is model-composed or tool-returned, so *both* forms run
+    # through +Pikuri::Sanitizer+ before {Util::MarkdownRenderer.escape}: escaping
+    # stops markup, not a bidi override that reorders a filename. +inspect+ is
+    # no substitute — it escapes the +ESC+ that escaping already renders inert
+    # and passes bidi, zero-width and homoglyphs straight through, which is why
+    # pikuri-tui's "verbose arguments are safe on +inspect+ alone" carve-out
+    # does not port. A tool's own display strings are no exception — composed
+    # *from* model text, by a tool that cannot know what chrome will show them.
+    # Sanitize, then flatten, then cap, in that order, so a cut cannot land
+    # inside an escaped +\u{202e}+ token.
+    # 
+    # @!attribute [r] short
+    #   @return [String] the toned-down form: +Fetch(https://example.org)+.
+    # @!attribute [r] verbose
+    #   @return [String] the raw form: the argument dump, or the observation.
+    # @!attribute [r] error
+    #   @return [Boolean] whether {#short} reports a failure, which is a CSS
+    #     hook rather than control flow — nothing here gates on it.
+    class ToolLine
+      ARGUMENT_MAX_CHARS: Integer
+      RESULT_MAX_CHARS: Integer
+
+      # The two forms for a +ToolCall+.
+      # 
+      #   ToolLine.for_call(name: 'mcp__github__list_prs', arguments: { repo: 'a/b' },
+      #                     display_name: 'Github::ListPrs', argument: 'a/b')
+      #   # short: 'Github::ListPrs(a/b)'
+      #   ToolLine.for_call(name: 'enter_plan_mode', arguments: {},
+      #                     display_name: 'EnterPlanMode', argument: '')
+      #   # short: 'EnterPlanMode'          — no argument, so no parentheses
+      # 
+      # An empty +argument+ is a tool saying there is nothing worth showing, not
+      # a value we failed to find.
+      # 
+      # _@param_ `name` — the registered tool name, for the raw form.
+      # 
+      # _@param_ `arguments` — the tool-call arguments, for the raw form.
+      # 
+      # _@param_ `display_name` — the tool's name for itself.
+      # 
+      # _@param_ `argument` — the one argument it wants shown; +""+ renders the call bare.
+      def self.for_call: (
+                           name: String,
+                           arguments: ::Hash[untyped, untyped],
+                           display_name: String,
+                           argument: String
+                         ) -> ToolLine
+
+      # The two forms for a +ToolResult+.
+      # 
+      #   ToolLine.for_result(content: page, summary: 'Scraped 4.2 kB')
+      #   # short: 'Scraped 4.2 kB', verbose: '= Results for rails 8: the master key…'
+      #   ToolLine.for_result(content: '4', summary: '4')
+      #   # short: '4'          — the calculator's answer *is* its status line
+      # 
+      # Failure is read off +content+'s +Error:+ prefix — the same test
+      # +Pikuri::Tool::Result#error?+ applies, since +Tool#run+ returns a
+      # recoverable failure as an +"Error: …"+ observation while a genuine raise
+      # aborts the turn before any +ToolResult+. Not off +summary+: an error's
+      # summary carries the prefix too, but only by +Result.error+'s convention.
+      # 
+      # _@param_ `content` — the tool observation, for the raw form.
+      # 
+      # _@param_ `summary` — the tool's own one-line display form.
+      def self.for_result: (content: String, summary: String) -> ToolLine
+
+      # Both forms as one line of markup, escaped, with no whitespace between
+      # the spans — the block is +white-space: pre-wrap+, so a newline here is a
+      # blank line the moment a stylesheet shows both at once.
+      # 
+      # _@return_ — two +<span>+s, +tool-short+ and +tool-verbose+.
+      def to_html: () -> String
+
+      # _@param_ `name`
+      # 
+      # _@param_ `arguments`
+      # 
+      # _@return_ — the raw call line, +→ web_search(query="…")+.
+      def self.verbose_call: (String name, ::Hash[untyped, untyped] arguments) -> String
+
+      # Flatten and cap, with the *original* byte count as the suffix so a
+      # truncated line still says how much there was.
+      # 
+      # _@param_ `text`
+      def self.truncate: (String text) -> String
+
+      # _@param_ `text`
+      # 
+      # _@param_ `limit`
+      # 
+      # _@return_ — +text+ elided to +limit+ characters, ellipsis included.
+      def self.cap: (String text, Integer limit) -> String
+
+      # Make dangerous codepoints visible: a filename a browser *displays* as
+      # +safeexe.png+ comes out spelling the bidi override that reordered it,
+      # +.exe+ and all. See the class header for why both forms run through it.
+      # 
+      # Warnings are dropped: nothing in this shell gates a tool on them, and a
+      # chat transcript has no confirmation prompt to hang them off.
+      # 
+      # _@param_ `text` — model-composed or tool-returned text.
+      def self.neutralize: (String text) -> String
+
+      # _@param_ `text`
+      # 
+      # _@return_ — sanitized, then collapsed to one line.
+      def self.flatten: (String text) -> String
+
+      # _@return_ — the toned-down form: +Fetch(https://example.org)+.
+      attr_reader short: String
+
+      # _@return_ — the raw form: the argument dump, or the observation.
+      attr_reader verbose: String
+
+      # _@return_ — whether {#short} reports a failure, which is a CSS
+      # hook rather than control flow — nothing here gates on it.
+      attr_reader error: bool
+    end
+
+    # The +<details>+ a reasoning block is wrapped in: open as stored, closed
+    # for a browser that folds reasoning (+D_details_per_block+):
+    # 
+    #   html = Disclosure.wrap("<p>The user wants…</p>")
+    #   # => "<details open><summary>thinking</summary><p>The user wants…</p></details>"
+    #   Disclosure.collapse(html)
+    #   # => "<details><summary>thinking</summary><p>The user wants…</p></details>"
+    # 
+    # Stored open on purpose: the transcript is shared by every tab reading it
+    # and folding is per-browser, so the stored form is what a browser running
+    # no script should see. Closing it is a *page render's* edit — the one place
+    # that knows which browser it is for — never the transcript's.
+    module Disclosure
+      OPEN: String
+      CLOSED: String
+
+      # _@param_ `html` — the block's rendered reasoning
+      # 
+      # _@return_ — +html+ inside an open disclosure
+      def self.wrap: (String html) -> String
+
+      # _@param_ `html` — a block as {.wrap} produced it; any other string comes back unchanged, so a whole transcript can be mapped through this
+      # 
+      # _@return_ — the same block, its disclosure closed
+      def self.collapse: (String html) -> String
+    end
+
+    # Server-authoritative conversation transcript: an ordered list of rendered
+    # HTML blocks. The single source of truth for what the browser shows —
+    # +GET /+ renders a snapshot into the page, and the SSE stream carries only
+    # deltas against it. So page reload, a second tab, and EventSource
+    # auto-reconnect all converge on the same state with no client-side
+    # bookkeeping.
+    # 
+    # One block per logical unit, mirroring the TUI's region-per-block model:
+    # user turn, streamed thinking, streamed assistant answer, tool call,
+    # tool result, notice. A streaming update replaces a block, keeping its id
+    # and position ({#update}); the TUI's "wipe an unfinished preview" path
+    # becomes {#remove}.
+    # 
+    # Pikuri-free by design (see the seam rule in AGENTS.md): this class
+    # speaks only ids, kinds and HTML strings. Guarded by {BigAppLock}: every
+    # call must run inside a task — {#to_a}'s snapshot is what a task hands out.
+    class Transcript
+      # _@param_ `lock` — the domain every call must be inside
+      def initialize: (lock: BigAppLock) -> void
+
+      # Append a new block and assign it the next sequential id.
+      # 
+      # _@param_ `kind` — block kind (CSS hook)
+      # 
+      # _@param_ `html` — rendered HTML content
+      # 
+      # _@return_ — the stored block (read its +id+ for later
+      # {#update} / {#remove} calls)
+      def add: (kind: Symbol, html: String) -> Block
+
+      # Replace an existing block's content, keeping its id and position (the
+      # streaming-delta path). Unknown ids are ignored — the block may have been
+      # wiped by a concurrent event; the stale update is harmless either way.
+      # 
+      # _@param_ `id`
+      # 
+      # _@param_ `html`
+      def update: (String id, String html) -> void
+
+      # Drop a block (the wipe-an-unfinished-preview path). Unknown ids are
+      # ignored.
+      # 
+      # _@param_ `id`
+      def remove: (String id) -> void
+
+      # Drop every block.
+      # 
+      # The id counter is deliberately *not* reset: a browser tab that has not
+      # yet applied the clear would otherwise see a fresh +b1+ and upsert it into
+      # the block it still has on screen.
+      def clear: () -> void
+
+      # _@return_ — snapshot, in order — a consistent one: the list is
+      # copied and the blocks in it are immutable, so the caller's task can end
+      # and the snapshot stays good while a turn streams in behind it
+      def to_a: () -> ::Array[Block]
+
+      # One rendered block. +kind+ is the CSS hook (+:user+, +:assistant+,
+      # +:thinking+, +:tool_call+, +:tool_result+, +:notice+, +:error+);
+      # +html+ is trusted pre-rendered markup (escaped or kramdown output —
+      # escaping happened upstream in SseListener / Util::MarkdownRenderer).
+      # 
+      # +Data+, so a block handed out by {#to_a} cannot be rewritten under the
+      # reader that holds it: {#update} replaces the element instead of mutating
+      # it. A mutable Struct made the snapshot a copy of the *list* only, which
+      # left a request thread rendering the page able to read a block mid-delta.
+      class Block < Data
+        # Returns the value of attribute id
+        attr_reader id: Object
+
+        # Returns the value of attribute kind
+        attr_reader kind: Object
+
+        # Returns the value of attribute html
+        attr_reader html: Object
+      end
+    end
+
+    # Fan-out of SSE frames to every connected EventSource client, addressed by
+    # conversation. Each +GET /events+ connection subscribes to the one
+    # conversation its tab is showing and blocks popping frames off its queue:
+    # 
+    #   queue = broadcaster.subscribe('2026-08-28T10-01-34Z-3dff')
+    #   broadcaster.broadcast(event: :block, data: {…}, conversation: '…-3dff')  # this queue
+    #   broadcaster.broadcast(event: :conversations, data: {})                   # every queue
+    # 
+    # A +conversation:+ of +nil+ means the frame is about the server rather than
+    # about one conversation — the sidebar's listing changed — and goes to
+    # everyone. So does the heartbeat, and so does {#close}'s sentinel.
+    # 
+    # Addressing is what lets a turn run in one conversation while another tab
+    # reads a different one: the reader is not subscribed to the running
+    # conversation, so its deltas never reach that tab at all. Pikuri-free by
+    # design.
+    # 
+    # Frames are formatted here (one place knows the wire format); the SSE
+    # route just pops ready-to-write strings. A +nil+ in a queue is the
+    # shutdown sentinel — {#close} pushes it so drain loops can exit
+    # cleanly on server stop.
+    # 
+    # Thread-safe.
+    class Broadcaster
+      def initialize: () -> void
+
+      # Register a new client against the conversation its tab is showing. The
+      # caller owns the returned queue's drain loop and must {#unsubscribe} it
+      # when the connection closes.
+      # 
+      # _@param_ `conversation` — conversation id; +nil+ receives only the server-wide frames
+      # 
+      # _@return_ — frames (Strings) to write to the client;
+      # +nil+ means "stop draining". After {#close} the queue holds
+      # nothing but that sentinel, so a connection that slips in during
+      # shutdown drains immediately instead of parking forever.
+      def subscribe: (String? conversation) -> Thread::Queue
+
+      # _@param_ `queue` — a queue previously returned by {#subscribe}; unknown queues are ignored
+      def unsubscribe: (Thread::Queue queue) -> void
+
+      # Format one SSE frame and push it to the subscribers it is addressed to.
+      # 
+      # Never blocks — the queues are unbounded — so it is safe to call while
+      # holding a lock; the parked drain loops do the actual network writes.
+      # 
+      # _@param_ `event` — SSE event type (the browser-side +addEventListener+ name): +block+, +remove+, +reset+, +status+, +conversations+. The protocol's other frame, +snapshot+, is a catch-up for one connection and goes out through {#frame} instead
+      # 
+      # _@param_ `data` — JSON-serialized into the frame's +data:+ line
+      # 
+      # _@param_ `conversation` — the conversation this frame is about; +nil+ addresses every subscriber
+      def broadcast: (event: (String | Symbol), data: ::Hash[untyped, untyped], ?conversation: String?) -> void
+
+      # One formatted frame, for a subscriber writing catch-up directly onto its
+      # own connection instead of receiving it through a queue. Same wire format
+      # as {#broadcast}, which is the point of it living here.
+      # 
+      #   out << broadcaster.frame(event: :snapshot, data: { blocks: [{ id: 'b1', … }] })
+      # 
+      # _@param_ `event` — SSE event type
+      # 
+      # _@param_ `data` — JSON-serialized into the frame's +data:+ line
+      def frame: (event: (String | Symbol), data: ::Hash[untyped, untyped]) -> String
+
+      # Push an SSE comment frame (ignored by EventSource) to every subscriber.
+      # Used as a heartbeat: a write attempt is the only way to discover a
+      # silently vanished client, whose drain loop would otherwise park a server
+      # thread forever.
+      # 
+      # _@param_ `text` — the comment's body, which no client reads
+      def broadcast_comment: (?String text) -> void
+
+      # Push the +nil+ shutdown sentinel to every subscriber, drop them all,
+      # and refuse further ones. Idempotent.
+      # 
+      # Every drain loop returns, which is what lets the server's graceful
+      # stop finish: it waits for in-flight requests, and a parked +/events+
+      # thread is one. Call it from the server's stop hook, not +at_exit+ —
+      # by then the wait has already happened.
+      def close: () -> void
+
+      # _@param_ `conversation` — count only this conversation's subscribers, or every one
+      # 
+      # _@return_ — current subscriber count (status-bar affordance, tests)
+      def size: (?String? conversation) -> Integer
+
+      # Snapshot under the mutex, push outside it — Queue#push never blocks
+      # (unbounded), but keeping the critical section minimal is free.
+      # 
+      # _@param_ `conversation` — +nil+ selects every subscriber
+      def each_queue: (String? conversation) ?{ (Thread::Queue queue) -> void } -> void
+
+      # One connected client: the queue its drain loop pops, and the conversation
+      # it is showing.
+      class Subscriber < Struct
+        # Returns the value of attribute queue
+        attr_accessor queue: Object
+
+        # Returns the value of attribute conversation
+        attr_accessor conversation: Object
+      end
+    end
+
+    # Browser-targeted equivalent of pikuri-tui's TuileListener: renders the
+    # normalized event stream into the {Transcript} (the server-side source
+    # of truth) and mirrors every mutation to connected browsers through the
+    # {Broadcaster} (SSE +block+ / +remove+ events). Part of the Pikuri seam
+    # — this class and Agents::Runner are the only lib/ files that know what a
+    # +Pikuri::Agent::Event+ is.
+    # 
+    # Each logical block — user turn, streamed reasoning, streamed assistant
+    # answer, tool call, tool result, injected reference, cancellation marker —
+    # lives in its own transcript block, mirroring the TUI's
+    # region-per-block model: the "wipe an unfinished preview" path is
+    # +Transcript#remove+ plus an SSE +remove+ event, and "preserve the
+    # streamed text on cancel" is "just drop the {StreamingMessage} handle."
+    # 
+    # Threading is where this diverges most from the TUI: there is no UI
+    # thread to marshal onto. Rendering (kramdown, escaping, the
+    # {StreamingMessage} accumulation) runs off-domain, on whichever thread
+    # delivers the event; each finished block then enters a {BigAppLock}
+    # task that stores it and broadcasts it as one unit, so a tab's snapshot
+    # and its SSE stream can never disagree about a block. The streaming
+    # handles (+@assistant+ / +@thinking+) stay off-domain and unguarded:
+    # this class is confined to one event producer at a time — the minting
+    # task during {Agents::Runner#restore!}'s replay, the turn worker
+    # thereafter, which never overlap because the registry publishes the
+    # runner only after the replay and a conversation admits one turn at a
+    # time. Per-browser event order comes from each connection's one FIFO
+    # queue.
+    # 
+    # Variant coverage mirrors TuileListener:
+    # 
+    # - +UserTurn+ renders as its own block (both the initial turn and
+    #   +mid_loop: true+ Interloper injections — the flag isn't
+    #   distinguished visually yet).
+    # - Streaming deltas go through a {StreamingMessage} per turn; the
+    #   +Assistant+ / +Thinking+ bookends finalize with the authoritative
+    #   content (deltas are preview-only). Reasoning gets the disclosure
+    #   {#disclose} wraps it in; the +thinking+ block kind is the CSS hook
+    #   that does the TUI's grayscale job.
+    # - +ToolCall+ / +ToolResult+ each render as one {ToolLine}, which carries
+    #   the short form and the raw one both and leaves CSS to pick
+    #   (+D_both_forms_in_the_block+). That class owns the sanitizing and the
+    #   escaping those lines need, so nothing here touches them.
+    # - +SystemInjected+ (reference text the host injected — a loaded skill,
+    #   recalled memory) collapses to a one-line +notice+; see
+    #   {#render_system_injection}.
+    # - +Reset+ empties the transcript and pushes one +reset+ SSE event, so
+    #   every open tab drops its blocks without a page reload (and without
+    #   losing a half-typed message). Loading a saved conversation rides the
+    #   same arm: +Agent#load_history!+ resets first, and {Conversations::HistoryReplay}
+    #   then refills the transcript through this listener — which is why
+    #   there is no second transcript to swap in.
+    # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
+    #   status bar reads +TokenLog#status_line+ via Agents::Runner).
+    # - +ModelSwitched+ stays silent too, and that is a decision rather than
+    #   an omission: the status bar carries the model, read off the agent's
+    #   own transport. A transcript block for it would need a second producer
+    #   on the replay path — +History::Message+ does record +model_id+ — and
+    #   two derivations of one block disagree eventually.
+    class SseListener < Pikuri::Agent::Listener::Base
+      # _@param_ `transcript` — this conversation's block store
+      # 
+      # _@param_ `broadcaster` — SSE fan-out to connected browsers
+      # 
+      # _@param_ `conversation` — id every frame is addressed to, so it reaches only the tabs showing this conversation. +nil+ broadcasts to everyone, which is what a throwaway listener rendering a snapshot wants — it has no subscribers at all
+      # 
+      # _@param_ `lock` — the domain each store-and-broadcast enters
+      def initialize: (
+                        transcript: Transcript,
+                        broadcaster: Broadcaster,
+                        lock: BigAppLock,
+                        ?conversation: String?
+                      ) -> void
+
+      # Dispatches one event into the transcript + SSE stream. Called from
+      # the agent's worker thread; see the class docs for why no marshaling
+      # is needed.
+      # 
+      # _@param_ `event`
+      def on_event: (Data event) -> void
+
+      # _@return_ — short label used by +Pikuri::Agent#to_s+ when this
+      # listener is in its +ListenerList+.
+      def to_s: () -> String
+
+      # Render an injected reference block as a one-line +notice+, collapsing
+      # the two skill-shaped payloads:
+      # 
+      #   ⊕ loaded skill: writing-rdoc   # was a whole SKILL.md body
+      #                                  # a promotion block renders nothing
+      # 
+      # Both are XML-wrapped and sized for the model; pasting either verbatim
+      # buries the transcript under a screenful nobody asked for. A promotion
+      # is dropped rather than summarized because the host that promoted it
+      # announces its own line.
+      # 
+      # _@param_ `content` — the unwrapped reference block
+      def render_system_injection: (String content) -> void
+
+      # Empty the transcript and tell every browser to do the same.
+      # 
+      # Streaming handles are dropped rather than flushed: the blocks they point
+      # at go with everything else a line later, so +flush_assistant+ would
+      # broadcast a +remove+ for an id every tab is about to forget anyway.
+      def reset_transcript: () -> void
+
+      # Append one finished block: store it and announce it.
+      # 
+      # _@param_ `kind` — block kind (CSS hook)
+      # 
+      # _@param_ `html` — rendered/escaped HTML
+      def add_block: (Symbol kind, String html) -> void
+
+      # Wrap a +:thinking+ block in its disclosure ({Disclosure.wrap}, the open
+      # form), and pass every other kind through untouched (`D_details_per_block`).
+      # 
+      # _@param_ `kind` — block kind
+      # 
+      # _@param_ `html` — the block's rendered HTML
+      # 
+      # _@return_ — +html+, wrapped when it is reasoning
+      def disclose: (Symbol kind, String html) -> String
+
+      # Open a streamed block: an empty transcript block claims the id and
+      # the document position; the returned {StreamingMessage} rewrites it
+      # on every delta.
+      # 
+      # _@param_ `kind` — +:assistant+ or +:thinking+
+      def open_stream: (Symbol kind) -> StreamingMessage
+
+      # Mirror a streamed re-render to the store and the browsers.
+      # 
+      # _@param_ `kind`
+      # 
+      # _@param_ `message`
+      # 
+      # _@param_ `html` — the render {StreamingMessage#append} / +#finalize+ just produced (returned rather than re-read so the no-op append path can't race)
+      def push_stream: (Symbol kind, StreamingMessage message, String html) -> void
+
+      # Close out the assistant streaming message.
+      # 
+      # +:wipe+ removes the streamed block entirely (a +ToolCall+ /
+      # +UserTurn+ / etc. arrived mid-stream and the preview is no longer
+      # what the user should see). +:preserve+ just drops the handle — the
+      # block keeps its rendered content (the cancel-preserve case).
+      # 
+      # _@param_ `mode`
+      def flush_assistant: (Symbol mode) -> void
+
+      # Drop the thinking handle. The block stays in the transcript with
+      # its rendered content — bookkeeping only, so the next ThinkingDelta
+      # in a later step opens a fresh block rather than extending this one.
+      def release_thinking: () -> void
+    end
+
+    # One row of the composer's slash-command palette: the name as typed, and the
+    # hint shown beside it while autocompleting.
+    # 
+    #   /new       start a fresh conversation
+    #   /model     put this conversation on another connection
+    #   /theme     switch between the dark and light theme
+    #   /trifecta  lethal-trifecta report for this agent
+    #   <name>     <description>
+    # 
+    #   SlashCommand.catalog(connections: config.llms.size)   # what a page offers
+    # 
+    # The palette runs in the browser, so this side carries only what the page
+    # displays — there is no callback. Adding a command is a three-place contract,
+    # the same shape as the block kinds: an entry in {CATALOG}, an arm in the
+    # +commands+ map public/js/app.js hands the composer, and a +<template>+ in
+    # views/index.erb for one that opens a dialog.
+    # 
+    # A command must never write to the transcript. Client-side that is
+    # conversation state the server does not hold (+D_server_authoritative_transcript+);
+    # server-side it is a block absent from +history.json+, which a reopen would
+    # silently drop (+D_replay_from_history+). Each command's own visible effect —
+    # a dialog, a navigation, a color change — is the feedback instead.
+    # 
+    # @!attribute [r] name
+    #   @return [String] the command as typed, leading slash included; matched
+    #     against the input buffer by prefix.
+    # @!attribute [r] description
+    #   @return [String] the autocomplete hint, the palette row's right column.
+    class SlashCommand
+      CATALOG: ::Array[SlashCommand]
+
+      # The catalog as this process will actually offer it.
+      # 
+      # +/model+ is dropped when there is nothing to pick between — as pikuri-tui
+      # gates its own picker — so the one-connection user, who is most users, is
+      # not offered a dialog that can only tell them what they already have.
+      # 
+      # _@param_ `connections` — configured +[[llm]]+ entries
+      def self.catalog: (connections: Integer) -> ::Array[SlashCommand]
+
+      # _@return_ — the command as typed, leading slash included; matched
+      # against the input buffer by prefix.
+      attr_reader name: String
+
+      # _@return_ — the autocomplete hint, the palette row's right column.
+      attr_reader description: String
+    end
+
+    # Renders a walked trifecta report as the body of the +/trifecta+ dialog: the
+    # verdict as a paragraph, the tool map beneath it as preformatted text.
+    # 
+    #   TrifectaView.render(agent.trifecta)
+    #   # => <p class="trifecta-advisory">Trifecta: pikuri-web-chat — 2 of 3 legs …</p>
+    #   #    <pre class="trifecta-tree">pikuri-web-chat [:untrusted_hard, :egress]
+    #   #      web_search [:untrusted_hard, :egress]
+    #   #      calculator []</pre>
+    # 
+    # Escaped plain text, never Markdown: the map is a fixed-width tree, and
+    # kramdown would reflow it into prose.
+    # 
+    # Server-side of the pikuri seam — {App} is handed the String and never the
+    # report (+D_pikuri_free_core+).
+    module TrifectaView
+      # _@param_ `report` — a walked report, from +Pikuri::Agent#trifecta+
+      # 
+      # _@return_ — an HTML fragment, safe to emit unescaped
+      def render: (Pikuri::Trifecta::Report report) -> String
+
+      # _@param_ `report` — a walked report, from +Pikuri::Agent#trifecta+
+      # 
+      # _@return_ — an HTML fragment, safe to emit unescaped
+      def self.render: (Pikuri::Trifecta::Report report) -> String
+    end
+
+    # Delta accumulator for one streamed message (assistant answer or
+    # thinking block): the web descendant of the TUI's
+    # StreamingMarkdownBuffer, keeping its lifecycle contract but none of
+    # its machinery.
+    # 
+    # What carries over from the TUI buffer:
+    # 
+    # - One instance per streamed turn; {#append} per delta, {#finalize}
+    #   exactly once with the authoritative bookend content. Deltas are
+    #   preview-only — pikuri makes no guarantee that +deltas.join ==
+    #   Assistant#content+ — so finalize replaces the accumulated source
+    #   and re-renders.
+    # - The fast path: {#finalize} with content equal to {#source} (the
+    #   cancel-preserve case) skips the re-render and returns the cached
+    #   HTML.
+    # - Dead after finalize: further calls raise.
+    # 
+    # What doesn't, and why: the block-cutter / committed-prefix machinery
+    # existed to bound per-token TTY::Markdown cost on a terminal that
+    # re-splices regions per hard line. Here each {#append} re-renders the
+    # whole accumulated source through kramdown (~1 ms at chat sizes) and
+    # the browser replaces one div's innerHTML — at the 15 fps the
+    # RateLimited listener delivers, that's negligible, and Markdown's
+    # retroactive reformatting (a closing fence, a widening table row)
+    # falls out for free. If pathological message sizes ever bite, the
+    # surface to optimize is {#append}'s render call — the API stays put.
+    # 
+    # Render failures inside +render+ are the renderer's concern
+    # (Util::MarkdownRenderer degrades to escaped text rather than raising);
+    # this class treats the callable as total.
+    # 
+    # Not thread-safe; driven only from the agent worker thread via
+    # SseListener.
+    class StreamingMessage
+      # _@param_ `id` — transcript block id (assigned by Transcript#add)
+      # 
+      # _@param_ `render` — Markdown +String+ → HTML +String+; typically +Util::MarkdownRenderer.method(:render)+
+      def initialize: (id: String, render: untyped) -> void
+
+      # Feed one streamed Markdown chunk and re-render.
+      # 
+      # _@param_ `content` — the delta payload; nil/empty is a no-op returning the current HTML
+      # 
+      # _@return_ — HTML of the full accumulated source
+      def append: (String? content) -> String
+
+      # Replace the accumulated source with the authoritative bookend
+      # content and render once more. Fast path: when +authoritative+
+      # equals {#source} the cached HTML is returned without re-rendering.
+      # 
+      # _@param_ `authoritative` — the final Markdown for this turn
+      # 
+      # _@return_ — final HTML
+      def finalize: (String authoritative) -> String
+
+      # _@return_ — +true+ after {#finalize} has run
+      def finalized?: () -> bool
+
+      # _@return_ — transcript block id this message renders into
+      attr_reader id: String
+
+      # _@return_ — the accumulated Markdown source. Exposed so the
+      # owner can call +finalize(source)+ on a cancellation path to
+      # commit the preview as-is.
+      attr_reader source: String
+    end
+  end
+
+  # Generic helpers — the Ruby side of what public/js/dom.js is to the scripts.
+  # 
+  # == The admission test
+  # 
+  # A class belongs here only if it knows nothing about this app: no block
+  # kinds, no conversation, no route, no +Pikuri::+ type. {MarkdownRenderer}
+  # (Markdown in, HTML out) and {RelativeTime} (a Time in, "2 hours ago" out)
+  # pass. {Web::ToolLine} and {Web::SlashCommand} look small enough to belong
+  # here but fail it — block-kind and palette knowledge — so they live in {Web}.
+  # 
+  # Small by design. Anything failing the test goes to the namespace that owns
+  # the knowledge, not here.
+  module Util
+    # Coarse "how long ago" for the conversation sidebar:
+    # 
+    #   RelativeTime.humanize(now - 30)      # => "just now"
+    #   RelativeTime.humanize(now - 5400)    # => "1 hour ago"
+    #   RelativeTime.humanize(now - 200_000) # => "2 days ago"
+    #   RelativeTime.humanize(now - 5e6)     # => "2026-06-30"
+    # 
+    # Coarse on purpose: this is rendered server-side into a page that may sit
+    # open for hours, so it goes stale between renders. Rounding to the unit
+    # keeps "3 hours ago" honest for the whole hour it is wrong by.
+    module RelativeTime
+      CUTOFF: Integer
+
+      # _@param_ `time`
+      # 
+      # _@param_ `now`
+      # 
+      # _@return_ — never empty; a future +time+ (clock skew) reads
+      # "just now" rather than a negative count
+      def self.humanize: (Time time, ?now: Time) -> String
+
+      # _@param_ `count` — truncated to whole units
+      # 
+      # _@param_ `unit`
+      def self.plural: (Numeric count, String unit) -> String
+    end
+
+    # Markdown → HTML, the web analogue of the TUI's MarkdownRenderer
+    # (Markdown → ANSI). Stateless module function; width is not a concern
+    # here — the browser is the layout engine.
+    # 
+    # Degrades to escaped raw text when kramdown raises: on a long-running
+    # chat we'd rather show ugly Markdown than lose an in-flight message.
+    # Same "library exceptions are logged, our bugs raise" rule as the TUI.
+    module MarkdownRenderer
+      KRAMDOWN_OPTIONS: ::Hash[Symbol, Object]
+
+      # _@param_ `markdown` — Markdown source (assistant or thinking content)
+      # 
+      # _@return_ — HTML, or the escaped source wrapped in +<pre>+ when
+      # kramdown raises (logged, not raised)
+      def render: (String markdown) -> String
+
+      # _@param_ `markdown` — Markdown source (assistant or thinking content)
+      # 
+      # _@return_ — HTML, or the escaped source wrapped in +<pre>+ when
+      # kramdown raises (logged, not raised)
+      def self.render: (String markdown) -> String
+
+      # HTML-escape helper for the plain-text block paths (user turns, tool
+      # lines, notices) that bypass Markdown entirely.
+      # 
+      # _@param_ `text`
+      # 
+      # _@return_ — HTML-escaped text
+      def escape: (String text) -> String
+
+      # HTML-escape helper for the plain-text block paths (user turns, tool
+      # lines, notices) that bypass Markdown entirely.
+      # 
+      # _@param_ `text`
+      # 
+      # _@return_ — HTML-escaped text
+      def self.escape: (String text) -> String
+    end
+  end
+
+  # Running an LLM turn: a conversation's agent and its lifecycle ({Runner}),
+  # the connections it can run on ({ModelCatalog}), and the throwaway agent
+  # that names a conversation ({Titler}).
+  # 
+  # Nothing here knows a conversation is a folder on disk — that is
+  # {Conversations} — and nothing here may name anything under {Web}; see that
+  # namespace's one-way rule.
+  # 
+  # Plural on purpose: a singular +Agent+ sitting beside +Pikuri::Agent+ would
+  # shadow it for every file in this tree.
+  module Agents
+    # One conversation's agent, transcript and turn lifecycle. A runner *is* a
+    # conversation — the one it was built for, for as long as it exists — so
+    # there is no switching here, and no "live" conversation to switch away
+    # from. {Conversations::Registry} holds one per conversation anyone has opened.
+    # 
+    #   runner.restore!               # replay what is on disk, once, at mint time
+    #   runner.submit('hello')        # => :started (queued on the executor) or :injected
+    #   runner.select_model('Remote') # => :selected — applied at the top of the next turn
+    #   runner.state                  # => :idle | :queued | :running
+    #   runner.cancel                 # dequeue if queued, stop at a tool boundary if running
+    #   runner.discard!               # the conversation was deleted; retire this runner
+    # 
+    # {#submit} is the single entry point for user text, and it never refuses
+    # while the conversation exists:
+    # 
+    # - Idle → post a job running +Pikuri::Agent#run_loop(user_message:)+ on the
+    #   shared executor. The listener stack renders everything the loop emits;
+    #   nothing here touches the transcript.
+    # - Busy → +Pikuri::Agent::Control::Interloper#inject_user_message+. The
+    #   agent drains the queue at turn start and once each tool batch completes,
+    #   emitting +UserTurn(mid_loop: true)+, so the injection renders through the
+    #   same listener path as a normal turn. An injection placed while the model
+    #   is mid-response still waits for that boundary, which is why the input
+    #   stays enabled while busy and the status bar carries the queued count.
+    # 
+    # A submit landing between the loop's last completion and the state reset
+    # injects into a turn that is over, and no drain is coming for it. The turn
+    # job answers that on its way out: a queue left non-empty by a turn that
+    # returned normally claims the next turn on the spot, a bare +run_loop+ whose
+    # entry drain is the delivery.
+    # 
+    # == Idle, queued, running
+    # 
+    # +:queued+ is the gap between +#submit+ posting the job and the job taking a
+    # thread — instant under an unbounded executor, real under a bounded one, so
+    # the state stays modelled either way.
+    # 
+    # It is *not* where a turn waits for the server. That wait is pikuri's
+    # per-server permit, taken inside +run_loop+ for the length of one HTTP
+    # request (+D_upstream_request_throttle+), and a turn parked on one reads
+    # +:running+ here — so "thinking" can mean "queued behind another
+    # conversation's completion", and nothing in this class can tell the
+    # difference.
+    # 
+    # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
+    # entry whether it was cancelled while waiting and returns without starting.
+    # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop — a
+    # turn parked on a permit included, because that wait polls it too.
+    # 
+    # == Which model, and when
+    # 
+    # {#select_model} parks a transport; +run_loop+ applies it at the top of the
+    # next turn and nothing else can — pikuri confines the switch there because
+    # the chat is single-thread-confined, and only this state machine knows
+    # nothing is in flight. So a pick while busy is naturally "next turn", the
+    # same wait the Interloper's queued count already makes legible.
+    # 
+    # Three questions, three answers, and they must not collapse into one:
+    # 
+    #   conversation.model_at_mint   # what disk said when this runner was minted
+    #   runner.model                 # intent — the pair the next turn will use
+    #   status_data[:model]          # reality — read off the agent's transport
+    # 
+    # Reality is free: +apply_transport!+ assigns the agent's transport only
+    # after the switch succeeds, so the status bar can never advertise a model
+    # the switch did not reach and nothing here subscribes to +ModelSwitched+.
+    # The pending slot is drained where it is handed to +run_loop+ rather than
+    # when the switch lands, which is what keeps that true of a failed switch
+    # too — at the cost of losing the pick when a turn dies before its top.
+    # 
+    # == Persistence
+    # 
+    # Saves happen at *turn end*, from the turn job's ensure, so a history is
+    # never exported mid-+complete+ and {#busy?} staying true until the save
+    # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
+    # loses that turn — accepted (single user, rare restarts) — and saving per
+    # *message* instead would not fix it: there is no event to hang that on,
+    # because +Event::ToolResult+ fires before ruby_llm appends the tool message
+    # and nothing fires when it lands.
+    # 
+    # == The title
+    # 
+    # A conversation is named from its opening message, wherever that message
+    # turns up: {#submit} posts a {Titler} job *beside* the turn — never inside
+    # it — for a fresh one, and {#restore!} posts the same job for a stored one
+    # that is still stamp-titled, so a conversation older than the feature is
+    # named the first time anyone opens it. Either way the answer lands through
+    # a task that rewrites the envelope and {#conversation} together.
+    # 
+    # No +[titler]+ configured, a model that answers nothing usable, or a raise
+    # anywhere in that job all leave the start stamp, and none of them can reach
+    # the turn.
+    # 
+    # Server-side of the pikuri seam, so it names pikuri types freely
+    # (`D_pikuri_free_core`).
+    # 
+    # == Threading
+    # 
+    # Guarded by {BigAppLock}: every public method must run inside a task. Who
+    # enters — route tasks ({Web::App}), the turn job's bookkeeping brackets
+    # (+run_turn+ opens its own tasks around +run_loop+, which itself runs
+    # off-domain), and pikuri's two callbacks — the Interloper's +on_change+ and
+    # TokenLog's +on_status_line+ — which open a task from whichever thread fired
+    # them, the loop thread included. Composing a status payload and
+    # publishing it happen inside one task, so a frame can never overtake a
+    # newer one.
+    # 
+    # One ordering rule must survive any edit: the domain is the *outermost*
+    # lock. A task may call into pikuri (+Interloper#pending?+,
+    # +Cancellable#cancel!+), and pikuri never holds its own lock when calling
+    # back — +on_change+ fires outside the Interloper's, and TokenLog holds no
+    # lock at all. Consistent order, so no ABBA deadlock.
+    class Runner
+      # _@param_ `conversation` — the one this runner is for, fixed for its lifetime
+      # 
+      # _@param_ `agent` — fully wired agent (listeners, tools, interloper:, cancellable: — built by the factory in bin/pikuri-web-chat)
+      # 
+      # _@param_ `interloper` — the same instance passed to the agent's +interloper:+ kwarg
+      # 
+      # _@param_ `cancellable` — the same instance passed to the agent's +cancellable:+ kwarg
+      # 
+      # _@param_ `broadcaster` — SSE fan-out for +status+ events
+      # 
+      # _@param_ `conversations` — where turns get saved
+      # 
+      # _@param_ `transcript` — this conversation's blocks, which +GET /c/:id+ renders as its snapshot
+      # 
+      # _@param_ `listener` — the transcript's renderer, fed directly by {#restore!}'s replay — the agent's own listener stack wraps it in a delta rate-limiter that a replay has nothing to say to
+      # 
+      # _@param_ `executor` — shared by every runner: the admission gate that keeps concurrent turns from outnumbering the inference server's slots (+--turns+). Its pool size is that cap and nothing else — this runner is single-writer over its own conversation at any size, because {#submit} injects rather than starting a second turn
+      # 
+      # _@param_ `token_log` — when present, its +status_line+ rides along in every status event and a freshly measured one pushes an event of its own — the constructor claims the log's +on_status_line+ slot
+      # 
+      # _@param_ `catalog` — the connections {#select_model} may pick from, and what turns the agent's transport into a display name
+      # 
+      # _@param_ `titler` — names this conversation from its opening message, on its own executor job; +nil+ — no +[titler]+ configured — leaves every conversation on its start stamp
+      # 
+      # _@param_ `missing_connection` — +"model @ server"+ when this conversation was minted on {ModelCatalog#primary} because the connection it had saved has left the config file. Reported until a save or a pick makes it untrue, after which it describes nothing
+      # 
+      # _@param_ `lock` — the domain every call must be inside
+      def initialize: (
+                        conversation: Conversations::Store::Conversation,
+                        agent: Pikuri::Agent,
+                        interloper: Pikuri::Agent::Control::Interloper,
+                        cancellable: Pikuri::Agent::Control::Cancellable,
+                        broadcaster: Web::Broadcaster,
+                        conversations: Conversations::Store,
+                        transcript: Web::Transcript,
+                        listener: Web::SseListener,
+                        executor: Concurrent::ExecutorService,
+                        catalog: ModelCatalog,
+                        lock: BigAppLock,
+                        ?token_log: Pikuri::Agent::Listener::TokenLog?,
+                        ?titler: Titler?,
+                        ?missing_connection: String?
+                      ) -> void
+
+      # Replay what is stored for this conversation into the agent and the
+      # transcript. Called once, when the registry mints this runner.
+      # 
+      # A conversation with nothing on disk (brand new, or never saved because it
+      # holds no messages) restores to empty, which is already correct.
+      # 
+      # Also where a conversation older than the titling feature gets a name: its
+      # opener is in the history already in hand, so the retro-title costs no
+      # second read and reaches exactly the conversations someone actually opens.
+      # 
+      # _@return_ — whether a stored history was found and loaded
+      def restore!: () -> bool
+
+      # Route one user message: start a turn or inject into the running one.
+      # 
+      # Never refuses for being busy: a turn submitted while the executor's slots
+      # are all taken is queued, not rejected — the wait is what {#state}
+      # reports. +:discarded+ is not a refusal either, but the answer that this
+      # conversation no longer exists ({#discard!}).
+      # 
+      # _@param_ `message` — non-blank user text (Web::App rejects blanks before calling; Interloper/run_loop double-check)
+      def submit: (String message) -> Symbol
+
+      # Put this conversation on another connection, from the top of its next
+      # turn.
+      # 
+      #   runner.select_model('Remote Qwen')   # => :selected
+      # 
+      # Never applied on the spot: see the class header. Picking the connection
+      # the agent is already on clears any pending selection rather than parking
+      # a switch that would no-op, so the status bar's arrow means "not yet",
+      # never "no change".
+      # 
+      # _@param_ `name` — a {ModelCatalog} connection name
+      # 
+      # _@return_ — +:unknown+ for a name this
+      # config does not have; +:discarded+ once the conversation is deleted
+      def select_model: (String name) -> Symbol
+
+      # The connection this conversation will talk to *next* — the pick if one
+      # is parked, what the agent is on otherwise.
+      # 
+      #   runner.model   # => ['qwen3.6', 'http://localhost:8080/v1']
+      # 
+      # Intent rather than reality on purpose: a pick made on a busy conversation
+      # and immediately followed by "new conversation" should hand the new one
+      # what the user asked for, not what the old one is still finishing on.
+      # 
+      # _@return_ — the +[model, server]+ pair, in the form
+      # {Conversations::Store} stores and {ModelCatalog#resolve} matches
+      def model: () -> [String, String]
+
+      # Retire this runner for good: it will start no turn, inject nothing, take
+      # no model and write no folder again. One-way, and refused while a turn is
+      # in flight — so a deleter asks for the folder and the turn in one move:
+      # 
+      #   return :busy if runner && !runner.discard!   # then remove the folder
+      # 
+      # Deliberately a *claim*, not a {#busy?} read followed by a caller-side
+      # flag: the busy check and the retirement are one method, so they share a
+      # task — either {#submit} claims the turn first and this refuses, or this
+      # wins and {#submit} answers +:discarded+. No interleaving lets both
+      # proceed — which is why {#persist} carries no check of its own.
+      # 
+      # Not +@abandon+, which drops one *queued turn* and is reset by the next
+      # {#submit}. This is about the conversation, and permanent.
+      # 
+      # _@return_ — false when a turn is queued or running, and the caller
+      # must refuse the delete; true once nothing will ever run here again
+      def discard!: () -> bool
+
+      # _@return_ — whether a delete has retired this runner
+      def discarded?: () -> bool
+
+      # Stop this conversation's turn: drop it before it starts if it is still
+      # waiting for the executor, or ask the agent to stop at the next tool
+      # boundary if it is already running. No-op when idle.
+      def cancel: () -> void
+
+      # _@return_ — +:queued+ means the job is posted but
+      # the executor's slots are all taken by other conversations
+      def state: () -> Symbol
+
+      # _@return_ — whether a turn is posted and not yet finished
+      def busy?: () -> bool
+
+      # Status payload shared by SSE +status+ events and the initial page render.
+      # 
+      #   { state: :running, busy: true, pending: 2,
+      #     tokens: 'ctx 7.4k/64k (12%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
+      #     model: 'Local Qwen 3.6', model_pending: 'Remote Qwen', model_missing: nil }
+      # 
+      # _@return_ — +pending+ is the count of queued mid-loop injections;
+      # +tokens+ and +tokens_detail+ are the two halves of the context-window
+      # readout, the status bar's headline and its muted tail (both '' when
+      # nothing is measured yet); +model+ is what the agent is on *now*;
+      # +model_pending+ and +model_missing+ are nil in the ordinary case (see
+      # {#select_model} and the +missing_connection:+ constructor argument)
+      def status_data: () -> ::Hash[untyped, untyped]
+
+      # The advisory tool-exposure map, handed out unrendered — callers render
+      # it. A +#trifecta_html+ convenience here would point {Agents} at {Web},
+      # the one direction that stays closed.
+      def trifecta: () -> Pikuri::Trifecta::Report
+
+      # The executor job's body: one turn, then the save. The bookkeeping
+      # brackets are tasks; +run_loop+ itself — the LLM round-trips, the tools —
+      # runs off-domain.
+      # 
+      # A StandardError out of +run_loop+ (transport hiccup, tool bug) is logged
+      # rather than re-raised — an executor swallows a job's exception into a
+      # future nobody here holds, so the UI would just look stuck. The ensure
+      # broadcasts idle so the browser's input re-enables even on the error path.
+      # 
+      # _@param_ `message` — +nil+ on a restart, where the turn exists for the Interloper drain +run_loop+ does before its first completion
+      def run_turn: (String? message) -> void
+
+      # Save, go idle, and — when the Interloper still holds something — claim
+      # the next turn before anyone can observe the gap.
+      # 
+      # Injections are delivered by +run_loop+'s drain and by nothing else, so a
+      # message that arrived while this turn was ending would otherwise sit until
+      # the user sent another one, with the status bar's queued count stuck above
+      # zero over an idle conversation.
+      # 
+      # Only after a turn that returned normally: a cancelled or failed one
+      # leaves what is queued for the next {#submit} rather than turning a stop
+      # into a fresh round-trip or an unreachable transport into a spin. The
+      # queue emptying is likewise +run_loop+'s job — a restart against an agent
+      # that does not drain would post turns forever.
+      # 
+      # _@param_ `restart` — whether the turn ran to completion
+      def finish_turn: (restart: bool?) -> void
+
+      # Move from queued to running, unless {#cancel} got here first — which is
+      # how a queued turn is dropped without the executor needing to support
+      # dequeuing.
+      # 
+      # Both paths broadcast. Nothing else reports the start of a turn that
+      # really did wait for a slot: {#submit}'s frame says +:running+ only when
+      # the executor happens to get here before it.
+      def claim_running: () -> Symbol
+
+      # _@return_ — the parked selection, taken;
+      # nil — +run_loop+'s "keep the current model" — when there is none
+      def take_pending: () -> Pikuri::Agent::ChatTransport?
+
+      # Post a titling job for this conversation's opening message, if it wants
+      # one. Called from both places an opener can turn up: {#restore!} with the
+      # one on disk, {#submit} with the one starting a fresh conversation.
+      # 
+      # At most once per runner, so a restored conversation is never asked twice
+      # and a failure leaves the stamp rather than retrying. Across a restart it
+      # does retry, which is what makes a title lost to a server being down
+      # recoverable by opening the conversation again.
+      # 
+      # _@param_ `opener` — the opening message; +nil+ when there is none to read, which titles nothing
+      def maybe_title: (String? opener) -> void
+
+      # _@param_ `history` — a restored conversation
+      # 
+      # _@return_ — its opening message, or +nil+ for a history that
+      # holds no user text at all
+      def first_user_message: (Pikuri::Agent::History history) -> String?
+
+      # The titling job's body: ask off-domain, land the answer in a task.
+      # 
+      # Every failure ends here, which is what makes the class header's promise
+      # true — so this rescue may never narrow to a specific error class.
+      # 
+      # _@param_ `opener`
+      def run_titling: (String opener) -> void
+
+      # Store a landed title and tell every tab the list changed.
+      # 
+      # Both halves of the rename happen here, in one task: the envelope on disk
+      # *and* the {#conversation} this runner holds. Writing only disk would be
+      # reverted by the next turn-end {#persist}, which writes the title off this
+      # object.
+      # 
+      # _@param_ `title` — capped and sanitized by {Titler}
+      def land_title: (String title) -> void
+
+      # _@return_ — nil when this conversation has
+      # nothing stored, or when what is stored cannot be read — a file someone
+      # edited or a half-written save is the library's to report and ours to
+      # survive, unlike a raise from the load itself
+      def stored_history: () -> Pikuri::Agent::History?
+
+      # Write this conversation to disk. The store owns the how; the only
+      # judgement here is that a history with no messages does not deserve a
+      # folder.
+      # 
+      # Filesystem failures are logged, not raised — a full disk must not take
+      # the conversation down with it, and this runs inside the turn job's
+      # ensure, where a raise would escape.
+      def persist: () -> void
+
+      def broadcast_status: () -> void
+
+      # Tell *every* tab the sidebar changed when this conversation starts or
+      # stops working.
+      # 
+      # The status frame above only reaches tabs reading this conversation, and
+      # they are precisely the ones that can already see the turn. The per-row
+      # dot is the only sign a conversation you are *not* looking at is working,
+      # and it is server-rendered, so somebody has to ask for a fresh list.
+      # 
+      # Only on the transition: a status frame fires per streamed injection
+      # count, and re-fetching the sidebar for each would be silly.
+      def announce_busy_change: () -> void
+
+      # The status bar's context-window headline, off TokenLog's own numbers
+      # rather than its formatted line — the percentage is ours, no pikuri shell
+      # shows one.
+      # 
+      #   'ctx 7.4k/64k (12%)'   # cap known
+      #   'ctx 7.4k'             # no cap reached us
+      #   ''                     # nothing measured yet
+      def token_headline: () -> String
+
+      # TokenLog's line with its own +ctx=+ segment lifted out, leaving the
+      # per-turn tail that sits muted beside {#token_headline}:
+      # 
+      #   'msg #2: ctx=8.4k/32.0k  Δ+1.6k  ↑1.0k  ↓0.6k' -> 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k'
+      #   'restored: ctx=8.2k/32.0k'                     -> 'restored'
+      # 
+      # Should that segment ever leave pikuri's format, the whole line survives
+      # as the tail — doubled against the headline, never lost.
+      def token_detail: () -> String
+
+      # 1024-scaled with a +k+ suffix, as pikuri sizes tokens, minus the trailing
+      # +.0+ a round number would carry (+64.0k+ reads as a precision the cap
+      # does not have).
+      # 
+      # _@param_ `count`
+      def format_k: (Integer count) -> String
+
+      # _@return_ — replaced, not mutated, when a
+      # title lands — so a reader always sees one consistent frozen envelope,
+      # at worst the pre-title one. The +conversations+ SSE event that follows
+      # the landing is what makes every tab re-fetch.
+      attr_reader conversation: Conversations::Store::Conversation
+
+      # _@return_ — this conversation's rendered blocks
+      attr_reader transcript: Web::Transcript
+    end
+
+    # Names a conversation from its opening message, on the connection
+    # +[titler] llm+ picked:
+    # 
+    #   titler = Titler.new(transport: choice.transport, params_declared: true)
+    #   titler.title_for('Compare Sinatra and Roda for an SSE-heavy app')
+    #   # => "Sinatra Versus Roda For SSE"
+    # 
+    # +nil+ comes back when the model said nothing usable, and the caller keeps
+    # the title the conversation already has.
+    # 
+    # Thread-safe: {#title_for} keeps its state local and builds its own agent —
+    # which is also what lets any number of executor threads drive one instance,
+    # a +Pikuri::Agent+'s chat being single-thread-confined.
+    # 
+    # == Implementation details
+    # 
+    # A *system* agent: no tools, so the loop cannot iterate, and no listener
+    # reaching a browser, so a title draws no transcript block. +Agent.new+ does
+    # no I/O at all when its transport carries an explicit +context_window+,
+    # which is what makes one agent per title free.
+    class Titler
+      MAX_WORDS: Integer
+      MAX_CHARS: Integer
+      MAX_OPENER_CHARS: Integer
+      SYSTEM_PROMPT: String
+
+      # _@param_ `transport` — the +[titler] llm+ connection, +params+ adapter and all.
+      # 
+      # _@param_ `params_declared` — whether that +[[llm]]+ declared a +params+ table — i.e. whether the operator asked for anything. Decides only the canary's severity: a stated intent that did not apply is a config bug (warn), a connection nobody steered is doing what it was told (info).
+      def initialize: (transport: Pikuri::Agent::ChatTransport, params_declared: bool) -> void
+
+      # Title one conversation from its opening message.
+      # 
+      # _@param_ `opener` — the first user message; only its first {MAX_OPENER_CHARS} characters are sent.
+      # 
+      # _@return_ — a single line of at most {MAX_WORDS} words and
+      # {MAX_CHARS} characters, sanitized; +nil+ when the model returned
+      # nothing usable.
+      def title_for: (String opener) -> String?
+
+      # Model output down to one storable line, or +nil+.
+      # 
+      # _@param_ `raw` — {Pikuri::Agent#last_assistant_content}.
+      def clean: (String? raw) -> String?
+
+      # Say once, on stderr, that this connection's model reasoned — the exact
+      # signal that a thinking-off parameter is not in force.
+      # 
+      # Diagnostic only: a slow title is still a title, and an operator who
+      # cannot turn thinking off on their model is entitled to accept the cost
+      # rather than be nagged per title.
+      # 
+      # _@param_ `tally` — this title's token counts.
+      # 
+      # _@param_ `seconds` — wall clock for the whole call.
+      def report_reasoning: (Tally tally, Float seconds) -> void
+
+      # Counts one title's tokens off the event stream, which is the only place
+      # the reasoning figure is exposed.
+      class Tally < Pikuri::Agent::Listener::Base
+        def initialize: () -> void
+
+        # _@param_ `event` — anything the loop emits; only the token event is counted.
+        def on_event: ((Pikuri::Agent::Event::Tokens | Pikuri::Agent::Event::Assistant) event) -> void
+
+        # _@return_ — reasoning tokens the model billed for this title;
+        # +0+ is the whole point — anything else means it thought.
+        attr_reader thinking: Integer
+
+        # _@return_ — completion tokens, the canary's secondary number.
+        attr_reader output: Integer
+      end
+    end
+
+    # The connections a conversation can be on — the +[[llm]]+ list turned into
+    # transports once, plus the three lookups a picker needs to get back and
+    # forth between what the browser says and what +run_loop+ takes:
+    # 
+    #   catalog = ModelCatalog.from_llms(config.llms)
+    #   catalog.find('Local Qwen 3.6')&.transport   # from a name the browser posted
+    #   catalog.resolve(model: m, server: s)        # from a pair meta.json saved
+    #   catalog.name_for(agent.transport)           # => 'Local Qwen 3.6'
+    #   catalog.rows                                # => [{name:, model:, context_window:}, …]
+    # 
+    # == Identity is the +[model, api_base]+ pair
+    # 
+    # {Choice#name} is the unique key ({Config} enforces it) but is *not*
+    # recoverable from a transport, so every transport-side lookup keys on the
+    # pair instead — two +[[llm]]+ entries may run one model on two servers, and
+    # the model alone would conflate them. Port of pikuri-tui's
+    # +Shared::Model::Choice.key+, including {#name_for}'s fall back to the raw
+    # model id: a transport minted outside this catalog still renders as
+    # something.
+    # 
+    # The pair is *not* unique, though the name is: the recommended titler is a
+    # second +[[llm]]+ on one model and one server, differing only in +params+.
+    # So {#resolve} and {#name_for} answer with the **first** entry declared on
+    # a pair, and the rest are shadowed — pickable, listed by {#rows}, and good
+    # for the session, but a conversation saved onto one reopens on the winner,
+    # because +meta.json+ stores the pair and nothing finer
+    # (+D_per_conversation_model+). Boot logs which names that affects.
+    # 
+    # Immutable.
+    class ModelCatalog
+      # Each transport carries its own connection, which pikuri turns into a
+      # per-chat +RubyLLM::Context+ — so no process-global +RubyLLM.configure+ is
+      # involved and two conversations on two servers coexist.
+      # 
+      # Nothing here rations the server: how many requests may fly at one
+      # +api_base+ is +Pikuri::Agent::ServerPermits+' business, a registry keyed
+      # on the server rather than on anything a transport carries
+      # (+D_upstream_request_throttle+).
+      # 
+      # An entry's +params+ rides its transport, so a connection configured
+      # non-thinking stays non-thinking wherever that transport goes — a model
+      # switch mid-conversation, a conversation reopened onto it. The table
+      # reaches the server as written; this shell never interprets a key
+      # (+D_llm_params_passthrough+).
+      # 
+      # _@param_ `llms` — every configured connection, in declaration order
+      def self.from_llms: (::Array[Config::Llm] llms) -> ModelCatalog
+
+      # _@param_ `choices` — at least one, names already unique
+      def initialize: (choices: ::Array[Choice]) -> void
+
+      # _@return_ — the first +[[llm]]+ — where a conversation with no
+      # saved connection starts, and what a vanished one falls back to
+      def primary: () -> Choice
+
+      # _@return_ — whether there is more than one connection to pick
+      # between
+      def multiple?: () -> bool
+
+      # _@param_ `name` — as posted by the browser
+      # 
+      # _@return_ — nil for a name this config does not have
+      def find: (String name) -> Choice?
+
+      # The connection a saved conversation was on.
+      # 
+      # _@param_ `model` — +meta.json+'s +model+
+      # 
+      # _@param_ `server` — +meta.json+'s +server+
+      # 
+      # _@return_ — nil when the conversation saved no connection, or
+      # when the one it saved is no longer in the config file
+      def resolve: (model: String?, server: String?) -> Choice?
+
+      # _@param_ `transport`
+      # 
+      # _@return_ — its display name, or the raw model id when the
+      # transport came from outside this catalog
+      def name_for: (Pikuri::Agent::ChatTransport transport) -> String
+
+      # _@return_ — +{name:, model:, context_window:}+ per connection:
+      # everything a picker displays, and nothing that would carry a
+      # +Pikuri::*+ type across the seam
+      def rows: () -> ::Array[::Hash[untyped, untyped]]
+
+      # Tell the operator, once at boot, which entries cannot survive a reopen.
+      # 
+      # _@param_ `choices` — in declaration order.
+      def warn_shadowed_pairs: (::Array[Choice] choices) -> void
+
+      # _@return_ — every connection, declaration order
+      attr_reader choices: ::Array[Choice]
+
+      # One connection: the display name, and the transport picking it hands to
+      # +Pikuri::Agent#run_loop+'s +transport:+.
+      # 
+      # @!attribute [r] name
+      #   @return [String] the +[[llm]]+ entry's unique display name
+      # @!attribute [r] transport
+      #   @return [Pikuri::Agent::ChatTransport]
+      class Choice < Data
+        # _@return_ — the +[model, api_base]+ identity pair
+        def key: () -> [String, String]
+
+        # _@return_ — the model identifier the transport talks to
+        def model: () -> String
+
+        # _@return_ — normalized server base, +/v1+ suffix included — the
+        # form +meta.json+ stores and {ModelCatalog#resolve} matches on
+        def server: () -> String
+
+        # _@return_ — explicit cap, or nil where pikuri's +/props+
+        # probe decides
+        def context_window: () -> Integer?
+
+        # _@return_ — the +[[llm]]+ entry's unique display name
+        attr_reader name: String
+
+        attr_reader transport: Pikuri::Agent::ChatTransport
+      end
+    end
+  end
+
+  # The `~/.config/pikuri/config.toml` model connections and provider
+  # keys, resolved once at boot and read from there on:
+  # 
+  #   config = PikuriWeb::Config.load
+  #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
+  #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
+  #   config.search        # => Search(brave_key:, exa_key:, engines:)
+  # 
+  # Every load failure — unreadable file, malformed TOML, schema
+  # violation — raises {Error}, naming the offending key.
+  # 
+  # == +[[server]]+ and +[[llm]]+
+  # 
+  #   [[server]]
+  #   id                      = "grok"
+  #   url                     = "https://api.x.ai/v1"
+  #   api_key                 = "xai-…"
+  #   max_concurrent_requests = 4
+  # 
+  #   [[llm]]
+  #   name           = "Grok 4 Fast"
+  #   server         = "grok"
+  #   model          = "grok-4-fast"
+  #   context_window = 131072
+  # 
+  # The box and the model running on it are separate tables, so four models
+  # on one provider state its URL and its key once instead of four times.
+  # +id+ is referenced by machine, +name+ is shown to a person, and those two
+  # are what {.load} checks for uniqueness. Two +[[server]]+ entries may
+  # share a URL (two accounts on one provider), and an unreferenced
+  # +[[server]]+ is legal, so commenting out an +[[llm]]+ cannot break the
+  # file.
+  # 
+  # {Llm#server} is the resolved *URL*; the +id+ leaves this class only in a
+  # log line. An id means nothing away from the file that defines it, so a
+  # conversation's saved connection stores the URL
+  # (+D_per_conversation_model+) — a reference whose referent a later edit
+  # can delete would strand it, where a URL stands on its own.
+  # 
+  # There is no built-in connection: no +[[llm]]+ at all, one missing
+  # +server+ or +model+, and one whose +server+ resolves to nothing each
+  # raise {Error}. A silent fallback to a hardcoded model tag would be a
+  # second, invisible connection source — so that knowledge is
+  # {EXAMPLE_CONFIG}, quoted by the raise where the user can edit it.
+  # 
+  # == The +[ui]+ table
+  # 
+  #   [ui]
+  #   show_thinking = false     # start with reasoning blocks collapsed
+  #   tool_lines    = "verbose" # start on the raw argument dump
+  # 
+  # Transcript density, one table for every pikuri shell because the
+  # preference is per *person* far more than per shell. Both keys are read
+  # here, as the *starting* value a browser with no preference of its own
+  # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
+  # the file from then on (+D_ui_cookie_over_config+).
+  # 
+  # == The +[titler]+ table, and +[[llm]]+ +params+
+  # 
+  #   [[llm]]
+  #   name           = "qwen-titler"
+  #   server         = "local"
+  #   model          = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
+  #   context_window = 8192
+  #   params         = { chat_template_kwargs = { enable_thinking = false } }
+  # 
+  #   [titler]
+  #   llm = "qwen-titler"
+  # 
+  # Which connection writes conversation titles, resolved into {#titler_llm}.
+  # Naming a *name* is safe where +D_per_conversation_model+ forbids it,
+  # because reference and referent live in one file, edited together. No
+  # +[titler]+ leaves {#titler_llm} +nil+, which means *no titling* — never a
+  # fallback to {#primary_llm}, whose thinking-on titles cost 30 s each.
+  # 
+  # +params+ rides any +[[llm]]+, not only that one, and reaches the server
+  # verbatim — a passthrough rather than a +thinking = false+ boolean, because
+  # the wire spelling differs per provider *and* per chat template. Only the
+  # shape is checked here; what the keys *mean* is the server's to say, the
+  # same bargain {.build_search} takes with +engines+.
+  # 
+  # == The +[web]+ table
+  # 
+  #   [web]
+  #   user     = "mavi"
+  #   password = "a long passphrase"
+  # 
+  # The one password gating the port, resolved into {#credentials}. No +[web]+
+  # leaves it +nil+, which is no gate at all rather than a default password —
+  # and one pair for everyone rather than accounts (+D_one_password_gate+).
+  # Both keys are required once the table exists.
+  # 
+  # == Precedence
+  # 
+  # Lowest to highest: built-in defaults → +/etc/xdg/pikuri/config.toml+
+  # (each +$XDG_CONFIG_DIRS+ entry, earlier = higher) →
+  # +$XDG_CONFIG_HOME/pikuri/config.toml+ (default +~/.config+) →
+  # +overrides:+. Tables merge key-by-key, so a system file can supply
+  # +search.brave_key+ while the user file adds +exa_key+; arrays (the
+  # +[[server]]+, +[[llm]]+ and +[[code.mcp]]+ lists) replace wholesale,
+  # nearest file wins.
+  # 
+  # +server+ references resolve *after* the whole merge. That is what lets a
+  # user file add one +[[llm]]+ against a system file's +[[server]]+ instead
+  # of re-pasting the block, secrets included — the duplication this schema
+  # exists to remove. The consequence, since arrays replace: a nearer file
+  # that declares +[[server]]+ at all replaces every farther one, which can
+  # leave a farther file's +[[llm]]+ dangling. That raises; it never falls
+  # back.
+  # 
+  # No project-local layer, deliberately: a config file inside the repo
+  # would be git-committable, and a literal {Llm#api_key} or {Search}
+  # provider key must not live where a commit can carry it off.
+  # 
+  # == Implementation details
+  # 
+  # The schema is the *whole* pikuri-shell schema, not the subset this host
+  # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
+  # with nothing wired to them.
+  # Trimming it would break the file: pikuri-tui writes +[code]+ /
+  # +[[code.mcp]]+ / +[ui]+ into the same path, and {.load} raises on an
+  # unknown top-level key.
+  # 
+  # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
+  # the seam (AGENTS.md). {Llm}'s fields match
+  # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
+  # match +Tool::WebSearch.build+'s and {McpServer}'s match
+  # +Mcp::Registry+'s entries, which keeps the bin's translation a
+  # pass-through; +bearer_token+ / +basic_auth+ resolve into
+  # {McpServer#headers} here so that stays true.
+  # 
+  # Immutable.
+  class Config
+    EXAMPLE_CONFIG: String
+    DEFAULT_SANDBOX: bool
+    DEFAULT_CONFIRM: bool
+    DEFAULT_SHOW_THINKING: bool
+    DEFAULT_TOOL_LINES: Symbol
+    FILENAME: String
+    XDG_SUBDIR: String
+
+    # Load and resolve the layered configuration.
+    # 
+    # _@param_ `overrides` — CLI overrides; +nil+ values are ignored (treated as "flag not given"). Recognized keys: +:sandbox+, +:confirm+ — the coding switches, for a sibling shell that wires them (`D_chat_only_entry_point`). Nothing about a *connection* is overridable: no server, no model and no key. A secret must never travel on the command line (visible in +ps+ and shell history), and server/model would be a second source of truth for something the file already owns (`D_schema_complete_config`).
+    # 
+    # _@param_ `env` — environment consulted for +XDG_CONFIG_HOME+ / +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
+    # 
+    # _@return_ — the resolved configuration.
+    def self.load: (?overrides: ::Hash[Symbol, (String | bool)?], ?env: untyped) -> Config
+
+    # _@param_ `llms` — one or more model connections (never empty).
+    # 
+    # _@param_ `servers` — the +[[server]]+ definitions +llms+ was resolved against. Defaults to empty because the only thing that reads it is the boot-time permit sizing, which a config built in code (a spec) has nothing to install.
+    # 
+    # _@param_ `search` — web-search provider keys (fields may be nil).
+    # 
+    # _@param_ `sandbox` — resolved sandbox switch (parsed, unwired).
+    # 
+    # _@param_ `confirm` — resolved confirmer switch (parsed, unwired).
+    # 
+    # _@param_ `mcp` — MCP servers (parsed, unwired; may be empty).
+    # 
+    # _@param_ `show_thinking` — resolved +[ui]+ reasoning-block default (parsed, unwired).
+    # 
+    # _@param_ `tool_lines` — resolved +[ui]+ tool-line form (parsed, unwired).
+    # 
+    # _@param_ `titler_llm` — the connection titles are written on, or +nil+ for no titling. Defaults to +nil+ so a config built in code opts in the same way a file does.
+    # 
+    # _@param_ `credentials` — the +[web]+ pair gating the app, or +nil+ for no gate. Defaults to +nil+, as a file with no +[web]+ does.
+    def initialize: (
+                      llms: ::Array[Llm],
+                      search: Search,
+                      sandbox: bool,
+                      confirm: bool,
+                      mcp: ::Array[McpServer],
+                      ?servers: ::Array[Server],
+                      ?titler_llm: Llm?,
+                      ?credentials: Credentials?,
+                      ?show_thinking: bool,
+                      ?tool_lines: Symbol
+                    ) -> void
+
+    # _@return_ — the boot connection (the first).
+    def primary_llm: () -> Llm
+
+    # File layers, lowest priority first. +$XDG_CONFIG_DIRS+ (default
+    # +/etc/xdg+) is +:+-separated with earlier entries ranking higher, so
+    # we append them reversed; +$XDG_CONFIG_HOME+ (default +~/.config+)
+    # outranks all of them. No project-local layer — see the class header.
+    # 
+    # _@param_ `env` — environment, for the +XDG_CONFIG_*+ variables
+    # 
+    # _@return_ — candidate file paths, lowest priority first
+    def self.candidate_paths: (untyped env) -> ::Array[String]
+
+    # Advise (non-fatally, through {PikuriWeb.logger}) when a file carrying
+    # a literal secret (a +[[server]]+ api_key or a +[search]+ provider key)
+    # is group/other-accessible — a plaintext secret should be +chmod 600+.
+    # Only files that actually contain a secret are checked, so a
+    # world-readable but secret-free /etc/xdg config raises no noise.
+    # 
+    # _@param_ `path` — the file +parsed+ came from
+    # 
+    # _@param_ `parsed` — its raw TOML
+    def self.warn_loose_perms: (String path, ::Hash[String, Object] parsed) -> void
+
+    # Reads +[[server]]+ for the key, not +[[llm]]+: this check runs per file
+    # and pre-merge, on raw TOML, so it sees the table the key is *written*
+    # in rather than the {Llm} it is later resolved into.
+    # 
+    # _@param_ `parsed` — one file's raw TOML
+    # 
+    # _@return_ — true when the parsed file carries any literal secret
+    # (a +[[server]]+ +api_key+, a +[web]+ +password+, a +[search]+
+    # +brave_key+/+exa_key+, or an +[[code.mcp]]+
+    # +bearer_token+/+basic_auth+/+headers+/+env+).
+    def self.holds_secret?: (::Hash[String, Object] parsed) -> bool
+
+    # Parse one file, wrapping any failure (read error, TOML syntax) in
+    # {Error} with the path attached — a library exception we surface at
+    # boot rather than let escape as a bare backtrace.
+    # 
+    # _@param_ `path` — the file to read
+    # 
+    # _@return_ — its raw TOML
+    def self.parse_file: (String path) -> ::Hash[String, Object]
+
+    # Recursive merge: tables merge key-by-key; scalars and arrays take the
+    # right-hand (higher-priority) value wholesale.
+    # 
+    # _@param_ `lower` — the lower-priority layer
+    # 
+    # _@param_ `higher` — the higher-priority layer
+    # 
+    # _@return_ — a new hash; neither input is changed
+    def self.deep_merge: (::Hash[String, Object] lower, ::Hash[String, Object] higher) -> ::Hash[String, Object]
+
+    # _@param_ `merged` — the merged raw TOML
+    def self.validate_top!: (::Hash[String, Object] merged) -> void
+
+    # Resolve the +[web]+ table into the pair gating every request, or +nil+
+    # when the file has no such section — the gate off, the way no +[titler]+
+    # means no titling. Strict for the reason {.build_titler} is.
+    # 
+    # Both keys are required together: a half-written table resolving to +nil+
+    # would gate nothing and say nothing, which is the one failure this feature
+    # cannot have.
+    # 
+    # _@param_ `table` — the raw +[web]+ table.
+    # 
+    # _@return_ — the pair, or +nil+ for +table+ +nil+.
+    def self.build_credentials: (::Hash[untyped, untyped]? table) -> Credentials?
+
+    # Resolve +[titler] llm+ to the connection titles are written on.
+    # 
+    # Strict, unlike +[ui]+: this shell is the one that consumes the table, so
+    # a key it does not know is a mistake rather than a sibling shell's
+    # business.
+    # 
+    # _@param_ `table` — the raw +[titler]+ table; +nil+ when the file has no such section.
+    # 
+    # _@param_ `llms` — every configured connection, names already checked for uniqueness.
+    # 
+    # _@return_ — the named connection, or +nil+ for +table+ +nil+ —
+    # titling off.
+    def self.build_titler: (::Hash[untyped, untyped]? table, ::Array[Llm] llms) -> Llm?
+
+    # Validate the +[ui]+ table, deliberately more loosely than its
+    # neighbours: an unknown key is logged and ignored, and +tool_lines+ is
+    # checked for shape but never against a list of forms.
+    # 
+    # pikuri-tui owns what grows here — it defines the keys and its own +[ui]+
+    # rdoc already names the next one (+markdown+). Every strict check this
+    # method *doesn't* make is one that would reject a legal file the day the
+    # sibling shell adds a key or a third form, which is the boot failure the
+    # +ui+ entry in {.validate_top!} exists to prevent. Same bargain
+    # +search.engines+ takes; +show_thinking+ is strict because two values
+    # cannot grow.
+    # 
+    # _@param_ `ui` — the raw +[ui]+ table (+{}+ when the section is absent).
+    def self.validate_ui!: (::Hash[untyped, untyped] ui) -> void
+
+    # Build the {Search} value object from the +[search]+ table (or +nil+
+    # when the section is absent — every field then defaults to +nil+).
+    # 
+    # Shape only, deliberately: *which* engine names are valid, and which of
+    # them need a key, is pikuri's to say. Re-deciding it here would copy
+    # pikuri's engine list into this Pikuri-free class, to rot the next time
+    # a provider lands.
+    # 
+    # _@param_ `table` — the raw +[search]+ table
+    def self.build_search: (::Hash[String, Object]? table) -> Search
+
+    # _@param_ `code` — the raw +[code]+ table
+    def self.validate_code!: (::Hash[String, Object] code) -> void
+
+    # _@param_ `hash` — one raw +[[server]]+ entry; anything but a table raises
+    # 
+    # _@param_ `index` — its position, for error messages
+    def self.build_server: (Object hash, Integer index) -> Server
+
+    # _@param_ `hash` — one raw +[[llm]]+ entry; anything but a table raises
+    # 
+    # _@param_ `index` — its position, for error messages
+    # 
+    # _@param_ `by_id` — every {Server} the merged file defined
+    def self.build_llm: (Object hash, Integer index, ::Hash[String, Server] by_id) -> Llm
+
+    # Look up the +[[server]]+ an +[[llm]]+ names, raising a message that
+    # names the fix when there is none.
+    # 
+    # There is no compatibility path for a file written before +[[server]]+
+    # existed, so each shape such a file fails in gets its own message — the
+    # raise *is* the migration. A URL left in +server+ earns the most effort:
+    # it parses cleanly and fails as a *lookup*, which reads like the user's
+    # mistake rather than like a key whose meaning changed under them.
+    # 
+    # _@param_ `ref` — the +[[llm]]+ entry's +server+ value: an +id+ to look up, or, in an old file, a URL.
+    # 
+    # _@param_ `name` — the entry's +name+, for error messages.
+    # 
+    # _@param_ `by_id` — every {Server} the merged file defined.
+    # 
+    # _@param_ `api_key` — the entry's stray +api_key+, folded into the suggested block so one edit fixes both halves of an old file.
+    # 
+    # _@return_ — the referenced server.
+    def self.resolve_server: (
+                               String ref,
+                               String name,
+                               ::Hash[String, Server] by_id,
+                               String? api_key
+                             ) -> Server
+
+    # _@param_ `url` — the URL an old file left in an +[[llm]]+'s +server+
+    # 
+    # _@param_ `api_key` — that entry's stray +api_key+
+    # 
+    # _@return_ — the migration advice, with a paste-ready +[[server]]+
+    def self.server_is_now_an_id: (String url, String? api_key) -> String
+
+    # Covers both "no config file at all" and "a file that defines no
+    # connection" — the same hole with the same fix, so one message with the
+    # path to write it to.
+    # 
+    # _@param_ `any_loaded` — whether any file was read, which is the only difference between the two cases.
+    # 
+    # _@param_ `env` — environment, for the path {.candidate_paths} names.
+    # 
+    # _@return_ — the message, quoting {EXAMPLE_CONFIG}.
+    def self.no_connection_message: (bool any_loaded, untyped env) -> String
+
+    # _@param_ `hash` — one raw +[[code.mcp]]+ entry; anything but a table raises
+    # 
+    # _@param_ `index` — its position, for error messages
+    def self.build_mcp: (Object hash, Integer index) -> McpServer
+
+    # Validate and return a stdio MCP entry's +env+ table (a
+    # +Hash{String => String}+ merged over the subprocess's inherited
+    # environment), or +{}+ when absent.
+    # 
+    # _@param_ `hash` — the raw +[[code.mcp]]+ table.
+    # 
+    # _@param_ `id` — the entry id, for error messages.
+    # 
+    # _@return_ — the env overrides (empty when none).
+    def self.build_mcp_env: (::Hash[untyped, untyped] hash, String id) -> ::Hash[String, String]
+
+    # Resolve an HTTP MCP entry's auth/custom keys into the single
+    # +Hash{String => String}+ +HttpEntry+ consumes. +bearer_token+ and
+    # +basic_auth+ are convenience sugar that both yield an +Authorization+
+    # header, so they are mutually exclusive and also conflict with an
+    # explicit +Authorization+ inside +headers+; the +headers+ table carries
+    # arbitrary extras verbatim.
+    # 
+    # _@param_ `hash` — the raw +[[code.mcp]]+ table.
+    # 
+    # _@param_ `id` — the entry id, for error messages.
+    # 
+    # _@return_ — the merged headers (empty when none).
+    def self.build_mcp_headers: (::Hash[untyped, untyped] hash, String id) -> ::Hash[String, String]
+
+    # Build the +Authorization: Basic+ value from a +basic_auth+ table.
+    # Encodes +username:password+ with strict (newline-free) Base64 via
+    # +Array#pack+ so no +base64+ require is needed.
+    # 
+    # _@param_ `basic` — the raw +basic_auth+ value (expected a table).
+    # 
+    # _@param_ `id` — the entry id, for error messages.
+    # 
+    # _@return_ — the full +"Basic <base64>"+ header value.
+    def self.build_basic_auth: (Object basic, String id) -> String
+
+    # First non-nil value — precedence resolution that treats +false+ as a
+    # real value (so a +sandbox = false+ in a file is not skipped).
+    # 
+    # _@param_ `values` — candidates, highest priority first
+    # 
+    # _@return_ — the first non-nil one, or +nil+ when all are
+    def self.pick: (*::Array[Object] values) -> Object
+
+    # _@param_ `values` — the ids or names to check
+    # 
+    # _@param_ `label` — what they are, for the error message
+    def self.check_unique!: (::Array[String] values, String label) -> void
+
+    # _@param_ `value` — a raw TOML value
+    # 
+    # _@return_ — whether it is a string with a non-blank character
+    def self.non_empty_string?: (Object value) -> bool
+
+    # _@return_ — all configured connections, declaration order;
+    # never empty.
+    attr_reader llms: ::Array[Llm]
+
+    # _@return_ — every +[[server]]+, declaration order,
+    # including any that no +[[llm]]+ references.
+    attr_reader servers: ::Array[Server]
+
+    # _@return_ — the web-search provider keys (fields may be nil).
+    attr_reader search: Search
+
+    # _@return_ — sandbox switch (flag > file > default).
+    attr_reader sandbox: bool
+
+    # _@return_ — confirmer switch (flag > file > default).
+    attr_reader confirm: bool
+
+    # _@return_ — MCP servers, declaration order.
+    attr_reader mcp: ::Array[McpServer]
+
+    # _@return_ — whether reasoning blocks start shown (+[ui]+ > default).
+    attr_reader show_thinking: bool
+
+    # _@return_ — the tool-line form to start on (+[ui]+ > default) —
+    # whatever the file said, symbolized, so an unrecognized form arrives
+    # here unresolved. **The reader falls back**, as {Web::App} does for an
+    # unknown +theme+ cookie; the vocabulary belongs to whoever renders it.
+    attr_reader tool_lines: Symbol
+
+    # _@return_ — the connection conversation titles are written on
+    # (+[titler] llm+), or +nil+ when the file names none — which switches
+    # titling off rather than falling back to {#primary_llm}.
+    attr_reader titler_llm: Llm?
+
+    # _@return_ — the +[web]+ pair gating every request, or
+    # +nil+ when the file names none — which switches the gate off rather
+    # than inventing a default password.
+    attr_reader credentials: Credentials?
+
+    # Raised for any unreadable / malformed / schema-invalid config file.
+    # Carries a human-readable message naming the offending key or file.
+    class Error < StandardError
+    end
+
+    # One inference server: what is true of the box rather than of a model
+    # running on it, referenced by {#id} from any number of +[[llm]]+ entries
+    # (the class header shows the pair of tables).
+    # 
+    # @!attribute [r] id
+    #   @return [String] unique reference an +[[llm]]+ names in its +server+
+    #     key; never shown to the user, never stored anywhere outside this
+    #     class (see the class header).
+    # @!attribute [r] url
+    #   @return [String] base URL, with or without the +/v1+ suffix — pikuri
+    #     normalizes both the transport's base and the throttle's key by
+    #     stripping it, so either spelling names one server.
+    # @!attribute [r] api_key
+    #   @return [String, nil] the API key/token, stored literally, or +nil+
+    #     for a server that needs none (a local llama.cpp). This file rather
+    #     than an env var on purpose: the environment is inherited by every
+    #     subprocess pikuri spawns, so a key there leaks to code the agent
+    #     runs.
+    # @!attribute [r] max_concurrent_requests
+    #   @return [Integer, nil] ceiling on requests in flight against this
+    #     server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
+    #     let pikuri's +/props+ probe size it from the box's own
+    #     +total_slots+. 1 is the recommended value and the probe's answer is
+    #     usually not — see +D_max_concurrent_requests+.
+    class Server < Data
+      # _@return_ — unique reference an +[[llm]]+ names in its +server+
+      # key; never shown to the user, never stored anywhere outside this
+      # class (see the class header).
+      attr_reader id: String
+
+      # _@return_ — base URL, with or without the +/v1+ suffix — pikuri
+      # normalizes both the transport's base and the throttle's key by
+      # stripping it, so either spelling names one server.
+      attr_reader url: String
+
+      # _@return_ — the API key/token, stored literally, or +nil+
+      # for a server that needs none (a local llama.cpp). This file rather
+      # than an env var on purpose: the environment is inherited by every
+      # subprocess pikuri spawns, so a key there leaks to code the agent
+      # runs.
+      attr_reader api_key: String?
+
+      # _@return_ — ceiling on requests in flight against this
+      # server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
+      # let pikuri's +/props+ probe size it from the box's own
+      # +total_slots+. 1 is the recommended value and the probe's answer is
+      # usually not — see +D_max_concurrent_requests+.
+      attr_reader max_concurrent_requests: Integer?
+    end
+
+    # One model connection: a +[[llm]]+ entry with its +[[server]]+ already
+    # resolved into it, so nothing downstream has to hold the reference. The
+    # first {Config#llms} entry is where a conversation with no saved
+    # connection starts, and any of them is a +/model+ pick away.
+    # 
+    # @!attribute [r] name
+    #   @return [String] unique display name, e.g. +"Local Qwen 3.6"+.
+    # @!attribute [r] server
+    #   @return [String] the referenced {Server}'s {Server#url} — a base
+    #     URL, never the +id+ the file wrote.
+    # @!attribute [r] model
+    #   @return [String] model identifier passed to the transport.
+    # @!attribute [r] api_key
+    #   @return [String, nil] the referenced {Server}'s {Server#api_key}, or
+    #     +nil+ when that server omits it (the bin then falls back to
+    #     +"not-needed"+, fine for a local llama.cpp).
+    # @!attribute [r] context_window
+    #   @return [Integer, nil] explicit context-window cap for this
+    #     connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
+    #     +/props+ probe, which yields +nil+ for a non-llama server). Set
+    #     it for a cloud model the probe can't reach so the status bar
+    #     shows a real +used/cap+. Rides the connection's
+    #     +Pikuri::Agent::ChatTransport+, so it stays correct per-model.
+    # @!attribute [r] params
+    #   @return [Hash{String => Object}] extra request parameters merged into
+    #     every chat completion on this connection, verbatim — e.g.
+    #     +{"chat_template_kwargs" => {"enable_thinking" => false}}+ to turn
+    #     Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it,
+    #     which is also how "the operator steered this connection" is read.
+    class Llm < Data
+      # _@param_ `params` — see {#params}; frozen here
+      # 
+      # _@param_ `rest` — the other members, by name
+      def initialize: (?params: ::Hash[String, Object], **::Hash[Symbol, Object] rest) -> void
+
+      # _@return_ — unique display name, e.g. +"Local Qwen 3.6"+.
+      attr_reader name: String
+
+      # _@return_ — the referenced {Server}'s {Server#url} — a base
+      # URL, never the +id+ the file wrote.
+      attr_reader server: String
+
+      # _@return_ — model identifier passed to the transport.
+      attr_reader model: String
+
+      # _@return_ — the referenced {Server}'s {Server#api_key}, or
+      # +nil+ when that server omits it (the bin then falls back to
+      # +"not-needed"+, fine for a local llama.cpp).
+      attr_reader api_key: String?
+
+      # _@return_ — explicit context-window cap for this
+      # connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
+      # +/props+ probe, which yields +nil+ for a non-llama server). Set
+      # it for a cloud model the probe can't reach so the status bar
+      # shows a real +used/cap+. Rides the connection's
+      # +Pikuri::Agent::ChatTransport+, so it stays correct per-model.
+      attr_reader context_window: Integer?
+
+      # _@return_ — extra request parameters merged into
+      # every chat completion on this connection, verbatim — e.g.
+      # +{"chat_template_kwargs" => {"enable_thinking" => false}}+ to turn
+      # Qwen 3.6's reasoning off. Frozen, and +{}+ when the entry omits it,
+      # which is also how "the operator steered this connection" is read.
+      attr_reader params: ::Hash[String, Object]
+    end
+
+    # One MCP server definition; exactly one of {#command} (local stdio
+    # subprocess) / {#url} (remote HTTP) is non-nil. Parsed and validated
+    # but wired to nothing — this host binds no MCP tools yet.
+    # 
+    # +bearer_token+ / +basic_auth+ are TOML-level sugar rather than
+    # fields: {.build_mcp_headers} folds them into {#headers} at load time,
+    # so this exposes only the one hash +Registry::HttpEntry+ consumes 1:1.
+    # 
+    # @!attribute [r] id
+    #   @return [String] unique id the LLM uses to call +mcp_connect+.
+    # @!attribute [r] command
+    #   @return [Array<String>, nil] full argv to spawn a stdio server
+    #     (exe first), or +nil+ for an HTTP server.
+    # @!attribute [r] url
+    #   @return [String, nil] endpoint URL of an HTTP server, or +nil+ for
+    #     a stdio server.
+    # @!attribute [r] headers
+    #   @return [Hash{String => String}] HTTP headers sent on every request
+    #     to an HTTP server (auth + custom), frozen. Always empty for a
+    #     stdio server.
+    # @!attribute [r] env
+    #   @return [Hash{String => String}] extra environment variables for a
+    #     stdio server's subprocess (merged over the inherited
+    #     environment), frozen. Always empty for an HTTP server.
+    class McpServer < Data
+      # _@param_ `id` — see {#id}
+      # 
+      # _@param_ `command` — see {#command}
+      # 
+      # _@param_ `url` — see {#url}
+      # 
+      # _@param_ `headers` — see {#headers}; frozen here
+      # 
+      # _@param_ `env` — see {#env}; frozen here
+      def initialize: (
+                        id: String,
+                        ?command: ::Array[String]?,
+                        ?url: String?,
+                        ?headers: ::Hash[String, String],
+                        ?env: ::Hash[String, String]
+                      ) -> void
+
+      # _@return_ — true for a local-subprocess (stdio) server.
+      def stdio?: () -> bool
+
+      # _@return_ — true for a remote HTTP server.
+      def http?: () -> bool
+
+      # _@return_ — unique id the LLM uses to call +mcp_connect+.
+      attr_reader id: String
+
+      # _@return_ — full argv to spawn a stdio server
+      # (exe first), or +nil+ for an HTTP server.
+      attr_reader command: ::Array[String]?
+
+      # _@return_ — endpoint URL of an HTTP server, or +nil+ for
+      # a stdio server.
+      attr_reader url: String?
+
+      # _@return_ — HTTP headers sent on every request
+      # to an HTTP server (auth + custom), frozen. Always empty for a
+      # stdio server.
+      attr_reader headers: ::Hash[String, String]
+
+      # _@return_ — extra environment variables for a
+      # stdio server's subprocess (merged over the inherited
+      # environment), frozen. Always empty for an HTTP server.
+      attr_reader env: ::Hash[String, String]
+    end
+
+    # The web-search selection: which engines to search with, and the keys
+    # the paid ones need. Every field is +nil+ when omitted, leaving pikuri's
+    # own default — DuckDuckGo plus whichever key was configured. There is
+    # nowhere else to put the keys — pikuri reads no provider key from +ENV+.
+    # 
+    # @!attribute [r] brave_key
+    #   @return [String, nil] Brave Search API key, or +nil+ when unset.
+    # @!attribute [r] exa_key
+    #   @return [String, nil] Exa API key, or +nil+ when unset.
+    # @!attribute [r] engines
+    #   @return [Array<String>, nil] the engines to search with — any of
+    #     +duckduckgo+, +brave+, +exa+ — or +nil+ to derive the set from the
+    #     keys. A *set*, not a preference order: pikuri shuffles per query, so
+    #     +["brave", "duckduckgo"]+ splits traffic between the two rather than
+    #     preferring Brave. Only the shape is checked here — an unknown name
+    #     or an engine named without its key is pikuri's refusal.
+    class Search < Data
+      # _@param_ `brave_key` — see {#brave_key}
+      # 
+      # _@param_ `exa_key` — see {#exa_key}
+      # 
+      # _@param_ `engines` — see {#engines}; frozen here
+      def initialize: (?brave_key: String?, ?exa_key: String?, ?engines: ::Array[String]?) -> void
+
+      # _@return_ — Brave Search API key, or +nil+ when unset.
+      attr_reader brave_key: String?
+
+      # _@return_ — Exa API key, or +nil+ when unset.
+      attr_reader exa_key: String?
+
+      # _@return_ — the engines to search with — any of
+      # +duckduckgo+, +brave+, +exa+ — or +nil+ to derive the set from the
+      # keys. A *set*, not a preference order: pikuri shuffles per query, so
+      # +["brave", "duckduckgo"]+ splits traffic between the two rather than
+      # preferring Brave. Only the shape is checked here — an unknown name
+      # or an engine named without its key is pikuri's refusal.
+      attr_reader engines: ::Array[String]?
+    end
+
+    # The +[web]+ table's pair, checked against the +Authorization+ header of
+    # every request (+D_one_password_gate+).
+    # 
+    # @!attribute [r] user
+    #   @return [String] the name the browser's own prompt asks for.
+    # @!attribute [r] password
+    #   @return [String] the password, stored literally — the same file and the
+    #     same +chmod 600+ advisory a +[[server]]+ api_key earns.
+    class Credentials < Data
+      # _@return_ — the name the browser's own prompt asks for.
+      attr_reader user: String
+
+      # _@return_ — the password, stored literally — the same file and the
+      # same +chmod 600+ advisory a +[[server]]+ api_key earns.
+      attr_reader password: String
+    end
+  end
+
+  # The serialization domain: one re-entrant monitor over all of this server's
+  # cross-thread mutable state. Work happens in *tasks* — blocks run to
+  # completion, alone in the domain — so the system is only ever observed
+  # *between* tasks, never inside one, and two objects mutated or read
+  # together stay one unit:
+  # 
+  #   lock.run do                 # a task
+  #     runner = registry.open_id(id)
+  #     runner&.submit(prompt)       # resolve + submit, untearable
+  #   end
+  # 
+  # Guarded classes ({Agents::Runner}, {Conversations::Registry}, {Transcript}) open
+  # their public methods with {#assert!}, so a call from outside a task raises
+  # instead of racing. Who enters the domain: every route body ({Web::App}), and
+  # the turn worker's bookkeeping brackets (+Agents::Runner#run_turn+) — the
+  # agent loop itself, and all rendering, stay outside.
+  # 
+  # A task must be **rapid-fire**: never a network wait, never a wait on
+  # another thread, never anything unbounded. Bounded disk work is allowed
+  # (the turn-end save, the restore replay — capped by context-window
+  # economics). A stall inside a task stalls every conversation and every
+  # request; the `SIGPWR` dump (`D_puma_thread_dump`) is the debugger for one.
+  # See `D_global_monitor` for the whole contract.
+  class BigAppLock
+    # rubocop:disable Lint/InheritException
+    def initialize: () -> void
+
+    # Run one task: the block executes inline on the calling thread, alone in
+    # the domain. Re-entrant — a task may open another task, so a guarded
+    # method calling back into the domain (the Interloper's +on_change+) just
+    # works.
+    # 
+    # _@return_ — the block's value
+    def run: () -> Object
+
+    # Guard clause for methods that must only run inside a task.
+    # 
+    #   def submit(message)
+    #     @lock.assert!
+    #     ...
+    def assert!: () -> void
+
+    # Raised by {#assert!} for a call outside a task. An +Exception+, not a
+    # +StandardError+, so the blanket recovery paths (`rescue StandardError`
+    # around the turn job and the registry's delete) cannot mask a guarding
+    # bug as an operational failure.
+    class OutsideTask < Exception
+    end
+  end
+
+  # The conversation set seen three ways: what is saved ({Store}), what is
+  # resident as a running agent ({Registry}), and a saved one turned back into
+  # the events that produced it ({HistoryReplay}).
+  # 
+  # {HistoryReplay} sits here rather than in {Agents} because it is the read
+  # half of what {Store} writes — +history.json+ back into
+  # +Pikuri::Agent::Event+s — and it renders nothing itself.
+  # 
+  # Nothing here may name anything under {Web}; see that namespace's one-way
+  # rule.
+  module Conversations
+    # The on-disk home of saved conversations: one directory per conversation
+    # under a single root. Minting an id and committing are separate steps — a
+    # folder per click would litter the root — but a commit is *one* call, and
+    # it writes both halves:
+    # 
+    #   store = Store.new(root: dir, shell: 'pikuri-web-chat')
+    #   conversation = store.create                            # mints an id; no folder yet
+    #   store.save(conversation, history, model: m, server: s) # the whole commit
+    #   store.list                                             # everything committed, newest first
+    # 
+    # {#save} calls +History#save+ itself rather than leaving each caller to
+    # write +history.json+ beside the envelope, which is what makes this class
+    # the single writer of a conversation's directory — the mode, the order and
+    # the commit point are decided once. It is also the only method here that
+    # touches a pikuri type, and that is the shape of the seam rather than a
+    # leak in it (`D_pikuri_free_core`); {#list}, {#find} and {#delete} deal in
+    # paths and plain hashes.
+    # 
+    # The root exists from construction; a conversation's own directory appears
+    # with its first save.
+    # 
+    # Both halves land in the one directory, and each format has exactly one
+    # writer:
+    # 
+    #   2026-08-27T12-03-51Z-3f9a/
+    #       history.json   pikuri's — Pikuri::Agent::History#save
+    #       attachments/   pikuri's — content-addressed, only if there are any
+    #       meta.json      ours — title, timestamps, shell and connection
+    # 
+    # == The connection a conversation is on
+    # 
+    # +meta.json+ records the +[model, server]+ *pair*, not a +[[llm]]+ name: a
+    # name is a config file away from being renamed, and a model id alone cannot
+    # tell two servers running one model apart. +server+ is the transport's
+    # normalized +api_base+, so the pair is exactly what {Agents::ModelCatalog#resolve}
+    # matches on. An envelope missing either half reads as a conversation with no
+    # saved connection — a key can be added here without a {SCHEMA} bump, because
+    # {#load_meta} checks the version and ignores what it does not read.
+    # 
+    # {#save} takes the pair per call rather than the store holding one, because
+    # what gets written is the *agent's own* transport at turn end; a store-wide
+    # field could only ever record the connection this process booted on.
+    # {Conversation}'s +_at_mint+ pair runs the other way — what disk said when
+    # the runner was minted — and a save deliberately does not refresh it.
+    # 
+    # == Implementation details
+    # 
+    # Co-tenancy in one directory is safe by upstream contract rather than by
+    # luck: +History#save+ never deletes and never enumerates the folder it
+    # writes into (pikuri's own decisions register, under history
+    # attachments).
+    # 
+    # Directories are created 0700: a conversation holds everything the user
+    # typed plus whatever the tools fetched, unencrypted. That covers
+    # +attachments/+, which pikuri creates with the default mode — an unreadable
+    # parent is what actually blocks traversal. Hence {#save}'s first step:
+    # tightening the directory *after* writing into it leaves the contents
+    # world-readable for as long as the write takes.
+    # 
+    # == Thread-safety
+    # 
+    # Thread-safe, in the narrow sense that is all this object can promise: it
+    # holds no mutable state past its constructor arguments, so concurrent calls
+    # need no lock *here*. The consistency of the *folder* rests elsewhere —
+    # 
+    # - one conversation's directory has one writer at a time, which comes from
+    #   the per-conversation partition (`D_conversation_owns_agent`), not from
+    #   anything in this class;
+    # - both files are written temp-file-and-rename, which is the whole of what
+    #   a reader in another process gets (`D_no_multi_process_lock`);
+    # - {#list} needs no coordination with a concurrent save or delete, because
+    #   +#row+ takes a read's own +ENOENT+ as the answer.
+    # 
+    # Cross-call sequences are *not* atomic: {#find} then {#delete} has a gap,
+    # and a caller must tolerate the conversation having vanished inside it.
+    class Store
+      META_FILE: String
+      SCHEMA: Integer
+      ID_TIME: String
+      ID: Regexp
+
+      # Creates +root+ if it is not there — so the folder exists from boot,
+      # rather than appearing on whichever later event happens to save first.
+      # 
+      # _@param_ `root` — directory holding one subdirectory per conversation, e.g. +~/.local/state/pikuri/pikuri-web-chat/conversations+
+      # 
+      # _@param_ `shell` — which binary is writing these, recorded in +meta.json+ so a later picker can say "saved by a different harness"
+      def initialize: (root: (String | Pathname), shell: String) -> void
+
+      # Mint a new conversation. No directory yet — a folder per click would
+      # litter the root with conversations nothing was ever said in, so one
+      # appears when there is something to put in it.
+      # 
+      #   store.create.id     # => "2026-08-27T12-03-51Z-3f9a"
+      #   store.create.title  # => "2026-08-27 14:03"
+      # 
+      # The id sorts lexically and greps by date, so +ls+ is already a
+      # newest-last listing; the random suffix keeps two processes minting in the
+      # same second apart. UTC in the id, local time in the title.
+      # 
+      # _@param_ `at` — the conversation's start time
+      # 
+      # _@param_ `model` — connection to start on, inherited from the conversation the tab was reading; nil starts on the catalog's first
+      # 
+      # _@param_ `server` — the +server+ half of the same pair
+      def create: (?at: Time, ?model: String?, ?server: String?) -> Conversation
+
+      # Every conversation committed to disk, newest first.
+      # 
+      #   store.list.map { [_1.title, _1.supported] }
+      #   # => [["2026-08-27 14:03", true], ["2026-08-26 09:14", false]]
+      # 
+      # Newest-first is a lexical sort on the id, which *is* the start stamp: a
+      # conversation holds its place in the list however long it goes on being
+      # written to, and ordering never opens a file.
+      # 
+      # A directory without +meta.json+ is not listed — that file is {#save}'s
+      # commit point, so such a directory is a save interrupted between the
+      # history and the envelope. One whose +meta.json+ is unreadable, or
+      # stamped by a schema this version doesn't know, comes back
+      # +supported: false+ rather than being dropped: a conversation the user
+      # can see and not open beats one that silently isn't there.
+      # 
+      # No index file fronts the per-conversation +meta.json+ reads: an index is
+      # a cache of the directory, and it drifts from it. They are fine into the
+      # hundreds — measure a slow sidebar before trading that away.
+      def list: () -> ::Array[Conversation]
+
+      # One listed conversation by id, or nil.
+      # 
+      #   store.find(params['id'])   # => Conversation, or nil for anything else
+      # 
+      # Resolution goes *through the listing* rather than by building a path, so
+      # an id arriving from a URL can only ever name a conversation that is
+      # already there — no caller has to think about traversal.
+      # 
+      # _@param_ `id`
+      def find: (String id) -> Conversation?
+
+      # Remove a conversation from disk — folder, +history.json+,
+      # +attachments/+.
+      # 
+      #   store.delete(store.find(params['id']))   # => true
+      # 
+      # +meta.json+ is unlinked *before* the folder, inverting {#save}'s
+      # commit point: a removal that dies half-way then leaves a conversation
+      # unlisted, rather than one that lists and cannot be opened.
+      # 
+      # Takes a +Conversation+ rather than an id, like {#find}, so no caller
+      # turns user input into a path. Nothing is refcounted — attachments are
+      # never shared between conversations.
+      # 
+      # _@param_ `conversation` — from {#list} or {#find}
+      # 
+      # _@return_ — true when a folder was removed; false when there was
+      # nothing on disk — a conversation minted but never saved
+      def delete: (Conversation conversation) -> bool
+
+      # Commit a conversation to disk — the directory, the history, the envelope.
+      # 
+      #   store.save(conversation, agent.export_history,
+      #              model: transport.model, server: transport.api_base)   # => the directory
+      # 
+      # +meta.json+ goes last because it is the commit point: {#list} skips a
+      # directory without one, so a save that dies half-way leaves an *unlisted*
+      # conversation rather than a listed one that cannot be opened. {#delete}
+      # inverts the order for the same reason.
+      # 
+      # An empty history still commits — whether a conversation with no messages
+      # deserves a folder is the caller's call, not the folder's.
+      # 
+      # _@param_ `conversation` — from {#create}, {#list} or {#find}
+      # 
+      # _@param_ `history` — anything answering +#save(Pathname)+ does, which is what makes this testable without an agent
+      # 
+      # _@param_ `model` — what the agent is *on* — read off its transport, never off a selection, so this and +history.json+'s last +model_id+ agree by construction
+      # 
+      # _@param_ `server` — the transport's +api_base+
+      # 
+      # _@param_ `updated_at` — last-activity stamp; the sidebar's sort key
+      # 
+      # _@return_ — the conversation's directory
+      def save: (
+                  Conversation conversation,
+                  Pikuri::Agent::History history,
+                  model: String,
+                  server: String,
+                  ?updated_at: Time
+                ) -> Pathname
+
+      # Whether this conversation still carries the start stamp it was minted
+      # with — i.e. nothing has named it yet.
+      # 
+      # The test is the stamp's *shape*, because +meta.json+'s +title+ always
+      # holds something and +#row+ falls back to the stamp when it does not. A
+      # model-written title colliding with +"%Y-%m-%d %H:%M"+ is not a real case.
+      # 
+      # _@param_ `conversation`
+      def stamp_titled?: (Conversation conversation) -> bool
+
+      # Rename a conversation: in memory always, on disk when there is an
+      # envelope to rewrite.
+      # 
+      #   conversation = store.retitle(conversation, 'Sinatra Versus Roda For SSE')
+      # 
+      # The renamed {Conversation} is the return value because it is frozen and
+      # {#save} writes +conversation.title+ — a caller that kept the old value
+      # would revert the rename at its next save.
+      # 
+      # No envelope yet (minted, first turn not saved), or one this reader cannot
+      # stand behind, is renamed in memory alone: the next {#save} writes
+      # +meta.json+ whole and carries the title anyway. The directory is
+      # untouched in every case — a title never appears in a path.
+      # 
+      # _@param_ `conversation`
+      # 
+      # _@param_ `title` — stored as given — capping and sanitizing belong to whoever produced it.
+      # 
+      # _@return_ — the same conversation, retitled.
+      def retitle: (Conversation conversation, String title) -> Conversation
+
+      # Write +meta.json+, into a directory {#save} has already created 0700.
+      # 
+      # _@param_ `conversation`
+      # 
+      # _@param_ `model`
+      # 
+      # _@param_ `server`
+      # 
+      # _@param_ `updated_at`
+      # 
+      # _@return_ — the file written
+      def write_meta: (
+                        Conversation conversation,
+                        model: String,
+                        server: String,
+                        updated_at: Time
+                      ) -> Pathname
+
+      # One listing row, or nil for a directory that is not a committed
+      # conversation.
+      # 
+      # _@param_ `dir`
+      def row: (Pathname dir) -> Conversation?
+
+      # The envelope; nil when this reader can't stand behind it — corrupt, or
+      # written by a schema it doesn't know — and +:absent+ when there is no
+      # envelope at all, which is a save interrupted between pikuri's half and
+      # ours rather than a conversation to list.
+      # 
+      # _@param_ `path`
+      def load_meta: (Pathname path) -> (::Hash[untyped, untyped] | Symbol)?
+
+      # _@param_ `basename`
+      # 
+      # _@return_ — nil when the name is not one of our ids
+      def id_time: (String basename) -> Time?
+
+      # _@param_ `at`
+      # 
+      # _@return_ — the local-time start stamp a conversation is titled by
+      # until something better replaces it
+      def stamp_title: (Time at) -> String
+
+      # The pair is one value: half of it is none of it, and a half-written or
+      # hand-edited one reads as no connection at all rather than travelling on
+      # to the conversation factory.
+      # 
+      # An envelope carrying a +model+ and no +server+ is the case that matters:
+      # that +model+ named the connection its *writer* was booted on, not the
+      # conversation's, so matching on it alone is the very conflation the pair
+      # exists to prevent.
+      # 
+      # _@param_ `meta`
+      def saved_connection: (::Hash[untyped, untyped]? meta) -> ([String, String] | [NilClass, NilClass])
+
+      # 0700 explicitly rather than through +mkdir_p+'s +mode:+, which a umask
+      # can widen.
+      # 
+      # _@param_ `dir` — the directory to create, parents included
+      def mkdir_private: (Pathname dir) -> void
+
+      # Sibling temp file plus rename, so a reader never sees a half-written
+      # +meta.json+.
+      # 
+      # _@param_ `path` — the file to replace
+      # 
+      # _@param_ `content` — its new content
+      def atomic_write: (Pathname path, String content) -> void
+
+      # _@return_ — the conversations root
+      attr_reader root: Pathname
+
+      # One conversation's identity and where it lives; no history of its own —
+      # that is +history.json+ under +dir+.
+      # 
+      # @!attribute [r] id
+      #   @return [String] the directory basename, e.g. +"2026-08-27T12-03-51Z-3f9a"+
+      # @!attribute [r] dir
+      #   @return [Pathname] the conversation's directory; may not exist yet
+      # @!attribute [r] title
+      #   @return [String] display title — the local-time start stamp
+      # @!attribute [r] created_at
+      #   @return [Time]
+      # @!attribute [r] supported
+      #   @return [Boolean] false for a conversation {#list} could not read —
+      #     +title+ is then the stamp derived from the id, and nothing else on
+      #     disk should be trusted
+      # @!attribute [r] model_at_mint
+      #   @return [String, nil] the model +meta.json+ held when this value object
+      #     was built, or what {#create} inherited; nil for a conversation with
+      #     no saved connection. Read once, when a runner is minted on it —
+      #     the next save moves +meta.json+ on and this never follows, which is
+      #     what the suffix is there to say at the call site
+      # @!attribute [r] server_at_mint
+      #   @return [String, nil] the +server+ half of the same pair
+      class Conversation < Data
+        # Defaulted because "no saved connection" is a real and ordinary state —
+        # every conversation is in it until its first turn lands.
+        # 
+        # _@param_ `model_at_mint` — see {#model_at_mint}
+        # 
+        # _@param_ `server_at_mint` — see {#server_at_mint}
+        def initialize: (?model_at_mint: String?, ?server_at_mint: String?) -> void
+
+        # _@return_ — the directory basename, e.g. +"2026-08-27T12-03-51Z-3f9a"+
+        attr_reader id: String
+
+        # _@return_ — the conversation's directory; may not exist yet
+        attr_reader dir: Pathname
+
+        # _@return_ — display title — the local-time start stamp
+        attr_reader title: String
+
+        attr_reader created_at: Time
+
+        # _@return_ — false for a conversation {#list} could not read —
+        # +title+ is then the stamp derived from the id, and nothing else on
+        # disk should be trusted
+        attr_reader supported: bool
+
+        # _@return_ — the model +meta.json+ held when this value object
+        # was built, or what {#create} inherited; nil for a conversation with
+        # no saved connection. Read once, when a runner is minted on it —
+        # the next save moves +meta.json+ on and this never follows, which is
+        # what the suffix is there to say at the call site
+        attr_reader model_at_mint: String?
+
+        # _@return_ — the +server+ half of the same pair
+        attr_reader server_at_mint: String?
+      end
+    end
+
+    # The conversations resident in memory: one {Agents::Runner} — and therefore one
+    # agent, one history, one transcript — per conversation anyone has opened
+    # this run.
+    # 
+    #   runner = registry.open_id(id)           # mint or return the resident one
+    #   registry.create(from: viewed_id)       # a brand-new conversation, minted and open
+    #   registry.delete(conversation)          # => :deleted | :busy
+    #   registry.rows                          # what the sidebar lists
+    # 
+    # A runner is minted on first *view*, not on first send, so that a tab
+    # reading a conversation is subscribed to something real and picks up a turn
+    # someone starts there from another tab. Nothing is ever reaped: a single
+    # user opens a handful of conversations in a session, and a resident history
+    # is small. Reaping is the thing to add if that stops being true, not a
+    # cleverer minting rule.
+    # 
+    # Pikuri-free: the agent-shaped work lives entirely behind +factory+, so this
+    # class only ever holds and hands out {Agents::Runner}s.
+    # 
+    # == Threading
+    # 
+    # Guarded by {BigAppLock}: every call must run inside a task. Per-conversation
+    # state is single-writer by construction — one agent, one transcript, and a
+    # conversation that admits one turn at a time — and that holds at any
+    # +--turns+ setting; it comes from the partition, not from the executor's
+    # pool size (`D_serial_turn_executor`). {Store}'s own doc covers
+    # the folder. This class still never reaches inside a runner — hence
+    # {Agents::Runner#discard!} for the one place that must.
+    # 
+    # A mint's task runs the factory *and* the whole restore replay (which is
+    # what keeps a second open of the same conversation from observing a
+    # half-restored runner), and {#find} / {#rows} / {#delete} run the store's
+    # disk I/O — the sanctioned rare-and-bounded stalls (`D_global_monitor`).
+    class Registry
+      # _@param_ `store` — the folder: mints ids, lists what is saved, removes a folder
+      # 
+      # _@param_ `factory` — +conversation → Agents::Runner+, built once in bin/pikuri-web-chat so that every agent gets the same tool set and the boot-time trifecta report stays true of all of them
+      # 
+      # _@param_ `lock` — the domain every call must be inside
+      def initialize: (store: Store, factory: untyped, lock: BigAppLock) -> void
+
+      # _@param_ `id`
+      # 
+      # _@return_ — without minting one
+      def resident: (String id) -> Agents::Runner?
+
+      # Resolve an id and open it as one step.
+      # 
+      #   runner = registry.open_id(params['conversation'])
+      # 
+      # {#find} then {#open} as two caller-side calls would leave a window for
+      # {#delete}: the folder goes, and the open that follows mints a live
+      # runner for it anyway — back in the sidebar as an unsaved resident, and
+      # written to disk again at its next turn end. {Agents::Runner#discard!}
+      # cannot help, because it retires the runner that is *already* resident
+      # and this one does not exist yet. One method means one task: either the
+      # delete finds a runner to refuse or retire, or this finds nothing to
+      # resolve.
+      # 
+      # _@param_ `id`
+      # 
+      # _@return_ — nil for an id that is neither resident nor
+      # saved — including one deleted a moment ago
+      def open_id: (String id) -> Agents::Runner?
+
+      # Mint a brand-new conversation and open it.
+      # 
+      #   registry.create(from: params['viewing'])
+      # 
+      # A conversation starts on the connection the tab was reading, which is
+      # what makes "switch model, then start a fresh chat" do the obvious thing.
+      # The pair travels as two opaque strings — this class knows connections
+      # only by them.
+      # 
+      # _@param_ `from` — id of the conversation the tab has open; nil, or one not resident, starts on the catalog's first connection
+      def create: (?from: String?) -> Agents::Runner
+
+      # Forget a conversation and remove its folder. Irreversible: no undo, no
+      # tombstone (`D_delete_no_undo`).
+      # 
+      # Refused while its turn is in flight, which would otherwise save the
+      # folder back moments after it went.
+      # 
+      # {Agents::Runner#discard!} rather than a {Agents::Runner#busy?} read, because
+      # dropping the runner from the map does not reach the copy a request
+      # resolved in an *earlier* task — a submit through that stale reference
+      # lands in a later task, after this one, and would resurrect the
+      # conversation at its next turn end; only a flag on the runner itself
+      # travels with the reference. Retire it, then remove the folder: a removal
+      # that raises leaves an inert runner rather than a live one pointing at a
+      # half-deleted conversation.
+      # 
+      # _@param_ `conversation`
+      def delete: (Store::Conversation conversation) -> Symbol
+
+      # Resolve an id to a conversation — resident or saved.
+      # 
+      # Callers pass this rather than an id into {#open} / {#delete}, so no
+      # caller ever turns user input into a path.
+      # 
+      # _@param_ `id`
+      def find: (String id) -> Store::Conversation?
+
+      # The sidebar's model: everything saved, newest first, plus anything
+      # resident that has not been saved yet (a fresh conversation has no
+      # +meta.json+ until its first turn lands).
+      # 
+      # _@return_ — +{conversation:, busy:}+ per row
+      def rows: () -> ::Array[::Hash[untyped, untyped]]
+
+      # The conversation a bare +GET /+ should land on: the newest thing there
+      # is, or a fresh one when the store is empty and nothing is resident.
+      def default: () -> Store::Conversation
+
+      # Every resident runner, for the shutdown sweep.
+      def runners: () -> ::Array[Agents::Runner]
+
+      # The resident runner for +conversation+, minting and restoring one if this
+      # is the first time it has been opened.
+      # 
+      # Private because a +Conversation+ held from an earlier task can be stale —
+      # deleted since it was resolved — and this would mint a live runner over
+      # the missing folder, resurrecting it at its next save
+      # (`D_delete_no_undo`). {#open_id} re-resolves in its own task and
+      # {#create} opens what it just minted, so neither can be handed a stale
+      # one; nothing else may reach this.
+      # 
+      # _@param_ `conversation`
+      def open: (Store::Conversation conversation) -> Agents::Runner
+    end
+
+    # Turns a saved conversation back into the +Pikuri::Agent::Event+ stream that
+    # produced it, so a loaded conversation renders through the *same*
+    # {Web::SseListener} as a live one:
+    # 
+    #   history = Pikuri::Agent::History.load(dir)
+    #   agent.load_history!(history)                      # Reset empties the transcript
+    #   HistoryReplay.events(history).each { |e| listener.on_event(e) }
+    # 
+    # One renderer, one event→block-kind mapping, and old conversations get
+    # today's Markdown renderer and today's CSS. A `History → blocks` builder
+    # would be a second place block kinds are decided.
+    # 
+    # Part of the Pikuri seam: this file, {Web::SseListener} and {Agents::Runner} are the
+    # only lib/ files that know what a +Pikuri::Agent::Event+ is.
+    # 
+    # == What a reload cannot show
+    # 
+    # Only messages are stored, so anything that never became one is gone:
+    # +! cancelled+ and run-loop failure blocks, and the partial assistant text a
+    # cancel deliberately preserves (it raises out of +Chat#ask+ before the
+    # message lands). A reloaded turn that was cancelled mid-answer shows the
+    # user's message with no reply under it.
+    # 
+    # == Implementation details
+    # 
+    # Events are synthesized in the order the live agent emits them, which is
+    # *not* the order the messages sit in: a batch's +ToolResult+ follows its own
+    # +ToolCall+ rather than waiting for the batch to finish (pikuri's
+    # +before_tool_call+ / +after_tool_result+ hooks fire per call, while the
+    # history stores the whole assistant turn ahead of every +tool+ message).
+    # 
+    # +Tokens+ is deliberately not synthesized: +TokenLog+ is reseeded from
+    # +Event::HistoryLoaded+ by +Agent#load_history!+ itself, and a second source
+    # would double-count. Empty thinking and empty assistant content are dropped,
+    # matching the filters on pikuri's own emit path — otherwise a pure tool-call
+    # turn would replay as a blank assistant block.
+    module HistoryReplay
+      REFERENCE_TAG: String
+      REFERENCE_ENVELOPE: Regexp
+
+      # The event stream for one stored conversation.
+      # 
+      #   HistoryReplay.events(history).map(&:class)
+      #   # => [Event::UserTurn, Event::ToolCall, Event::ToolResult, Event::Assistant]
+      # 
+      # Dangling tool calls are repaired first, exactly as +Agent#load_history!+
+      # repairs them on the way into the chat — so the transcript shows the
+      # +[Tool execution was interrupted]+ observation the model is now looking at,
+      # rather than a call with nothing under it.
+      # 
+      # _@param_ `history`
+      def events: (Pikuri::Agent::History history) -> ::Array[Data]
+
+      # The event stream for one stored conversation.
+      # 
+      #   HistoryReplay.events(history).map(&:class)
+      #   # => [Event::UserTurn, Event::ToolCall, Event::ToolResult, Event::Assistant]
+      # 
+      # Dangling tool calls are repaired first, exactly as +Agent#load_history!+
+      # repairs them on the way into the chat — so the transcript shows the
+      # +[Tool execution was interrupted]+ observation the model is now looking at,
+      # rather than a call with nothing under it.
+      # 
+      # _@param_ `history`
+      def self.events: (Pikuri::Agent::History history) -> ::Array[Data]
+
+      # _@param_ `message`
+      # 
+      # _@param_ `results` — tool-call id → the +tool+ message answering it
+      def events_for: (Pikuri::Agent::History::Message message, ::Hash[String, Pikuri::Agent::History::Message] results) -> ::Array[Data]
+
+      # _@param_ `message`
+      # 
+      # _@param_ `results` — tool-call id → the +tool+ message answering it
+      def self.events_for: (Pikuri::Agent::History::Message message, ::Hash[String, Pikuri::Agent::History::Message] results) -> ::Array[Data]
+
+      # _@param_ `message`
+      def user_event: (Pikuri::Agent::History::Message message) -> Data
+
+      # _@param_ `message`
+      def self.user_event: (Pikuri::Agent::History::Message message) -> Data
+
+      # The tool that composed a call's display strings is gone by replay time,
+      # so they come off the file — or, for a file written before them, off
+      # +Pikuri::Tool+'s mechanical defaults.
+      # 
+      # _@param_ `message`
+      # 
+      # _@param_ `results`
+      def assistant_events: (Pikuri::Agent::History::Message message, ::Hash[String, Pikuri::Agent::History::Message] results) -> ::Array[Data]
+
+      # The tool that composed a call's display strings is gone by replay time,
+      # so they come off the file — or, for a file written before them, off
+      # +Pikuri::Tool+'s mechanical defaults.
+      # 
+      # _@param_ `message`
+      # 
+      # _@param_ `results`
+      def self.assistant_events: (Pikuri::Agent::History::Message message, ::Hash[String, Pikuri::Agent::History::Message] results) -> ::Array[Data]
+
+      # Strip the envelope pikuri added, and undo the escaping it applied to a
+      # closing tag inside the block. Content that is not enveloped is passed
+      # through untouched — a history written before the wrapper existed, or by
+      # something else entirely, still renders.
+      # 
+      # _@param_ `content` — a +kind: "reference"+ message as stored
+      # 
+      # _@return_ — the block as the live +SystemInjected+ carried it
+      def unwrap: (String content) -> String
+
+      # Strip the envelope pikuri added, and undo the escaping it applied to a
+      # closing tag inside the block. Content that is not enveloped is passed
+      # through untouched — a history written before the wrapper existed, or by
+      # something else entirely, still renders.
+      # 
+      # _@param_ `content` — a +kind: "reference"+ message as stored
+      # 
+      # _@return_ — the block as the live +SystemInjected+ carried it
+      def self.unwrap: (String content) -> String
+    end
+  end
+end

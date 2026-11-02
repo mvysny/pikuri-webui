@@ -19,7 +19,7 @@ module PikuriWeb
       @logger ||= Logger.new($stderr, progname: 'pikuri-web')
     end
 
-    # @param logger [Logger]
+    # @param value [Logger] where diagnostics go from now on
     attr_writer :logger
   end
 

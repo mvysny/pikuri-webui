@@ -104,6 +104,7 @@ module PikuriWeb
       # silently vanished client, whose drain loop would otherwise park a server
       # thread forever.
       #
+      # @param text [String] the comment's body, which no client reads
       # @return [void]
       def broadcast_comment(text = 'ping')
         each_queue(nil) { |q| q.push(": #{text}\n\n") }
@@ -142,6 +143,8 @@ module PikuriWeb
       # (unbounded), but keeping the critical section minimal is free.
       #
       # @param conversation [String, nil] +nil+ selects every subscriber
+      # @yieldparam queue [Thread::Queue] one selected subscriber's queue
+      # @return [void]
       def each_queue(conversation)
         @mutex
           .synchronize { @subscribers.select { |s| conversation.nil? || s.conversation == conversation }.map(&:queue) }

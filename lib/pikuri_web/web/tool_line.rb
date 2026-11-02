@@ -50,10 +50,14 @@ module PikuriWeb
     class ToolLine < Data.define(:short, :verbose, :error)
       # Cap on the short call line's one argument, so a pasted URL or a page of
       # prompt text cannot push the line past a screen.
+      #
+      # @return [Integer]
       ARGUMENT_MAX_CHARS = 60
 
       # Cap on the raw result line, and on the short line a tool composed.
       # A rendered page or a PDF's text would otherwise drown the transcript.
+      #
+      # @return [Integer]
       RESULT_MAX_CHARS = 200
 
       # The two forms for a +ToolCall+.

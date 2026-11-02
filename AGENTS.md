@@ -191,11 +191,15 @@ file carries its own admission rule.
   file per feature beside it, and `dom.js` knows no markup at all.
 - `public/` otherwise — the static root, served at the URL root: `style.css` holds both layouts
   off one 40rem breakpoint, and `images/` the mascot plus the set `bin/regen-icons` plates.
+- `sig/pikuri_web.rbs` — generated from the YARD tags by `rake sig`, never edited by hand.
 - `spec/pikuri_web/` — mirrors `lib/pikuri_web/`, namespace folders included; the specs that
   cross namespaces on purpose sit at its root.
 
 ## Conventions
 
+- **A concrete YARD type on every method, attribute and constant in `lib/`, private ones
+  included** — sord compiles them into `sig/pikuri_web.rbs`, and `rake sig` fails on a missing
+  one or a name Ruby cannot resolve. A pikuri event is `[Data]`: there is no `Event::Base`.
 - **Tests: rspec-core `describe`/`it` with minitest-style assertions** (`assert_equal`,
   `refute`, …), the same as pikuri and pikuri-tui.
 - **A class and its spec stay one path apart**; `conversation_flow_spec.rb` and
@@ -233,9 +237,12 @@ file carries its own admission rule.
 pikuri comes from its Codeberg repo at the commit `Gemfile.lock` pins; no sibling checkout
 is needed. To edit both repos together, point Bundler's per-machine local override at one.
 
-- `bundle exec rake check` — the full check (the spec suite plus the doc tripwires), the
-  default task, the cross-repo standard entry point, and what `.woodpecker.yml` runs.
+- `bundle exec rake check` — the full check (the spec suite, the sord signatures, the doc
+  tripwires), the default task, the cross-repo standard entry point, and what
+  `.woodpecker.yml` runs.
 - `bundle exec rspec spec/pikuri_web/web/app_spec.rb` — one file; `-e 'name'` for one example.
+- `bundle exec rake sig` — regenerate `sig/pikuri_web.rbs` after a YARD change, and commit it;
+  CI fails on a stale one.
 - `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`),
   also a CI job of its own.
 - `bin/pikuri-web-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on

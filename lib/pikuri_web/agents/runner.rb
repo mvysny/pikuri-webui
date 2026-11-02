@@ -383,7 +383,7 @@ module PikuriWeb
       # it. A +#trifecta_html+ convenience here would point {Agents} at {Web},
       # the one direction that stays closed.
       #
-      # @return [Pikuri::Agent::Trifecta]
+      # @return [Pikuri::Trifecta::Report]
       def trifecta = @agent.trifecta
 
       private

@@ -46,7 +46,10 @@ module PikuriWeb
       # the block *unwrapped*. Mirrored here because the constant is private
       # upstream; the live-vs-replay spec in conversation_flow_spec.rb is what
       # catches a rename.
+      #
+      # @return [String]
       REFERENCE_TAG = 'system-reminder'
+      # @return [Regexp]
       REFERENCE_ENVELOPE = %r{\A<#{REFERENCE_TAG}>\n(.*)\n</#{REFERENCE_TAG}>\z}m
 
       module_function
@@ -62,7 +65,7 @@ module PikuriWeb
       # rather than a call with nothing under it.
       #
       # @param history [Pikuri::Agent::History]
-      # @return [Array<Pikuri::Agent::Event::Base>]
+      # @return [Array<Data>]
       def events(history)
         messages = history.repair_interrupted_tool_calls.messages
         results = messages.select { |m| m.role == 'tool' }.to_h { |m| [m.tool_call_id, m] }
@@ -72,7 +75,7 @@ module PikuriWeb
       # @param message [Pikuri::Agent::History::Message]
       # @param results [Hash{String => Pikuri::Agent::History::Message}] tool-call
       #   id → the +tool+ message answering it
-      # @return [Array<Pikuri::Agent::Event::Base>]
+      # @return [Array<Data>]
       def events_for(message, results)
         case message.role
         when 'user' then [user_event(message)]
@@ -83,7 +86,7 @@ module PikuriWeb
       end
 
       # @param message [Pikuri::Agent::History::Message]
-      # @return [Pikuri::Agent::Event::Base]
+      # @return [Data]
       def user_event(message)
         return Pikuri::Agent::Event::SystemInjected.new(content: unwrap(message.content)) if
           message.kind == 'reference'
@@ -99,7 +102,7 @@ module PikuriWeb
       #
       # @param message [Pikuri::Agent::History::Message]
       # @param results [Hash{String => Pikuri::Agent::History::Message}]
-      # @return [Array<Pikuri::Agent::Event::Base>]
+      # @return [Array<Data>]
       def assistant_events(message, results)
         events = []
         thinking = message.thinking&.text.to_s

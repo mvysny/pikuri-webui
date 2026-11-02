@@ -15,6 +15,8 @@ module PikuriWeb
     module RelativeTime
       # Absolute date past this age, where "N days ago" stops being how anyone
       # thinks about it.
+      #
+      # @return [Integer]
       CUTOFF = 30 * 86_400
 
       # @param time [Time]

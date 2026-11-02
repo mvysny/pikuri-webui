@@ -89,6 +89,16 @@ gem 'concurrent-ruby', '~> 1.3'
 # the deliberately raw transcript-block HTML.
 gem 'erubi', '~> 1.13'
 
+# Types are written once, as YARD tags; sord compiles them into the committed
+# sig/pikuri_web.rbs, and `rake sig` (part of `rake check`) fails on any tag
+# sord cannot type. redcarpet renders the Markdown that .yardopts selects.
+# The same trio, at the same versions, as pikuri-tui.
+group :development do
+  gem 'redcarpet', '~> 3.6'
+  gem 'sord', '~> 7.1', require: false
+  gem 'yard', '~> 0.9.45'
+end
+
 group :test do
   # Runs the Rakefile's `check` task — the cross-repo standard entry
   # point (`bundle exec rake check`; also the default task).

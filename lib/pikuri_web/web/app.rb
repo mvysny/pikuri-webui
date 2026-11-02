@@ -59,7 +59,10 @@ module PikuriWeb
       # attacker-free (app.js is its only writer) but user-editable, so an
       # unknown value falls back to the default rather than reaching the
       # `data-theme` attribute.
+      #
+      # @return [Array<String>]
       THEMES = %w[dark light].freeze
+      # @return [String]
       DEFAULT_THEME = 'dark'
 
       # Whether reasoning blocks start open, carried by the `thinking` cookie
@@ -67,6 +70,8 @@ module PikuriWeb
       # the theme it falls back to a *configured* value, not a constant —
       # `[ui] show_thinking` is the shared config file's say in what a browser
       # with no preference of its own sees (`D_ui_cookie_over_config`).
+      #
+      # @return [Array<String>]
       THINKING = %w[expanded collapsed].freeze
 
       # {THINKING} fallback, set by the host from `Config#show_thinking`. True
@@ -80,6 +85,8 @@ module PikuriWeb
       # deeper: `show_thinking` is a boolean and cannot be nonsense, while
       # `[ui] tool_lines` is validated for shape and not for vocabulary, so it
       # can name a form nothing here renders. Hence {#default_tool_lines}.
+      #
+      # @return [Array<String>]
       TOOL_LINES = %w[short verbose].freeze
 
       # {TOOL_LINES} fallback, set by the host from `Config#tool_lines`.

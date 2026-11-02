@@ -110,6 +110,9 @@ module PikuriWeb
 
       private
 
+      # @param user [String] the user name the browser sent.
+      # @param password [String] the password the browser sent.
+      # @return [Boolean] whether both match the configured pair.
       def correct?(user, password)
         # `&`, not `&&`: both halves are compared on every attempt, so how long
         # the refusal takes says nothing about which half was right.
@@ -117,12 +120,20 @@ module PikuriWeb
           Rack::Utils.secure_compare(@credentials.password, password)
       end
 
+      # @param env [Hash] the Rack environment.
+      # @param now [Integer] the current unix time.
+      # @param refresh [Boolean] whether to mint a fresh cookie on the way out.
+      # @return [Array(Integer, Hash, #each)] the gated app's response.
       def admitted(env, now, refresh:)
         env['REMOTE_USER'] = @credentials.user
         response = @app.call(env)
         refresh ? with_cookie(response, env, now) : response
       end
 
+      # @param response [Array(Integer, Hash, #each)] the gated app's response.
+      # @param env [Hash] the Rack environment.
+      # @param now [Integer] the current unix time.
+      # @return [Array(Integer, Hash, #each)] +response+ with a fresh cookie set.
       def with_cookie(response, env, now)
         status, headers, body = response
         Rack::Utils.set_cookie_header!(
@@ -133,6 +144,8 @@ module PikuriWeb
         [status, headers, body]
       end
 
+      # @param expiry [Integer] the unix time a cookie stops being good.
+      # @return [String] the hex HMAC that signs it.
       def mac(expiry)
         OpenSSL::HMAC.hexdigest('SHA256', @credentials.password,
                                 "#{COOKIE}|#{@credentials.user}|#{expiry}")
