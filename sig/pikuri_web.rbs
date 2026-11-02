@@ -1718,9 +1718,10 @@ module PikuriWeb
   # Typemap maps the merged TOML onto {Root} and the classes nested in it,
   # checking every value against the type its YARD tag gives — read back at
   # runtime from +sig/pikuri_web.rbs+, which +rake sig+ generates, so a stale
-  # +sig/+ means stale config types (+D_config_through_typemap+). A class's
-  # +validate+ adds what a type can't say: non-blank names, "exactly one of
-  # +command+ / +url+", unique ids. {.load} then resolves the file's shape
+  # +sig/+ means stale config types (+D_config_through_typemap+). Typemap's
+  # limits add non-blank names and unique ids; a class's +validate+ keeps
+  # only what no limit can say, "exactly one of +command+ / +url+" and the
+  # like. {.load} then resolves the file's shape
   # into the values the app reads: each {LlmTable} with its {Server} looked up
   # becomes an {Llm}, each {McpTable} with its auth sugar folded into
   # +headers+ becomes an {McpServer}. {Server}, {Search} and {Credentials}
@@ -2000,11 +2001,9 @@ module PikuriWeb
       # 
       # _@param_ `raw` — the entry as the file wrote it, unchecked
       # 
-      # _@return_ — its +id+, stripped; blank, missing included, leaves the
-      # bare index, since +server[1] "  "+ names nothing
-      def self.entry_name: (::Hash[String, Object] raw) -> String
-
-      def validate: () -> void
+      # _@return_ — its +id+, which Typemap strips; a blank or missing one
+      # leaves the bare index
+      def self.entry_name: (::Hash[String, Object] raw) -> Object
 
       # _@return_ — unique reference an +[[llm]]+ names in its +server+
       # key; never shown to the user, never stored anywhere outside this
@@ -2219,7 +2218,7 @@ module PikuriWeb
     #   @return [String] the password, stored literally — the same file and the
     #     same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
     class Credentials < Data
-      def validate: () -> void
+      extend Typemap::Constrain
 
       # _@return_ — the name the browser's own prompt asks for; non-blank.
       attr_reader user: String
@@ -2270,10 +2269,8 @@ module PikuriWeb
 
       # _@param_ `raw` — see {Server.entry_name}
       # 
-      # _@return_ — its +name+, stripped
-      def self.entry_name: (::Hash[String, Object] raw) -> String
-
-      def validate: () -> void
+      # _@return_ — its +name+
+      def self.entry_name: (::Hash[String, Object] raw) -> Object
 
       # _@return_ — see {Llm#name}
       attr_reader name: String
@@ -2303,7 +2300,7 @@ module PikuriWeb
     # @!attribute [r] password
     #   @return [String]
     class BasicAuth < Data
-      def validate: () -> void
+      extend Typemap::Constrain
 
       # _@return_ — the +Authorization+ value, strict (newline-free) Base64
       # through +Array#pack+, so no +base64+ require
@@ -2336,6 +2333,8 @@ module PikuriWeb
     # @!attribute [r] env
     #   @return [Hash{String => String}, nil] see {McpServer#env}
     class McpTable < Data
+      extend Typemap::Constrain
+
       # _@param_ `id` — see {#id}
       # 
       # _@param_ `command` — see {#command}
@@ -2361,8 +2360,8 @@ module PikuriWeb
 
       # _@param_ `raw` — see {Server.entry_name}
       # 
-      # _@return_ — its +id+, stripped
-      def self.entry_name: (::Hash[String, Object] raw) -> String
+      # _@return_ — its +id+
+      def self.entry_name: (::Hash[String, Object] raw) -> Object
 
       def validate: () -> void
 
@@ -2398,8 +2397,10 @@ module PikuriWeb
     # @!attribute [r] confirm
     #   @return [Boolean] see {Config#confirm}; +overrides:+ outrank it
     # @!attribute [r] mcp
-    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries
+    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries, ids unique
     class CodeTable < Data
+      extend Typemap::Constrain
+
       # _@param_ `sandbox` — see {#sandbox}
       # 
       # _@param_ `confirm` — see {#confirm}
@@ -2413,7 +2414,7 @@ module PikuriWeb
       # _@return_ — see {Config#confirm}; +overrides:+ outrank it
       attr_reader confirm: bool
 
-      # _@return_ — the +[[code.mcp]]+ entries
+      # _@return_ — the +[[code.mcp]]+ entries, ids unique
       attr_reader mcp: ::Array[McpTable]
     end
 
@@ -2444,7 +2445,7 @@ module PikuriWeb
     # @!attribute [r] llm
     #   @return [String] the {Llm#name} titles are written on; non-blank
     class TitlerTable < Data
-      def validate: () -> void
+      extend Typemap::Constrain
 
       # _@return_ — the {Llm#name} titles are written on; non-blank
       attr_reader llm: String
@@ -2453,9 +2454,9 @@ module PikuriWeb
     # The whole file, every table at its default when the file leaves it out.
     # 
     # @!attribute [r] server
-    #   @return [Array<Server>] the +[[server]]+ entries
+    #   @return [Array<Server>] the +[[server]]+ entries, ids unique
     # @!attribute [r] llm
-    #   @return [Array<LlmTable>] the +[[llm]]+ entries
+    #   @return [Array<LlmTable>] the +[[llm]]+ entries, names unique
     # @!attribute [r] search
     #   @return [Search] the +[search]+ table
     # @!attribute [r] code
@@ -2467,6 +2468,8 @@ module PikuriWeb
     # @!attribute [r] web
     #   @return [Credentials, nil] the +[web]+ table; +nil+ switches the gate off
     class Root < Data
+      extend Typemap::Constrain
+
       # _@param_ `server` — see {#server}
       # 
       # _@param_ `llm` — see {#llm}
@@ -2490,12 +2493,10 @@ module PikuriWeb
                         ?web: Credentials?
                       ) -> void
 
-      def validate: () -> void
-
-      # _@return_ — the +[[server]]+ entries
+      # _@return_ — the +[[server]]+ entries, ids unique
       attr_reader server: ::Array[Server]
 
-      # _@return_ — the +[[llm]]+ entries
+      # _@return_ — the +[[llm]]+ entries, names unique
       attr_reader llm: ::Array[LlmTable]
 
       # _@return_ — the +[search]+ table

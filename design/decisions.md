@@ -3140,8 +3140,9 @@ same code.
 **Decision.** Typemap maps the merged Hash onto `Data` classes shaped like the file (`Root`,
 `LlmTable`, `McpTable`, `BasicAuth`, `CodeTable`, `UiTable`, `TitlerTable`; `Server`, `Search`
 and `Credentials` as they were) and checks each value against its YARD type, read back from
-`sig/pikuri_web.rbs`. A type is written once, in the doc comment; a class's `validate` keeps only
-what a type can't say — non-blank, one-of, uniqueness. The same classes and the same Typemap pin
+`sig/pikuri_web.rbs`. A type is written once, in the doc comment; `constrain` adds the limits a
+type can't say — ranges, `not_blank:`, `not_empty:`, `unique_by:` — and a class's `validate`
+keeps only what no limit can, such as `[[code.mcp]]`'s stdio/HTTP exclusivity. The same classes and the same Typemap pin
 as pikuri-tui, so a schema change ports between the two by copying.
 
 **Kept from before: `[ui]` stays lenient.** Typemap's `unknown: :ignore` is per load, not per

@@ -17,7 +17,7 @@ GIT
 
 GIT
   remote: https://github.com/mvysny/typemap.git
-  revision: 6ab41a8b3fdebfc0e65dc02f8466e91808e864b8
+  revision: ffe46853003f5ec91691999478eee3686f2ca92c
   branch: main
   specs:
     typemap (0.1.0)

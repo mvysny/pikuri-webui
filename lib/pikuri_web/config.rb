@@ -134,9 +134,10 @@ module PikuriWeb
   # Typemap maps the merged TOML onto {Root} and the classes nested in it,
   # checking every value against the type its YARD tag gives — read back at
   # runtime from +sig/pikuri_web.rbs+, which +rake sig+ generates, so a stale
-  # +sig/+ means stale config types (+D_config_through_typemap+). A class's
-  # +validate+ adds what a type can't say: non-blank names, "exactly one of
-  # +command+ / +url+", unique ids. {.load} then resolves the file's shape
+  # +sig/+ means stale config types (+D_config_through_typemap+). Typemap's
+  # limits add non-blank names and unique ids; a class's +validate+ keeps
+  # only what no limit can say, "exactly one of +command+ / +url+" and the
+  # like. {.load} then resolves the file's shape
   # into the values the app reads: each {LlmTable} with its {Server} looked up
   # becomes an {Llm}, each {McpTable} with its auth sugar folded into
   # +headers+ becomes an {McpServer}. {Server}, {Search} and {Credentials}
@@ -198,6 +199,7 @@ module PikuriWeb
     Server = Data.define(:id, :url, :api_key, :max_concurrent_requests) do
       extend Typemap::Constrain
 
+      constrain :id, :url, not_blank: true
       constrain :max_concurrent_requests, in: (1..)
 
       # @param id [String] see {#id}
@@ -209,15 +211,9 @@ module PikuriWeb
       # Names the entry in a schema error, +server[1] "grok".url: required+.
       #
       # @param raw [Hash{String => Object}] the entry as the file wrote it, unchecked
-      # @return [String] its +id+, stripped; blank, missing included, leaves the
-      #   bare index, since +server[1] "  "+ names nothing
-      def self.entry_name(raw) = raw['id'].to_s.strip
-
-      # @return [void]
-      # @raise [RuntimeError] on a blank +id+ or +url+
-      def validate
-        %i[id url].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
-      end
+      # @return [Object] its +id+, which Typemap strips; a blank or missing one
+      #   leaves the bare index
+      def self.entry_name(raw) = raw['id']
     end
 
     # One model connection: a +[[llm]]+ entry with its +[[server]]+ already
@@ -335,11 +331,9 @@ module PikuriWeb
     #   @return [String] the password, stored literally — the same file and the
     #     same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
     Credentials = Data.define(:user, :password) do
-      # @return [void]
-      # @raise [RuntimeError] on a blank +user+ or +password+
-      def validate
-        %i[user password].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
-      end
+      extend Typemap::Constrain
+
+      constrain :user, :password, not_blank: true
     end
 
     # One +[[llm]]+ table as the file writes it; {.load} resolves it into an {Llm}.
@@ -361,6 +355,7 @@ module PikuriWeb
     LlmTable = Data.define(:name, :server, :model, :api_key, :context_window, :params) do
       extend Typemap::Constrain
 
+      constrain :name, :server, :model, not_blank: true
       constrain :context_window, in: (1..)
 
       # @param name [String] see {#name}
@@ -372,14 +367,8 @@ module PikuriWeb
       def initialize(name:, server:, model:, api_key: nil, context_window: nil, params: {}) = super
 
       # @param raw [Hash{String => Object}] see {Server.entry_name}
-      # @return [String] its +name+, stripped
-      def self.entry_name(raw) = raw['name'].to_s.strip
-
-      # @return [void]
-      # @raise [RuntimeError] on a blank +name+, +server+ or +model+
-      def validate
-        %i[name server model].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
-      end
+      # @return [Object] its +name+
+      def self.entry_name(raw) = raw['name']
     end
 
     # A +[[code.mcp]]+ entry's +basic_auth+ table.
@@ -389,11 +378,9 @@ module PikuriWeb
     # @!attribute [r] password
     #   @return [String]
     BasicAuth = Data.define(:username, :password) do
-      # @return [void]
-      # @raise [RuntimeError] on a blank +username+
-      def validate
-        raise '`username` must not be blank' if username.strip.empty?
-      end
+      extend Typemap::Constrain
+
+      constrain :username, not_blank: true
 
       # @return [String] the +Authorization+ value, strict (newline-free) Base64
       #   through +Array#pack+, so no +base64+ require
@@ -421,6 +408,11 @@ module PikuriWeb
     # @!attribute [r] env
     #   @return [Hash{String => String}, nil] see {McpServer#env}
     McpTable = Data.define(:id, :command, :url, :bearer_token, :basic_auth, :headers, :env) do
+      extend Typemap::Constrain
+
+      constrain :id, :url, :bearer_token, not_blank: true
+      constrain :command, not_empty: true
+
       # @param id [String] see {#id}
       # @param command [Array<String>, nil] see {#command}
       # @param url [String, nil] see {#url}
@@ -431,17 +423,14 @@ module PikuriWeb
       def initialize(id:, command: nil, url: nil, bearer_token: nil, basic_auth: nil, headers: nil, env: nil) = super
 
       # @param raw [Hash{String => Object}] see {Server.entry_name}
-      # @return [String] its +id+, stripped
-      def self.entry_name(raw) = raw['id'].to_s.strip
+      # @return [Object] its +id+
+      def self.entry_name(raw) = raw['id']
 
       # @return [void]
-      # @raise [RuntimeError] on a stdio/HTTP mix-up, a blank value, or two
-      #   sources for +Authorization+
+      # @raise [RuntimeError] on a stdio/HTTP mix-up, or two sources for
+      #   +Authorization+
       def validate
-        raise '`id` must not be blank' if id.strip.empty?
         raise 'set exactly one of `command` (stdio) or `url` (http)' unless command.nil? ^ url.nil?
-        raise '`command` must not be empty' if command && command.empty?
-        raise '`url` must not be blank' if url&.strip&.empty?
 
         http_only = { bearer_token:, basic_auth:, headers: }.compact.keys
         if command && !http_only.empty?
@@ -449,7 +438,6 @@ module PikuriWeb
         end
         raise '`env` applies only to stdio servers (set `command`, not `url`)' if url && env
         raise 'set at most one of `bearer_token` or `basic_auth`' if bearer_token && basic_auth
-        raise '`bearer_token` must not be blank' if bearer_token&.strip&.empty?
         return unless (bearer_token || basic_auth) && headers&.keys&.any? { |k| k.casecmp?('Authorization') }
 
         raise '`bearer_token`/`basic_auth` conflicts with an `Authorization` entry in `headers` — set only one'
@@ -471,8 +459,12 @@ module PikuriWeb
     # @!attribute [r] confirm
     #   @return [Boolean] see {Config#confirm}; +overrides:+ outrank it
     # @!attribute [r] mcp
-    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries
+    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries, ids unique
     CodeTable = Data.define(:sandbox, :confirm, :mcp) do
+      extend Typemap::Constrain
+
+      constrain :mcp, unique_by: :id
+
       # @param sandbox [Boolean] see {#sandbox}
       # @param confirm [Boolean] see {#confirm}
       # @param mcp [Array<McpTable>] see {#mcp}
@@ -498,19 +490,17 @@ module PikuriWeb
     # @!attribute [r] llm
     #   @return [String] the {Llm#name} titles are written on; non-blank
     TitlerTable = Data.define(:llm) do
-      # @return [void]
-      # @raise [RuntimeError] on a blank +llm+
-      def validate
-        raise '`llm` must not be blank' if llm.strip.empty?
-      end
+      extend Typemap::Constrain
+
+      constrain :llm, not_blank: true
     end
 
     # The whole file, every table at its default when the file leaves it out.
     #
     # @!attribute [r] server
-    #   @return [Array<Server>] the +[[server]]+ entries
+    #   @return [Array<Server>] the +[[server]]+ entries, ids unique
     # @!attribute [r] llm
-    #   @return [Array<LlmTable>] the +[[llm]]+ entries
+    #   @return [Array<LlmTable>] the +[[llm]]+ entries, names unique
     # @!attribute [r] search
     #   @return [Search] the +[search]+ table
     # @!attribute [r] code
@@ -522,6 +512,11 @@ module PikuriWeb
     # @!attribute [r] web
     #   @return [Credentials, nil] the +[web]+ table; +nil+ switches the gate off
     Root = Data.define(:server, :llm, :search, :code, :ui, :titler, :web) do
+      extend Typemap::Constrain
+
+      constrain :server, unique_by: :id
+      constrain :llm, unique_by: :name
+
       # @param server [Array<Server>] see {#server}
       # @param llm [Array<LlmTable>] see {#llm}
       # @param search [Search] see {#search}
@@ -532,17 +527,6 @@ module PikuriWeb
       def initialize(server: [], llm: [], search: Search.new, code: CodeTable.new, ui: UiTable.new,
                      titler: nil, web: nil)
         super
-      end
-
-      # @return [void]
-      # @raise [RuntimeError] naming every duplicate +[[server]]+ id,
-      #   +[[llm]]+ name or +[[code.mcp]]+ id
-      def validate
-        { 'server id' => server.map(&:id), 'llm name' => llm.map(&:name), 'code.mcp id' => code.mcp.map(&:id) }
-          .each do |label, values|
-            dups = values.tally.select { |_, n| n > 1 }.keys
-            raise "duplicate #{label}(s): #{dups.join(', ')}" unless dups.empty?
-          end
       end
     end
 
