@@ -784,7 +784,7 @@ toggles there is a settings bar, and the drawer is about conversations.
   whole client side is one attribute write in `app.js`.
 - The third presentational cookie, and the **second** of `D_theme_cookie`'s
   config-backed shape. One wrinkle `thinking` did not have: `show_thinking`
-  is a boolean and cannot be nonsense, while `Config.validate_ui!` checks
+  is a boolean and cannot be nonsense, while `Config` checks
   `tool_lines`'s shape and not its vocabulary, so `Web::App.default_tool_lines`
   is the only thing between a typo in the shared file and a page showing
   both forms at once.
@@ -3129,3 +3129,30 @@ reaches, though the server-side half now also sits in one task), and
   single-tab mash today; a tab watching a conversation someone else
   deletes keeps showing it, cosmetically; and no SSE frame carries an
   `id:`, so a reconnect replays nothing — app.js reloads on reconnect.
+
+## D_config_through_typemap — Why map the config file through Typemap rather than check it by hand?
+
+**Context.** {Config} checked its TOML with hand-written `is_a?` tests and unknown-key lists,
+about 150 lines restating what the value objects' YARD tags already said — and pikuri-tui's
+`Shared::Config`, which reads the same file (`D_schema_complete_config`), had just moved off the
+same code.
+
+**Decision.** Typemap maps the merged Hash onto `Data` classes shaped like the file (`Root`,
+`LlmTable`, `McpTable`, `BasicAuth`, `CodeTable`, `UiTable`, `TitlerTable`; `Server`, `Search`
+and `Credentials` as they were) and checks each value against its YARD type, read back from
+`sig/pikuri_web.rbs`. A type is written once, in the doc comment; a class's `validate` keeps only
+what a type can't say — non-blank, one-of, uniqueness. The same classes and the same Typemap pin
+as pikuri-tui, so a schema change ports between the two by copying.
+
+**Kept from before: `[ui]` stays lenient.** Typemap's `unknown: :ignore` is per load, not per
+table, so {Config} drops the `[ui]` keys `UiTable` has no member for, with a log line, before
+mapping; and `tool_lines` is typed `String` with no `in:` list. Both for the reason
+`D_schema_complete_config` gives: pikuri-tui owns what grows there.
+
+**Rejected: `constrain type:` lines and no `rbs` at runtime.** Every type would be written twice,
+in YARD and in `constrain`, and the two would drift.
+
+**Consequences.** `rbs` loads at boot, about 0.2 s. A stale `sig/` hands the running app stale
+types, so `rake check` regenerates it before the specs run. Messages are Typemap's, led by the
+value's path (`llm[0] "Local".context_window: must be at least 1, got 0`), and a TOML shape
+mistake names its fix (`write [[server]], not [server]`).

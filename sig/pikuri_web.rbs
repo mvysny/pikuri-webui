@@ -1596,9 +1596,6 @@ module PikuriWeb
   #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
   # 
-  # Every load failure — unreadable file, malformed TOML, schema
-  # violation — raises {Error}, naming the offending key.
-  # 
   # == +[[server]]+ and +[[llm]]+
   # 
   #   [[server]]
@@ -1645,6 +1642,11 @@ module PikuriWeb
   # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
   # the file from then on (+D_ui_cookie_over_config+).
   # 
+  # pikuri-tui owns what grows in this table, so it is the one table that is
+  # lenient: a key this shell does not read is logged and dropped before the
+  # mapping, and +tool_lines+ is checked to be a String, never against a list
+  # of forms (+D_schema_complete_config+).
+  # 
   # == The +[titler]+ table, and +[[llm]]+ +params+
   # 
   #   [[llm]]
@@ -1667,7 +1669,7 @@ module PikuriWeb
   # verbatim — a passthrough rather than a +thinking = false+ boolean, because
   # the wire spelling differs per provider *and* per chat template. Only the
   # shape is checked here; what the keys *mean* is the server's to say, the
-  # same bargain {.build_search} takes with +engines+.
+  # same bargain {Search#engines} takes.
   # 
   # == The +[web]+ table
   # 
@@ -1702,32 +1704,51 @@ module PikuriWeb
   # would be git-committable, and a literal {Llm#api_key} or {Search}
   # provider key must not live where a commit can carry it off.
   # 
+  # == Errors
+  # 
+  # Every load failure — unreadable file, malformed TOML, schema violation —
+  # raises {Error}. A schema message starts with the offending value's path,
+  # an array entry named after its index by its +entry_name+:
+  # 
+  #   llm[1] "Grok 4 Fast".context_window: must be at least 1, got 0
+  #   server: expected Array[Server], got a single Server; write [[server]], not [server]
+  # 
   # == Implementation details
+  # 
+  # Typemap maps the merged TOML onto {Root} and the classes nested in it,
+  # checking every value against the type its YARD tag gives — read back at
+  # runtime from +sig/pikuri_web.rbs+, which +rake sig+ generates, so a stale
+  # +sig/+ means stale config types (+D_config_through_typemap+). A class's
+  # +validate+ adds what a type can't say: non-blank names, "exactly one of
+  # +command+ / +url+", unique ids. {.load} then resolves the file's shape
+  # into the values the app reads: each {LlmTable} with its {Server} looked up
+  # becomes an {Llm}, each {McpTable} with its auth sugar folded into
+  # +headers+ becomes an {McpServer}. {Server}, {Search} and {Credentials}
+  # already match the file and pass through.
   # 
   # The schema is the *whole* pikuri-shell schema, not the subset this host
   # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
-  # with nothing wired to them.
-  # Trimming it would break the file: pikuri-tui writes +[code]+ /
-  # +[[code.mcp]]+ / +[ui]+ into the same path, and {.load} raises on an
-  # unknown top-level key.
+  # with nothing wired to them. Trimming it would break the file: pikuri-tui
+  # writes +[code]+ / +[[code.mcp]]+ / +[ui]+ into the same path, and an
+  # unknown top-level key raises.
   # 
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
   # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
   # match +Tool::WebSearch.build+'s and {McpServer}'s match
   # +Mcp::Registry+'s entries, which keeps the bin's translation a
-  # pass-through; +bearer_token+ / +basic_auth+ resolve into
-  # {McpServer#headers} here so that stays true.
+  # pass-through.
   # 
   # Immutable.
   class Config
-    EXAMPLE_CONFIG: String
     DEFAULT_SANDBOX: bool
     DEFAULT_CONFIRM: bool
     DEFAULT_SHOW_THINKING: bool
     DEFAULT_TOOL_LINES: Symbol
+    EXAMPLE_CONFIG: String
     FILENAME: String
     XDG_SUBDIR: String
+    MAPPER: Typemap::Mapper
 
     # Load and resolve the layered configuration.
     # 
@@ -1736,7 +1757,7 @@ module PikuriWeb
     # _@param_ `env` — environment consulted for +XDG_CONFIG_HOME+ / +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
     # 
     # _@return_ — the resolved configuration.
-    def self.load: (?overrides: ::Hash[Symbol, (String | bool)?], ?env: untyped) -> Config
+    def self.load: (?overrides: ::Hash[Symbol, bool?], ?env: untyped) -> Config
 
     # _@param_ `llms` — one or more model connections (never empty).
     # 
@@ -1750,9 +1771,9 @@ module PikuriWeb
     # 
     # _@param_ `mcp` — MCP servers (parsed, unwired; may be empty).
     # 
-    # _@param_ `show_thinking` — resolved +[ui]+ reasoning-block default (parsed, unwired).
+    # _@param_ `show_thinking` — resolved +[ui]+ reasoning-block default.
     # 
-    # _@param_ `tool_lines` — resolved +[ui]+ tool-line form (parsed, unwired).
+    # _@param_ `tool_lines` — resolved +[ui]+ tool-line form.
     # 
     # _@param_ `titler_llm` — the connection titles are written on, or +nil+ for no titling. Defaults to +nil+ so a config built in code opts in the same way a file does.
     # 
@@ -1784,10 +1805,9 @@ module PikuriWeb
     def self.candidate_paths: (untyped env) -> ::Array[String]
 
     # Advise (non-fatally, through {PikuriWeb.logger}) when a file carrying
-    # a literal secret (a +[[server]]+ api_key or a +[search]+ provider key)
-    # is group/other-accessible — a plaintext secret should be +chmod 600+.
-    # Only files that actually contain a secret are checked, so a
-    # world-readable but secret-free /etc/xdg config raises no noise.
+    # a literal secret is group/other-accessible — a plaintext secret should
+    # be +chmod 600+. Only files that actually contain a secret are checked,
+    # so a world-readable but secret-free /etc/xdg config raises no noise.
     # 
     # _@param_ `path` — the file +parsed+ came from
     # 
@@ -1795,8 +1815,8 @@ module PikuriWeb
     def self.warn_loose_perms: (String path, ::Hash[String, Object] parsed) -> void
 
     # Reads +[[server]]+ for the key, not +[[llm]]+: this check runs per file
-    # and pre-merge, on raw TOML, so it sees the table the key is *written*
-    # in rather than the {Llm} it is later resolved into.
+    # and pre-merge, on raw TOML the schema has not checked yet, so it sees
+    # the table the key is *written* in and must not assume any table's shape.
     # 
     # _@param_ `parsed` — one file's raw TOML
     # 
@@ -1825,95 +1845,40 @@ module PikuriWeb
     # _@return_ — a new hash; neither input is changed
     def self.deep_merge: (::Hash[String, Object] lower, ::Hash[String, Object] higher) -> ::Hash[String, Object]
 
+    # Log and drop the +[ui]+ keys {UiTable} has no member for, so a key
+    # pikuri-tui adds never stops this shell from booting (the class header
+    # has the why). A +ui+ that is not a table is left for the mapping to
+    # reject.
+    # 
     # _@param_ `merged` — the merged raw TOML
-    def self.validate_top!: (::Hash[String, Object] merged) -> void
+    # 
+    # _@return_ — +merged+, or a copy with +ui+ trimmed
+    def self.drop_unread_ui_keys: (::Hash[String, Object] merged) -> ::Hash[String, Object]
 
-    # Resolve the +[web]+ table into the pair gating every request, or +nil+
-    # when the file has no such section — the gate off, the way no +[titler]+
-    # means no titling. Strict for the reason {.build_titler} is.
-    # 
-    # Both keys are required together: a half-written table resolving to +nil+
-    # would gate nothing and say nothing, which is the one failure this feature
-    # cannot have.
-    # 
-    # _@param_ `table` — the raw +[web]+ table.
-    # 
-    # _@return_ — the pair, or +nil+ for +table+ +nil+.
-    def self.build_credentials: (::Hash[untyped, untyped]? table) -> Credentials?
+    # _@param_ `merged` — the merged TOML
+    def self.map: (::Hash[String, Object] merged) -> Root
 
-    # Resolve +[titler] llm+ to the connection titles are written on.
+    # _@param_ `table` — one +[[llm]]+ entry
     # 
-    # Strict, unlike +[ui]+: this shell is the one that consumes the table, so
-    # a key it does not know is a mistake rather than a sibling shell's
-    # business.
-    # 
-    # _@param_ `table` — the raw +[titler]+ table; +nil+ when the file has no such section.
-    # 
-    # _@param_ `llms` — every configured connection, names already checked for uniqueness.
-    # 
-    # _@return_ — the named connection, or +nil+ for +table+ +nil+ —
-    # titling off.
-    def self.build_titler: (::Hash[untyped, untyped]? table, ::Array[Llm] llms) -> Llm?
+    # _@param_ `by_id` — every +[[server]]+, by id — the whole layered set, not just the file the entry was written in
+    def self.resolve_llm: (LlmTable table, ::Hash[String, Server] by_id) -> Llm
 
-    # Validate the +[ui]+ table, deliberately more loosely than its
-    # neighbours: an unknown key is logged and ignored, and +tool_lines+ is
-    # checked for shape but never against a list of forms.
+    # Each way a reference can fail gets its own message, since with no compat
+    # path the raise *is* the whole migration. A URL in +server+ earns the most
+    # effort: it parses cleanly and fails as a *lookup*, which reads like the
+    # user's mistake rather than a key whose meaning changed. The entry's stray
+    # +api_key+ rides along into the suggested block, so one edit fixes both
+    # halves of an old file instead of two round trips.
     # 
-    # pikuri-tui owns what grows here — it defines the keys and its own +[ui]+
-    # rdoc already names the next one (+markdown+). Every strict check this
-    # method *doesn't* make is one that would reject a legal file the day the
-    # sibling shell adds a key or a third form, which is the boot failure the
-    # +ui+ entry in {.validate_top!} exists to prevent. Same bargain
-    # +search.engines+ takes; +show_thinking+ is strict because two values
-    # cannot grow.
+    # _@param_ `ref` — the entry's +server+ value
     # 
-    # _@param_ `ui` — the raw +[ui]+ table (+{}+ when the section is absent).
-    def self.validate_ui!: (::Hash[untyped, untyped] ui) -> void
-
-    # Build the {Search} value object from the +[search]+ table (or +nil+
-    # when the section is absent — every field then defaults to +nil+).
+    # _@param_ `name` — the entry's +name+, for messages
     # 
-    # Shape only, deliberately: *which* engine names are valid, and which of
-    # them need a key, is pikuri's to say. Re-deciding it here would copy
-    # pikuri's engine list into this Pikuri-free class, to rot the next time
-    # a provider lands.
+    # _@param_ `by_id` — every +[[server]]+, by id
     # 
-    # _@param_ `table` — the raw +[search]+ table
-    def self.build_search: (::Hash[String, Object]? table) -> Search
-
-    # _@param_ `code` — the raw +[code]+ table
-    def self.validate_code!: (::Hash[String, Object] code) -> void
-
-    # _@param_ `hash` — one raw +[[server]]+ entry; anything but a table raises
+    # _@param_ `api_key` — the entry's stray +api_key+, quoted in the migration hint
     # 
-    # _@param_ `index` — its position, for error messages
-    def self.build_server: (Object hash, Integer index) -> Server
-
-    # _@param_ `hash` — one raw +[[llm]]+ entry; anything but a table raises
-    # 
-    # _@param_ `index` — its position, for error messages
-    # 
-    # _@param_ `by_id` — every {Server} the merged file defined
-    def self.build_llm: (Object hash, Integer index, ::Hash[String, Server] by_id) -> Llm
-
-    # Look up the +[[server]]+ an +[[llm]]+ names, raising a message that
-    # names the fix when there is none.
-    # 
-    # There is no compatibility path for a file written before +[[server]]+
-    # existed, so each shape such a file fails in gets its own message — the
-    # raise *is* the migration. A URL left in +server+ earns the most effort:
-    # it parses cleanly and fails as a *lookup*, which reads like the user's
-    # mistake rather than like a key whose meaning changed under them.
-    # 
-    # _@param_ `ref` — the +[[llm]]+ entry's +server+ value: an +id+ to look up, or, in an old file, a URL.
-    # 
-    # _@param_ `name` — the entry's +name+, for error messages.
-    # 
-    # _@param_ `by_id` — every {Server} the merged file defined.
-    # 
-    # _@param_ `api_key` — the entry's stray +api_key+, folded into the suggested block so one edit fixes both halves of an old file.
-    # 
-    # _@return_ — the referenced server.
+    # _@return_ — the referenced server
     def self.resolve_server: (
                                String ref,
                                String name,
@@ -1928,6 +1893,13 @@ module PikuriWeb
     # _@return_ — the migration advice, with a paste-ready +[[server]]+
     def self.server_is_now_an_id: (String url, String? api_key) -> String
 
+    # _@param_ `table` — the +[titler]+ table
+    # 
+    # _@param_ `llms` — every configured connection, names already checked for uniqueness.
+    # 
+    # _@return_ — the connection +table+ names
+    def self.resolve_titler: (TitlerTable table, ::Array[Llm] llms) -> Llm
+
     # Covers both "no config file at all" and "a file that defines no
     # connection" — the same hole with the same fix, so one message with the
     # path to write it to.
@@ -1938,65 +1910,6 @@ module PikuriWeb
     # 
     # _@return_ — the message, quoting {EXAMPLE_CONFIG}.
     def self.no_connection_message: (bool any_loaded, untyped env) -> String
-
-    # _@param_ `hash` — one raw +[[code.mcp]]+ entry; anything but a table raises
-    # 
-    # _@param_ `index` — its position, for error messages
-    def self.build_mcp: (Object hash, Integer index) -> McpServer
-
-    # Validate and return a stdio MCP entry's +env+ table (a
-    # +Hash{String => String}+ merged over the subprocess's inherited
-    # environment), or +{}+ when absent.
-    # 
-    # _@param_ `hash` — the raw +[[code.mcp]]+ table.
-    # 
-    # _@param_ `id` — the entry id, for error messages.
-    # 
-    # _@return_ — the env overrides (empty when none).
-    def self.build_mcp_env: (::Hash[untyped, untyped] hash, String id) -> ::Hash[String, String]
-
-    # Resolve an HTTP MCP entry's auth/custom keys into the single
-    # +Hash{String => String}+ +HttpEntry+ consumes. +bearer_token+ and
-    # +basic_auth+ are convenience sugar that both yield an +Authorization+
-    # header, so they are mutually exclusive and also conflict with an
-    # explicit +Authorization+ inside +headers+; the +headers+ table carries
-    # arbitrary extras verbatim.
-    # 
-    # _@param_ `hash` — the raw +[[code.mcp]]+ table.
-    # 
-    # _@param_ `id` — the entry id, for error messages.
-    # 
-    # _@return_ — the merged headers (empty when none).
-    def self.build_mcp_headers: (::Hash[untyped, untyped] hash, String id) -> ::Hash[String, String]
-
-    # Build the +Authorization: Basic+ value from a +basic_auth+ table.
-    # Encodes +username:password+ with strict (newline-free) Base64 via
-    # +Array#pack+ so no +base64+ require is needed.
-    # 
-    # _@param_ `basic` — the raw +basic_auth+ value (expected a table).
-    # 
-    # _@param_ `id` — the entry id, for error messages.
-    # 
-    # _@return_ — the full +"Basic <base64>"+ header value.
-    def self.build_basic_auth: (Object basic, String id) -> String
-
-    # First non-nil value — precedence resolution that treats +false+ as a
-    # real value (so a +sandbox = false+ in a file is not skipped).
-    # 
-    # _@param_ `values` — candidates, highest priority first
-    # 
-    # _@return_ — the first non-nil one, or +nil+ when all are
-    def self.pick: (*::Array[Object] values) -> Object
-
-    # _@param_ `values` — the ids or names to check
-    # 
-    # _@param_ `label` — what they are, for the error message
-    def self.check_unique!: (::Array[String] values, String label) -> void
-
-    # _@param_ `value` — a raw TOML value
-    # 
-    # _@return_ — whether it is a string with a non-blank character
-    def self.non_empty_string?: (Object value) -> bool
 
     # _@return_ — all configured connections, declaration order;
     # never empty.
@@ -2067,6 +1980,32 @@ module PikuriWeb
     #     +total_slots+. 1 is the recommended value and the probe's answer is
     #     usually not — see +D_max_concurrent_requests+.
     class Server < Data
+      extend Typemap::Constrain
+
+      # _@param_ `id` — see {#id}
+      # 
+      # _@param_ `url` — see {#url}
+      # 
+      # _@param_ `api_key` — see {#api_key}
+      # 
+      # _@param_ `max_concurrent_requests` — see {#max_concurrent_requests}
+      def initialize: (
+                        id: String,
+                        url: String,
+                        ?api_key: String?,
+                        ?max_concurrent_requests: Integer?
+                      ) -> void
+
+      # Names the entry in a schema error, +server[1] "grok".url: required+.
+      # 
+      # _@param_ `raw` — the entry as the file wrote it, unchecked
+      # 
+      # _@return_ — its +id+, stripped; blank, missing included, leaves the
+      # bare index, since +server[1] "  "+ names nothing
+      def self.entry_name: (::Hash[String, Object] raw) -> String
+
+      def validate: () -> void
+
       # _@return_ — unique reference an +[[llm]]+ names in its +server+
       # key; never shown to the user, never stored anywhere outside this
       # class (see the class header).
@@ -2163,8 +2102,8 @@ module PikuriWeb
     # but wired to nothing — this host binds no MCP tools yet.
     # 
     # +bearer_token+ / +basic_auth+ are TOML-level sugar rather than
-    # fields: {.build_mcp_headers} folds them into {#headers} at load time,
-    # so this exposes only the one hash +Registry::HttpEntry+ consumes 1:1.
+    # fields: {McpTable#resolve} folds them into {#headers}, so this exposes
+    # only the one hash +Registry::HttpEntry+ consumes 1:1.
     # 
     # @!attribute [r] id
     #   @return [String] unique id the LLM uses to call +mcp_connect+.
@@ -2243,7 +2182,8 @@ module PikuriWeb
     #     keys. A *set*, not a preference order: pikuri shuffles per query, so
     #     +["brave", "duckduckgo"]+ splits traffic between the two rather than
     #     preferring Brave. Only the shape is checked here — an unknown name
-    #     or an engine named without its key is pikuri's refusal.
+    #     or an engine named without its key is pikuri's refusal, so no engine
+    #     list here can rot.
     class Search < Data
       # _@param_ `brave_key` — see {#brave_key}
       # 
@@ -2263,25 +2203,315 @@ module PikuriWeb
       # keys. A *set*, not a preference order: pikuri shuffles per query, so
       # +["brave", "duckduckgo"]+ splits traffic between the two rather than
       # preferring Brave. Only the shape is checked here — an unknown name
-      # or an engine named without its key is pikuri's refusal.
+      # or an engine named without its key is pikuri's refusal, so no engine
+      # list here can rot.
       attr_reader engines: ::Array[String]?
     end
 
     # The +[web]+ table's pair, checked against the +Authorization+ header of
-    # every request (+D_one_password_gate+).
+    # every request (+D_one_password_gate+). Both keys are required: a
+    # half-written table resolving to no gate would gate nothing and say
+    # nothing.
     # 
     # @!attribute [r] user
-    #   @return [String] the name the browser's own prompt asks for.
+    #   @return [String] the name the browser's own prompt asks for; non-blank.
     # @!attribute [r] password
     #   @return [String] the password, stored literally — the same file and the
-    #     same +chmod 600+ advisory a +[[server]]+ api_key earns.
+    #     same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
     class Credentials < Data
-      # _@return_ — the name the browser's own prompt asks for.
+      def validate: () -> void
+
+      # _@return_ — the name the browser's own prompt asks for; non-blank.
       attr_reader user: String
 
       # _@return_ — the password, stored literally — the same file and the
-      # same +chmod 600+ advisory a +[[server]]+ api_key earns.
+      # same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
       attr_reader password: String
+    end
+
+    # One +[[llm]]+ table as the file writes it; {.load} resolves it into an {Llm}.
+    # 
+    # @!attribute [r] name
+    #   @return [String] see {Llm#name}
+    # @!attribute [r] server
+    #   @return [String] the {Server#id} this model runs on
+    # @!attribute [r] model
+    #   @return [String] see {Llm#model}
+    # @!attribute [r] api_key
+    #   @return [String, nil] never valid here: read only so {.load} can name the
+    #     +[[server]]+ it belongs on, where an unknown-key error would not
+    # @!attribute [r] context_window
+    #   @return [Integer, nil] see {Llm#context_window}
+    # @!attribute [r] params
+    #   @return [Hash{String => Object}] see {Llm#params}; checked to be a table,
+    #     its contents the server's business
+    class LlmTable < Data
+      extend Typemap::Constrain
+
+      # _@param_ `name` — see {#name}
+      # 
+      # _@param_ `server` — see {#server}
+      # 
+      # _@param_ `model` — see {#model}
+      # 
+      # _@param_ `api_key` — see {#api_key}
+      # 
+      # _@param_ `context_window` — see {#context_window}
+      # 
+      # _@param_ `params` — see {#params}
+      def initialize: (
+                        name: String,
+                        server: String,
+                        model: String,
+                        ?api_key: String?,
+                        ?context_window: Integer?,
+                        ?params: ::Hash[String, Object]
+                      ) -> void
+
+      # _@param_ `raw` — see {Server.entry_name}
+      # 
+      # _@return_ — its +name+, stripped
+      def self.entry_name: (::Hash[String, Object] raw) -> String
+
+      def validate: () -> void
+
+      # _@return_ — see {Llm#name}
+      attr_reader name: String
+
+      # _@return_ — the {Server#id} this model runs on
+      attr_reader server: String
+
+      # _@return_ — see {Llm#model}
+      attr_reader model: String
+
+      # _@return_ — never valid here: read only so {.load} can name the
+      # +[[server]]+ it belongs on, where an unknown-key error would not
+      attr_reader api_key: String?
+
+      # _@return_ — see {Llm#context_window}
+      attr_reader context_window: Integer?
+
+      # _@return_ — see {Llm#params}; checked to be a table,
+      # its contents the server's business
+      attr_reader params: ::Hash[String, Object]
+    end
+
+    # A +[[code.mcp]]+ entry's +basic_auth+ table.
+    # 
+    # @!attribute [r] username
+    #   @return [String] non-blank
+    # @!attribute [r] password
+    #   @return [String]
+    class BasicAuth < Data
+      def validate: () -> void
+
+      # _@return_ — the +Authorization+ value, strict (newline-free) Base64
+      # through +Array#pack+, so no +base64+ require
+      def header: () -> String
+
+      # _@return_ — non-blank
+      attr_reader username: String
+
+      attr_reader password: String
+    end
+
+    # One +[[code.mcp]]+ table as the file writes it; {#resolve} turns it into
+    # an {McpServer}.
+    # 
+    # +bearer_token+ and +basic_auth+ are sugar for an +Authorization+ header,
+    # so they exclude each other and an +Authorization+ entry in +headers+.
+    # 
+    # @!attribute [r] id
+    #   @return [String] see {McpServer#id}
+    # @!attribute [r] command
+    #   @return [Array<String>, nil] see {McpServer#command}
+    # @!attribute [r] url
+    #   @return [String, nil] see {McpServer#url}
+    # @!attribute [r] bearer_token
+    #   @return [String, nil] becomes +Authorization: Bearer …+
+    # @!attribute [r] basic_auth
+    #   @return [BasicAuth, nil] becomes +Authorization: Basic …+
+    # @!attribute [r] headers
+    #   @return [Hash{String => String}, nil] extra HTTP headers, sent verbatim
+    # @!attribute [r] env
+    #   @return [Hash{String => String}, nil] see {McpServer#env}
+    class McpTable < Data
+      # _@param_ `id` — see {#id}
+      # 
+      # _@param_ `command` — see {#command}
+      # 
+      # _@param_ `url` — see {#url}
+      # 
+      # _@param_ `bearer_token` — see {#bearer_token}
+      # 
+      # _@param_ `basic_auth` — see {#basic_auth}
+      # 
+      # _@param_ `headers` — see {#headers}
+      # 
+      # _@param_ `env` — see {#env}
+      def initialize: (
+                        id: String,
+                        ?command: ::Array[String]?,
+                        ?url: String?,
+                        ?bearer_token: String?,
+                        ?basic_auth: BasicAuth?,
+                        ?headers: ::Hash[String, String]?,
+                        ?env: ::Hash[String, String]?
+                      ) -> void
+
+      # _@param_ `raw` — see {Server.entry_name}
+      # 
+      # _@return_ — its +id+, stripped
+      def self.entry_name: (::Hash[String, Object] raw) -> String
+
+      def validate: () -> void
+
+      # _@return_ — this entry with its auth sugar folded into +headers+
+      def resolve: () -> McpServer
+
+      # _@return_ — see {McpServer#id}
+      attr_reader id: String
+
+      # _@return_ — see {McpServer#command}
+      attr_reader command: ::Array[String]?
+
+      # _@return_ — see {McpServer#url}
+      attr_reader url: String?
+
+      # _@return_ — becomes +Authorization: Bearer …+
+      attr_reader bearer_token: String?
+
+      # _@return_ — becomes +Authorization: Basic …+
+      attr_reader basic_auth: BasicAuth?
+
+      # _@return_ — extra HTTP headers, sent verbatim
+      attr_reader headers: ::Hash[String, String]?
+
+      # _@return_ — see {McpServer#env}
+      attr_reader env: ::Hash[String, String]?
+    end
+
+    # The +[code]+ table.
+    # 
+    # @!attribute [r] sandbox
+    #   @return [Boolean] see {Config#sandbox}; +overrides:+ outrank it
+    # @!attribute [r] confirm
+    #   @return [Boolean] see {Config#confirm}; +overrides:+ outrank it
+    # @!attribute [r] mcp
+    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries
+    class CodeTable < Data
+      # _@param_ `sandbox` — see {#sandbox}
+      # 
+      # _@param_ `confirm` — see {#confirm}
+      # 
+      # _@param_ `mcp` — see {#mcp}
+      def initialize: (?sandbox: bool, ?confirm: bool, ?mcp: ::Array[McpTable]) -> void
+
+      # _@return_ — see {Config#sandbox}; +overrides:+ outrank it
+      attr_reader sandbox: bool
+
+      # _@return_ — see {Config#confirm}; +overrides:+ outrank it
+      attr_reader confirm: bool
+
+      # _@return_ — the +[[code.mcp]]+ entries
+      attr_reader mcp: ::Array[McpTable]
+    end
+
+    # The +[ui]+ table, its unread keys already dropped (the class header has
+    # the why).
+    # 
+    # @!attribute [r] show_thinking
+    #   @return [Boolean] see {Config#show_thinking}
+    # @!attribute [r] tool_lines
+    #   @return [String] see {Config#tool_lines}; any String, its vocabulary
+    #     being pikuri-tui's
+    class UiTable < Data
+      # _@param_ `show_thinking` — see {#show_thinking}
+      # 
+      # _@param_ `tool_lines` — see {#tool_lines}
+      def initialize: (?show_thinking: bool, ?tool_lines: String) -> void
+
+      # _@return_ — see {Config#show_thinking}
+      attr_reader show_thinking: bool
+
+      # _@return_ — see {Config#tool_lines}; any String, its vocabulary
+      # being pikuri-tui's
+      attr_reader tool_lines: String
+    end
+
+    # The +[titler]+ table.
+    # 
+    # @!attribute [r] llm
+    #   @return [String] the {Llm#name} titles are written on; non-blank
+    class TitlerTable < Data
+      def validate: () -> void
+
+      # _@return_ — the {Llm#name} titles are written on; non-blank
+      attr_reader llm: String
+    end
+
+    # The whole file, every table at its default when the file leaves it out.
+    # 
+    # @!attribute [r] server
+    #   @return [Array<Server>] the +[[server]]+ entries
+    # @!attribute [r] llm
+    #   @return [Array<LlmTable>] the +[[llm]]+ entries
+    # @!attribute [r] search
+    #   @return [Search] the +[search]+ table
+    # @!attribute [r] code
+    #   @return [CodeTable] the +[code]+ table
+    # @!attribute [r] ui
+    #   @return [UiTable] the +[ui]+ table
+    # @!attribute [r] titler
+    #   @return [TitlerTable, nil] the +[titler]+ table; +nil+ switches titling off
+    # @!attribute [r] web
+    #   @return [Credentials, nil] the +[web]+ table; +nil+ switches the gate off
+    class Root < Data
+      # _@param_ `server` — see {#server}
+      # 
+      # _@param_ `llm` — see {#llm}
+      # 
+      # _@param_ `search` — see {#search}
+      # 
+      # _@param_ `code` — see {#code}
+      # 
+      # _@param_ `ui` — see {#ui}
+      # 
+      # _@param_ `titler` — see {#titler}
+      # 
+      # _@param_ `web` — see {#web}
+      def initialize: (
+                        ?server: ::Array[Server],
+                        ?llm: ::Array[LlmTable],
+                        ?search: Search,
+                        ?code: CodeTable,
+                        ?ui: UiTable,
+                        ?titler: TitlerTable?,
+                        ?web: Credentials?
+                      ) -> void
+
+      def validate: () -> void
+
+      # _@return_ — the +[[server]]+ entries
+      attr_reader server: ::Array[Server]
+
+      # _@return_ — the +[[llm]]+ entries
+      attr_reader llm: ::Array[LlmTable]
+
+      # _@return_ — the +[search]+ table
+      attr_reader search: Search
+
+      # _@return_ — the +[code]+ table
+      attr_reader code: CodeTable
+
+      # _@return_ — the +[ui]+ table
+      attr_reader ui: UiTable
+
+      # _@return_ — the +[titler]+ table; +nil+ switches titling off
+      attr_reader titler: TitlerTable?
+
+      # _@return_ — the +[web]+ table; +nil+ switches the gate off
+      attr_reader web: Credentials?
     end
   end
 

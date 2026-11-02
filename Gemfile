@@ -58,10 +58,17 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 # the machine. Pure Ruby, parse-only (we only ever READ config, never
 # serialize), with ZERO runtime dependencies — chosen over toml-rb after
 # vetting: toml-rb pulls in citrus, which was last released in 2015 and
-# ships no license. tomlrb is MIT and actively maintained. We parse TOML
-# into a Hash and validate that Hash by hand (the schema is tiny); no
-# JSON Schema gem.
+# ships no license. tomlrb is MIT and actively maintained. typemap, below,
+# checks the parsed Hash; no JSON Schema gem.
 gem 'tomlrb', '~> 3.0'
+
+# Maps the parsed TOML onto PikuriWeb::Config's Data classes, checking every
+# value against the type its YARD tag gives. Typemap reads those types from
+# sig/pikuri_web.rbs through rbs's parser, so rbs is a runtime gem here (about
+# 0.2 s of `require` at boot). On typemap's git main until its first release,
+# the same pin pikuri-tui rides.
+gem 'rbs', '~> 4.2'
+gem 'typemap', git: 'https://github.com/mvysny/typemap.git', branch: 'main'
 
 # Thread pool for agent turns. A turn blocks on the LLM for minutes, so it
 # runs as a job on an executor rather than on a Sinatra request thread —

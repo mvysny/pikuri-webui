@@ -191,7 +191,8 @@ file carries its own admission rule.
   file per feature beside it, and `dom.js` knows no markup at all.
 - `public/` otherwise — the static root, served at the URL root: `style.css` holds both layouts
   off one 40rem breakpoint, and `images/` the mascot plus the set `bin/regen-icons` plates.
-- `sig/pikuri_web.rbs` — generated from the YARD tags by `rake sig`, never edited by hand.
+- `sig/pikuri_web.rbs` — generated from the YARD tags by `rake sig`, never edited by hand;
+  {Config} reads its types at runtime (`D_config_through_typemap`).
 - `spec/pikuri_web/` — mirrors `lib/pikuri_web/`, namespace folders included; the specs that
   cross namespaces on purpose sit at its root.
 
@@ -237,7 +238,7 @@ file carries its own admission rule.
 pikuri comes from its Codeberg repo at the commit `Gemfile.lock` pins; no sibling checkout
 is needed. To edit both repos together, point Bundler's per-machine local override at one.
 
-- `bundle exec rake check` — the full check (the spec suite, the sord signatures, rubocop,
+- `bundle exec rake check` — the full check (the sord signatures, the spec suite, rubocop,
   the doc tripwires), the default task, the cross-repo standard entry point, and what
   `.woodpecker.yml` runs.
 - `bundle exec rspec spec/pikuri_web/web/app_spec.rb` — one file; `-e 'name'` for one example.

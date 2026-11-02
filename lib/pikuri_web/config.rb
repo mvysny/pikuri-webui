@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'tomlrb'
+require 'typemap'
 
 module PikuriWeb
   # The `~/.config/pikuri/config.toml` model connections and provider
@@ -10,9 +11,6 @@ module PikuriWeb
   #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
   #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
-  #
-  # Every load failure — unreadable file, malformed TOML, schema
-  # violation — raises {Error}, naming the offending key.
   #
   # == +[[server]]+ and +[[llm]]+
   #
@@ -60,6 +58,11 @@ module PikuriWeb
   # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
   # the file from then on (+D_ui_cookie_over_config+).
   #
+  # pikuri-tui owns what grows in this table, so it is the one table that is
+  # lenient: a key this shell does not read is logged and dropped before the
+  # mapping, and +tool_lines+ is checked to be a String, never against a list
+  # of forms (+D_schema_complete_config+).
+  #
   # == The +[titler]+ table, and +[[llm]]+ +params+
   #
   #   [[llm]]
@@ -82,7 +85,7 @@ module PikuriWeb
   # verbatim — a passthrough rather than a +thinking = false+ boolean, because
   # the wire spelling differs per provider *and* per chat template. Only the
   # shape is checked here; what the keys *mean* is the server's to say, the
-  # same bargain {.build_search} takes with +engines+.
+  # same bargain {Search#engines} takes.
   #
   # == The +[web]+ table
   #
@@ -117,28 +120,56 @@ module PikuriWeb
   # would be git-committable, and a literal {Llm#api_key} or {Search}
   # provider key must not live where a commit can carry it off.
   #
+  # == Errors
+  #
+  # Every load failure — unreadable file, malformed TOML, schema violation —
+  # raises {Error}. A schema message starts with the offending value's path,
+  # an array entry named after its index by its +entry_name+:
+  #
+  #   llm[1] "Grok 4 Fast".context_window: must be at least 1, got 0
+  #   server: expected Array[Server], got a single Server; write [[server]], not [server]
+  #
   # == Implementation details
+  #
+  # Typemap maps the merged TOML onto {Root} and the classes nested in it,
+  # checking every value against the type its YARD tag gives — read back at
+  # runtime from +sig/pikuri_web.rbs+, which +rake sig+ generates, so a stale
+  # +sig/+ means stale config types (+D_config_through_typemap+). A class's
+  # +validate+ adds what a type can't say: non-blank names, "exactly one of
+  # +command+ / +url+", unique ids. {.load} then resolves the file's shape
+  # into the values the app reads: each {LlmTable} with its {Server} looked up
+  # becomes an {Llm}, each {McpTable} with its auth sugar folded into
+  # +headers+ becomes an {McpServer}. {Server}, {Search} and {Credentials}
+  # already match the file and pass through.
   #
   # The schema is the *whole* pikuri-shell schema, not the subset this host
   # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
-  # with nothing wired to them.
-  # Trimming it would break the file: pikuri-tui writes +[code]+ /
-  # +[[code.mcp]]+ / +[ui]+ into the same path, and {.load} raises on an
-  # unknown top-level key.
+  # with nothing wired to them. Trimming it would break the file: pikuri-tui
+  # writes +[code]+ / +[[code.mcp]]+ / +[ui]+ into the same path, and an
+  # unknown top-level key raises.
   #
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
   # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
   # match +Tool::WebSearch.build+'s and {McpServer}'s match
   # +Mcp::Registry+'s entries, which keeps the bin's translation a
-  # pass-through; +bearer_token+ / +basic_auth+ resolve into
-  # {McpServer#headers} here so that stays true.
+  # pass-through.
   #
   # Immutable.
   class Config
     # Raised for any unreadable / malformed / schema-invalid config file.
     # Carries a human-readable message naming the offending key or file.
     class Error < StandardError; end
+
+    # @return [Boolean] sandbox on unless a file says otherwise.
+    DEFAULT_SANDBOX = true
+    # @return [Boolean] confirm on unless a file says otherwise.
+    DEFAULT_CONFIRM = true
+    # @return [Boolean] reasoning blocks are shown unless +[ui]+ says otherwise.
+    DEFAULT_SHOW_THINKING = true
+    # @return [Symbol] the tool-line form to start on. Matches pikuri-tui's
+    #   default so one file means one look in both shells.
+    DEFAULT_TOOL_LINES = :short
 
     # One inference server: what is true of the box rather than of a model
     # running on it, referenced by {#id} from any number of +[[llm]]+ entries
@@ -164,7 +195,30 @@ module PikuriWeb
     #     let pikuri's +/props+ probe size it from the box's own
     #     +total_slots+. 1 is the recommended value and the probe's answer is
     #     usually not — see +D_max_concurrent_requests+.
-    Server = Data.define(:id, :url, :api_key, :max_concurrent_requests)
+    Server = Data.define(:id, :url, :api_key, :max_concurrent_requests) do
+      extend Typemap::Constrain
+
+      constrain :max_concurrent_requests, in: (1..)
+
+      # @param id [String] see {#id}
+      # @param url [String] see {#url}
+      # @param api_key [String, nil] see {#api_key}
+      # @param max_concurrent_requests [Integer, nil] see {#max_concurrent_requests}
+      def initialize(id:, url:, api_key: nil, max_concurrent_requests: nil) = super
+
+      # Names the entry in a schema error, +server[1] "grok".url: required+.
+      #
+      # @param raw [Hash{String => Object}] the entry as the file wrote it, unchecked
+      # @return [String] its +id+, stripped; blank, missing included, leaves the
+      #   bare index, since +server[1] "  "+ names nothing
+      def self.entry_name(raw) = raw['id'].to_s.strip
+
+      # @return [void]
+      # @raise [RuntimeError] on a blank +id+ or +url+
+      def validate
+        %i[id url].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
+      end
+    end
 
     # One model connection: a +[[llm]]+ entry with its +[[server]]+ already
     # resolved into it, so nothing downstream has to hold the reference. The
@@ -208,8 +262,8 @@ module PikuriWeb
     # but wired to nothing — this host binds no MCP tools yet.
     #
     # +bearer_token+ / +basic_auth+ are TOML-level sugar rather than
-    # fields: {.build_mcp_headers} folds them into {#headers} at load time,
-    # so this exposes only the one hash +Registry::HttpEntry+ consumes 1:1.
+    # fields: {McpTable#resolve} folds them into {#headers}, so this exposes
+    # only the one hash +Registry::HttpEntry+ consumes 1:1.
     #
     # @!attribute [r] id
     #   @return [String] unique id the LLM uses to call +mcp_connect+.
@@ -259,7 +313,8 @@ module PikuriWeb
     #     keys. A *set*, not a preference order: pikuri shuffles per query, so
     #     +["brave", "duckduckgo"]+ splits traffic between the two rather than
     #     preferring Brave. Only the shape is checked here — an unknown name
-    #     or an engine named without its key is pikuri's refusal.
+    #     or an engine named without its key is pikuri's refusal, so no engine
+    #     list here can rot.
     Search = Data.define(:brave_key, :exa_key, :engines) do
       # @param brave_key [String, nil] see {#brave_key}
       # @param exa_key [String, nil] see {#exa_key}
@@ -270,14 +325,226 @@ module PikuriWeb
     end
 
     # The +[web]+ table's pair, checked against the +Authorization+ header of
-    # every request (+D_one_password_gate+).
+    # every request (+D_one_password_gate+). Both keys are required: a
+    # half-written table resolving to no gate would gate nothing and say
+    # nothing.
     #
     # @!attribute [r] user
-    #   @return [String] the name the browser's own prompt asks for.
+    #   @return [String] the name the browser's own prompt asks for; non-blank.
     # @!attribute [r] password
     #   @return [String] the password, stored literally — the same file and the
-    #     same +chmod 600+ advisory a +[[server]]+ api_key earns.
-    Credentials = Data.define(:user, :password)
+    #     same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
+    Credentials = Data.define(:user, :password) do
+      # @return [void]
+      # @raise [RuntimeError] on a blank +user+ or +password+
+      def validate
+        %i[user password].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
+      end
+    end
+
+    # One +[[llm]]+ table as the file writes it; {.load} resolves it into an {Llm}.
+    #
+    # @!attribute [r] name
+    #   @return [String] see {Llm#name}
+    # @!attribute [r] server
+    #   @return [String] the {Server#id} this model runs on
+    # @!attribute [r] model
+    #   @return [String] see {Llm#model}
+    # @!attribute [r] api_key
+    #   @return [String, nil] never valid here: read only so {.load} can name the
+    #     +[[server]]+ it belongs on, where an unknown-key error would not
+    # @!attribute [r] context_window
+    #   @return [Integer, nil] see {Llm#context_window}
+    # @!attribute [r] params
+    #   @return [Hash{String => Object}] see {Llm#params}; checked to be a table,
+    #     its contents the server's business
+    LlmTable = Data.define(:name, :server, :model, :api_key, :context_window, :params) do
+      extend Typemap::Constrain
+
+      constrain :context_window, in: (1..)
+
+      # @param name [String] see {#name}
+      # @param server [String] see {#server}
+      # @param model [String] see {#model}
+      # @param api_key [String, nil] see {#api_key}
+      # @param context_window [Integer, nil] see {#context_window}
+      # @param params [Hash{String => Object}] see {#params}
+      def initialize(name:, server:, model:, api_key: nil, context_window: nil, params: {}) = super
+
+      # @param raw [Hash{String => Object}] see {Server.entry_name}
+      # @return [String] its +name+, stripped
+      def self.entry_name(raw) = raw['name'].to_s.strip
+
+      # @return [void]
+      # @raise [RuntimeError] on a blank +name+, +server+ or +model+
+      def validate
+        %i[name server model].each { |key| raise "`#{key}` must not be blank" if public_send(key).strip.empty? }
+      end
+    end
+
+    # A +[[code.mcp]]+ entry's +basic_auth+ table.
+    #
+    # @!attribute [r] username
+    #   @return [String] non-blank
+    # @!attribute [r] password
+    #   @return [String]
+    BasicAuth = Data.define(:username, :password) do
+      # @return [void]
+      # @raise [RuntimeError] on a blank +username+
+      def validate
+        raise '`username` must not be blank' if username.strip.empty?
+      end
+
+      # @return [String] the +Authorization+ value, strict (newline-free) Base64
+      #   through +Array#pack+, so no +base64+ require
+      def header = "Basic #{["#{username}:#{password}"].pack('m0')}"
+    end
+
+    # One +[[code.mcp]]+ table as the file writes it; {#resolve} turns it into
+    # an {McpServer}.
+    #
+    # +bearer_token+ and +basic_auth+ are sugar for an +Authorization+ header,
+    # so they exclude each other and an +Authorization+ entry in +headers+.
+    #
+    # @!attribute [r] id
+    #   @return [String] see {McpServer#id}
+    # @!attribute [r] command
+    #   @return [Array<String>, nil] see {McpServer#command}
+    # @!attribute [r] url
+    #   @return [String, nil] see {McpServer#url}
+    # @!attribute [r] bearer_token
+    #   @return [String, nil] becomes +Authorization: Bearer …+
+    # @!attribute [r] basic_auth
+    #   @return [BasicAuth, nil] becomes +Authorization: Basic …+
+    # @!attribute [r] headers
+    #   @return [Hash{String => String}, nil] extra HTTP headers, sent verbatim
+    # @!attribute [r] env
+    #   @return [Hash{String => String}, nil] see {McpServer#env}
+    McpTable = Data.define(:id, :command, :url, :bearer_token, :basic_auth, :headers, :env) do
+      # @param id [String] see {#id}
+      # @param command [Array<String>, nil] see {#command}
+      # @param url [String, nil] see {#url}
+      # @param bearer_token [String, nil] see {#bearer_token}
+      # @param basic_auth [BasicAuth, nil] see {#basic_auth}
+      # @param headers [Hash{String => String}, nil] see {#headers}
+      # @param env [Hash{String => String}, nil] see {#env}
+      def initialize(id:, command: nil, url: nil, bearer_token: nil, basic_auth: nil, headers: nil, env: nil) = super
+
+      # @param raw [Hash{String => Object}] see {Server.entry_name}
+      # @return [String] its +id+, stripped
+      def self.entry_name(raw) = raw['id'].to_s.strip
+
+      # @return [void]
+      # @raise [RuntimeError] on a stdio/HTTP mix-up, a blank value, or two
+      #   sources for +Authorization+
+      def validate
+        raise '`id` must not be blank' if id.strip.empty?
+        raise 'set exactly one of `command` (stdio) or `url` (http)' unless command.nil? ^ url.nil?
+        raise '`command` must not be empty' if command && command.empty?
+        raise '`url` must not be blank' if url&.strip&.empty?
+
+        http_only = { bearer_token:, basic_auth:, headers: }.compact.keys
+        if command && !http_only.empty?
+          raise "#{http_only.map { |k| "`#{k}`" }.join(', ')} apply only to HTTP servers (set `url`, not `command`)"
+        end
+        raise '`env` applies only to stdio servers (set `command`, not `url`)' if url && env
+        raise 'set at most one of `bearer_token` or `basic_auth`' if bearer_token && basic_auth
+        raise '`bearer_token` must not be blank' if bearer_token&.strip&.empty?
+        return unless (bearer_token || basic_auth) && headers&.keys&.any? { |k| k.casecmp?('Authorization') }
+
+        raise '`bearer_token`/`basic_auth` conflicts with an `Authorization` entry in `headers` — set only one'
+      end
+
+      # @return [McpServer] this entry with its auth sugar folded into +headers+
+      def resolve
+        auth = bearer_token ? "Bearer #{bearer_token}" : basic_auth&.header
+        all_headers = headers || {}
+        all_headers = all_headers.merge('Authorization' => auth) if auth
+        McpServer.new(id:, command:, url:, headers: all_headers, env: env || {})
+      end
+    end
+
+    # The +[code]+ table.
+    #
+    # @!attribute [r] sandbox
+    #   @return [Boolean] see {Config#sandbox}; +overrides:+ outrank it
+    # @!attribute [r] confirm
+    #   @return [Boolean] see {Config#confirm}; +overrides:+ outrank it
+    # @!attribute [r] mcp
+    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries
+    CodeTable = Data.define(:sandbox, :confirm, :mcp) do
+      # @param sandbox [Boolean] see {#sandbox}
+      # @param confirm [Boolean] see {#confirm}
+      # @param mcp [Array<McpTable>] see {#mcp}
+      def initialize(sandbox: DEFAULT_SANDBOX, confirm: DEFAULT_CONFIRM, mcp: []) = super
+    end
+
+    # The +[ui]+ table, its unread keys already dropped (the class header has
+    # the why).
+    #
+    # @!attribute [r] show_thinking
+    #   @return [Boolean] see {Config#show_thinking}
+    # @!attribute [r] tool_lines
+    #   @return [String] see {Config#tool_lines}; any String, its vocabulary
+    #     being pikuri-tui's
+    UiTable = Data.define(:show_thinking, :tool_lines) do
+      # @param show_thinking [Boolean] see {#show_thinking}
+      # @param tool_lines [String] see {#tool_lines}
+      def initialize(show_thinking: DEFAULT_SHOW_THINKING, tool_lines: DEFAULT_TOOL_LINES.to_s) = super
+    end
+
+    # The +[titler]+ table.
+    #
+    # @!attribute [r] llm
+    #   @return [String] the {Llm#name} titles are written on; non-blank
+    TitlerTable = Data.define(:llm) do
+      # @return [void]
+      # @raise [RuntimeError] on a blank +llm+
+      def validate
+        raise '`llm` must not be blank' if llm.strip.empty?
+      end
+    end
+
+    # The whole file, every table at its default when the file leaves it out.
+    #
+    # @!attribute [r] server
+    #   @return [Array<Server>] the +[[server]]+ entries
+    # @!attribute [r] llm
+    #   @return [Array<LlmTable>] the +[[llm]]+ entries
+    # @!attribute [r] search
+    #   @return [Search] the +[search]+ table
+    # @!attribute [r] code
+    #   @return [CodeTable] the +[code]+ table
+    # @!attribute [r] ui
+    #   @return [UiTable] the +[ui]+ table
+    # @!attribute [r] titler
+    #   @return [TitlerTable, nil] the +[titler]+ table; +nil+ switches titling off
+    # @!attribute [r] web
+    #   @return [Credentials, nil] the +[web]+ table; +nil+ switches the gate off
+    Root = Data.define(:server, :llm, :search, :code, :ui, :titler, :web) do
+      # @param server [Array<Server>] see {#server}
+      # @param llm [Array<LlmTable>] see {#llm}
+      # @param search [Search] see {#search}
+      # @param code [CodeTable] see {#code}
+      # @param ui [UiTable] see {#ui}
+      # @param titler [TitlerTable, nil] see {#titler}
+      # @param web [Credentials, nil] see {#web}
+      def initialize(server: [], llm: [], search: Search.new, code: CodeTable.new, ui: UiTable.new,
+                     titler: nil, web: nil)
+        super
+      end
+
+      # @return [void]
+      # @raise [RuntimeError] naming every duplicate +[[server]]+ id,
+      #   +[[llm]]+ name or +[[code.mcp]]+ id
+      def validate
+        { 'server id' => server.map(&:id), 'llm name' => llm.map(&:name), 'code.mcp id' => code.mcp.map(&:id) }
+          .each do |label, values|
+            dups = values.tally.select { |_, n| n > 1 }.keys
+            raise "duplicate #{label}(s): #{dups.join(', ')}" unless dups.empty?
+          end
+      end
+    end
 
     # The smallest file that boots — a local llama.cpp. Every "no connection
     # configured" raise quotes it, so a first run ends in a block to paste
@@ -295,16 +562,6 @@ module PikuriWeb
       model  = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
     TOML
 
-    # @return [Boolean] sandbox on unless a file says otherwise.
-    DEFAULT_SANDBOX = true
-    # @return [Boolean] confirm on unless a file says otherwise.
-    DEFAULT_CONFIRM = true
-    # @return [Boolean] reasoning blocks are shown unless +[ui]+ says otherwise.
-    DEFAULT_SHOW_THINKING = true
-    # @return [Symbol] the tool-line form to start on. Matches pikuri-tui's
-    #   default so one file means one look in both shells.
-    DEFAULT_TOOL_LINES = :short
-
     # Config file basename and the per-app subdirectory under each XDG
     # config root. Shared verbatim with pikuri-tui — same file.
     #
@@ -313,17 +570,22 @@ module PikuriWeb
     # @return [String]
     XDG_SUBDIR = 'pikuri'
 
+    # Types come from sig/ (the YARD tags, through sord), so each is written once.
+    #
+    # @return [Typemap::Mapper]
+    MAPPER = Typemap::Mapper.new(types: Typemap::Mapper::RBSTypes.new)
+    private_constant :MAPPER
+
     # Load and resolve the layered configuration.
     #
-    # @param overrides [Hash{Symbol => String, Boolean, nil}] CLI
-    #   overrides; +nil+ values are ignored (treated as "flag not given").
-    #   Recognized keys: +:sandbox+, +:confirm+ — the coding switches, for
-    #   a sibling shell that wires them (`D_chat_only_entry_point`).
-    #   Nothing about a *connection* is overridable: no server, no model
-    #   and no key. A secret must never travel on the command line
-    #   (visible in +ps+ and shell history), and server/model would be a
-    #   second source of truth for something the file already owns
-    #   (`D_schema_complete_config`).
+    # @param overrides [Hash{Symbol => Boolean, nil}] CLI overrides; +nil+
+    #   values are ignored (treated as "flag not given"). Recognized keys:
+    #   +:sandbox+, +:confirm+ — the coding switches, for a sibling shell that
+    #   wires them (`D_chat_only_entry_point`). Nothing about a *connection*
+    #   is overridable: no server, no model and no key. A secret must never
+    #   travel on the command line (visible in +ps+ and shell history), and
+    #   server/model would be a second source of truth for something the file
+    #   already owns (`D_schema_complete_config`).
     # @param env [#[]] environment consulted for +XDG_CONFIG_HOME+ /
     #   +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
     # @return [Config] the resolved configuration.
@@ -342,37 +604,23 @@ module PikuriWeb
         warn_loose_perms(path, parsed)
         merged = deep_merge(merged, parsed)
       end
-      validate_top!(merged)
 
-      servers = (merged['server'] || []).each_with_index.map { |h, i| build_server(h, i) }
-      check_unique!(servers.map(&:id), 'server id')
+      root = map(drop_unread_ui_keys(merged))
+      raise Error, no_connection_message(any_loaded, env) if root.llm.empty?
 
-      llm_tables = merged['llm'] || []
-      raise Error, no_connection_message(any_loaded, env) if llm_tables.empty?
-
-      by_id = servers.to_h { |s| [s.id, s] }
-      llms = llm_tables.each_with_index.map { |h, i| build_llm(h, i, by_id) }
-      check_unique!(llms.map(&:name), 'llm name')
-
-      code = merged['code'] || {}
-      validate_code!(code)
-      mcp = (code['mcp'] || []).each_with_index.map { |h, i| build_mcp(h, i) }
-      check_unique!(mcp.map(&:id), 'code.mcp id')
-
-      ui = merged['ui'] || {}
-      validate_ui!(ui)
-
+      by_id = root.server.to_h { |s| [s.id, s] }
+      llms = root.llm.map { |table| resolve_llm(table, by_id) }
       new(
         llms:          llms,
-        servers:       servers,
-        titler_llm:    build_titler(merged['titler'], llms),
-        credentials:   build_credentials(merged['web']),
-        search:        build_search(merged['search']),
-        sandbox:       pick(overrides[:sandbox], code['sandbox'], DEFAULT_SANDBOX),
-        confirm:       pick(overrides[:confirm], code['confirm'], DEFAULT_CONFIRM),
-        mcp:           mcp,
-        show_thinking: pick(ui['show_thinking'], DEFAULT_SHOW_THINKING),
-        tool_lines:    pick(ui['tool_lines']&.to_sym, DEFAULT_TOOL_LINES)
+        servers:       root.server,
+        titler_llm:    root.titler && resolve_titler(root.titler, llms),
+        credentials:   root.web,
+        search:        root.search,
+        sandbox:       overrides[:sandbox].nil? ? root.code.sandbox : overrides[:sandbox],
+        confirm:       overrides[:confirm].nil? ? root.code.confirm : overrides[:confirm],
+        mcp:           root.code.mcp.map(&:resolve),
+        show_thinking: root.ui.show_thinking,
+        tool_lines:    root.ui.tool_lines.to_sym
       )
     end
 
@@ -386,10 +634,8 @@ module PikuriWeb
     # @param confirm [Boolean] resolved confirmer switch (parsed, unwired).
     # @param mcp [Array<McpServer>] MCP servers (parsed, unwired; may be
     #   empty).
-    # @param show_thinking [Boolean] resolved +[ui]+ reasoning-block default
-    #   (parsed, unwired).
-    # @param tool_lines [Symbol] resolved +[ui]+ tool-line form (parsed,
-    #   unwired).
+    # @param show_thinking [Boolean] resolved +[ui]+ reasoning-block default.
+    # @param tool_lines [Symbol] resolved +[ui]+ tool-line form.
     # @param titler_llm [Llm, nil] the connection titles are written on, or
     #   +nil+ for no titling. Defaults to +nil+ so a config built in code
     #   opts in the same way a file does.
@@ -460,10 +706,9 @@ module PikuriWeb
     end
 
     # Advise (non-fatally, through {PikuriWeb.logger}) when a file carrying
-    # a literal secret (a +[[server]]+ api_key or a +[search]+ provider key)
-    # is group/other-accessible — a plaintext secret should be +chmod 600+.
-    # Only files that actually contain a secret are checked, so a
-    # world-readable but secret-free /etc/xdg config raises no noise.
+    # a literal secret is group/other-accessible — a plaintext secret should
+    # be +chmod 600+. Only files that actually contain a secret are checked,
+    # so a world-readable but secret-free /etc/xdg config raises no noise.
     #
     # @param path [String] the file +parsed+ came from
     # @param parsed [Hash{String => Object}] its raw TOML
@@ -478,13 +723,14 @@ module PikuriWeb
         "config: #{path} holds a literal secret but is group/other-accessible " \
         "(mode #{format('%04o', mode & 0o7777)}); run `chmod 600 #{path}`."
       )
-    rescue SystemCallError
-      # stat failed (race, odd filesystem) — skip the advisory, never fatal.
+    rescue SystemCallError => e
+      # A race or an odd filesystem: the advisory is a courtesy, never fatal.
+      PikuriWeb.logger.debug("config: skipped the permissions check of #{path}: #{e.message}")
     end
 
     # Reads +[[server]]+ for the key, not +[[llm]]+: this check runs per file
-    # and pre-merge, on raw TOML, so it sees the table the key is *written*
-    # in rather than the {Llm} it is later resolved into.
+    # and pre-merge, on raw TOML the schema has not checked yet, so it sees
+    # the table the key is *written* in and must not assume any table's shape.
     #
     # @param parsed [Hash{String => Object}] one file's raw TOML
     # @return [Boolean] true when the parsed file carries any literal secret
@@ -501,7 +747,8 @@ module PikuriWeb
       search = parsed['search']
       return true if search.is_a?(Hash) && (search['brave_key'] || search['exa_key'])
 
-      mcp = parsed.dig('code', 'mcp')
+      code = parsed['code']
+      mcp = code['mcp'] if code.is_a?(Hash)
       mcp.is_a?(Array) && mcp.any? do |e|
         e.is_a?(Hash) && (e['bearer_token'] || e['basic_auth'] || e['headers'] || e['env'])
       end
@@ -532,253 +779,68 @@ module PikuriWeb
       end
     end
 
+    # Log and drop the +[ui]+ keys {UiTable} has no member for, so a key
+    # pikuri-tui adds never stops this shell from booting (the class header
+    # has the why). A +ui+ that is not a table is left for the mapping to
+    # reject.
+    #
     # @param merged [Hash{String => Object}] the merged raw TOML
-    # @return [void]
-    # @raise [Error] on an unknown top-level key or a table of the wrong shape
-    def self.validate_top!(merged)
-      unknown = merged.keys - %w[server llm search code ui titler web]
-      raise Error, "unknown top-level key(s): #{unknown.join(', ')}" unless unknown.empty?
+    # @return [Hash{String => Object}] +merged+, or a copy with +ui+ trimmed
+    def self.drop_unread_ui_keys(merged)
+      ui = merged['ui']
+      return merged unless ui.is_a?(Hash)
 
-      %w[server llm].each do |k|
-        next unless merged.key?(k) && !merged[k].is_a?(Array)
+      unread = ui.keys - UiTable.members.map(&:to_s)
+      return merged if unread.empty?
 
-        raise Error, "`#{k}` must be an array of tables (use [[#{k}]], not [#{k}])"
-      end
-      raise Error, '`search` must be a table ([search])' if merged.key?('search') && !merged['search'].is_a?(Hash)
-      raise Error, '`code` must be a table ([code])' if merged.key?('code') && !merged['code'].is_a?(Hash)
-      raise Error, '`ui` must be a table ([ui])' if merged.key?('ui') && !merged['ui'].is_a?(Hash)
-      raise Error, '`web` must be a table ([web])' if merged.key?('web') && !merged['web'].is_a?(Hash)
-      return unless merged.key?('titler') && !merged['titler'].is_a?(Hash)
-
-      raise Error, '`titler` must be a table ([titler])'
+      PikuriWeb.logger.info("config: ignoring [ui] key(s) this shell does not read: #{unread.join(', ')}")
+      merged.merge('ui' => ui.except(*unread))
     end
 
-    # Resolve the +[web]+ table into the pair gating every request, or +nil+
-    # when the file has no such section — the gate off, the way no +[titler]+
-    # means no titling. Strict for the reason {.build_titler} is.
-    #
-    # Both keys are required together: a half-written table resolving to +nil+
-    # would gate nothing and say nothing, which is the one failure this feature
-    # cannot have.
-    #
-    # @param table [Hash, nil] the raw +[web]+ table.
-    # @return [Credentials, nil] the pair, or +nil+ for +table+ +nil+.
-    # @raise [Error] on an unknown key or a missing/blank +user+/+password+.
-    def self.build_credentials(table)
-      return nil if table.nil?
-
-      unknown = table.keys - %w[user password]
-      raise Error, "web: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      user     = table['user']
-      password = table['password']
-      unless non_empty_string?(user) && non_empty_string?(password)
-        raise Error, 'web: `user` and `password` are both required and must be non-empty strings'
-      end
-
-      Credentials.new(user: user, password: password)
+    # @param merged [Hash{String => Object}] the merged TOML
+    # @return [Root]
+    # @raise [Error] on any schema violation, its message starting with the
+    #   offending value's path
+    def self.map(merged)
+      MAPPER.load(Root, merged, source: :toml)
+    rescue Typemap::DataError => e
+      raise Error, e.message
     end
 
-    # Resolve +[titler] llm+ to the connection titles are written on.
-    #
-    # Strict, unlike +[ui]+: this shell is the one that consumes the table, so
-    # a key it does not know is a mistake rather than a sibling shell's
-    # business.
-    #
-    # @param table [Hash, nil] the raw +[titler]+ table; +nil+ when the file
-    #   has no such section.
-    # @param llms [Array<Llm>] every configured connection, names already
-    #   checked for uniqueness.
-    # @return [Llm, nil] the named connection, or +nil+ for +table+ +nil+ —
-    #   titling off.
-    # @raise [Error] on an unknown key, a missing or blank +llm+, or a name no
-    #   +[[llm]]+ defines.
-    def self.build_titler(table, llms)
-      return nil if table.nil?
-
-      unknown = table.keys - %w[llm]
-      raise Error, "titler: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      ref = table['llm']
-      unless non_empty_string?(ref)
-        raise Error, 'titler.llm is required and must be a non-empty string naming an [[llm]]'
-      end
-
-      found = llms.find { |llm| llm.name == ref }
-      return found if found
-
-      raise Error, "titler.llm names no [[llm]]: #{ref.inspect}; " \
-                   "known: #{llms.map { |llm| llm.name.inspect }.join(', ')}"
-    end
-
-    # Validate the +[ui]+ table, deliberately more loosely than its
-    # neighbours: an unknown key is logged and ignored, and +tool_lines+ is
-    # checked for shape but never against a list of forms.
-    #
-    # pikuri-tui owns what grows here — it defines the keys and its own +[ui]+
-    # rdoc already names the next one (+markdown+). Every strict check this
-    # method *doesn't* make is one that would reject a legal file the day the
-    # sibling shell adds a key or a third form, which is the boot failure the
-    # +ui+ entry in {.validate_top!} exists to prevent. Same bargain
-    # +search.engines+ takes; +show_thinking+ is strict because two values
-    # cannot grow.
-    #
-    # @param ui [Hash] the raw +[ui]+ table (+{}+ when the section is absent).
-    # @return [void]
-    # @raise [Error] on a non-boolean +show_thinking+ or a non-string
-    #   +tool_lines+.
-    def self.validate_ui!(ui)
-      unknown = ui.keys - %w[show_thinking tool_lines]
-      unless unknown.empty?
-        PikuriWeb.logger.info(
-          "config: ignoring [ui] key(s) this shell does not read: #{unknown.join(', ')}"
-        )
-      end
-      if ui.key?('show_thinking') && ![true, false].include?(ui['show_thinking'])
-        raise Error, 'ui.show_thinking must be true or false'
-      end
-      return unless ui.key?('tool_lines') && !ui['tool_lines'].is_a?(String)
-
-      raise Error, 'ui.tool_lines must be a string, e.g. tool_lines = "short"'
-    end
-
-    # Build the {Search} value object from the +[search]+ table (or +nil+
-    # when the section is absent — every field then defaults to +nil+).
-    #
-    # Shape only, deliberately: *which* engine names are valid, and which of
-    # them need a key, is pikuri's to say. Re-deciding it here would copy
-    # pikuri's engine list into this Pikuri-free class, to rot the next time
-    # a provider lands.
-    #
-    # @param table [Hash{String => Object}, nil] the raw +[search]+ table
-    # @return [Search]
-    # @raise [Error] on an unknown key or a value of the wrong shape
-    def self.build_search(table)
-      table ||= {}
-      unknown = table.keys - %w[brave_key exa_key engines]
-      raise Error, "search: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      %w[brave_key exa_key].each do |k|
-        raise Error, "search.#{k} must be a string" if table[k] && !table[k].is_a?(String)
-      end
-      engines = table['engines']
-      if engines && !(engines.is_a?(Array) && engines.all?(String))
-        raise Error, 'search.engines must be an array of strings, e.g. engines = ["brave"]'
-      end
-
-      Search.new(brave_key: table['brave_key'], exa_key: table['exa_key'], engines: engines)
-    end
-
-    # @param code [Hash{String => Object}] the raw +[code]+ table
-    # @return [void]
-    # @raise [Error] on an unknown key or a value of the wrong shape
-    def self.validate_code!(code)
-      unknown = code.keys - %w[sandbox confirm mcp]
-      raise Error, "code: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      %w[sandbox confirm].each do |k|
-        raise Error, "code.#{k} must be true or false" if code.key?(k) && ![true, false].include?(code[k])
-      end
-      return unless code.key?('mcp') && !code['mcp'].is_a?(Array)
-
-      raise Error, 'code.mcp must be an array of tables (use [[code.mcp]])'
-    end
-
-    # @param hash [Object] one raw +[[server]]+ entry; anything but a table raises
-    # @param index [Integer] its position, for error messages
-    # @return [Server]
-    # @raise [Error] on a malformed entry
-    def self.build_server(hash, index)
-      raise Error, "server[#{index}] must be a table" unless hash.is_a?(Hash)
-
-      unknown = hash.keys - %w[id url api_key max_concurrent_requests]
-      raise Error, "server[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      id = hash['id']
-      raise Error, "server[#{index}]: `id` is required and must be a non-empty string" unless non_empty_string?(id)
-
-      url = hash['url']
-      unless non_empty_string?(url)
-        raise Error, "server #{id.inspect}: `url` is required and must be a non-empty string"
-      end
-
-      key = hash['api_key']
-      raise Error, "server #{id.inspect}: `api_key` must be a string" if key && !key.is_a?(String)
-
-      max = hash['max_concurrent_requests']
-      if max && !(max.is_a?(Integer) && max.positive?)
-        raise Error, "server #{id.inspect}: `max_concurrent_requests` must be a positive integer"
-      end
-
-      Server.new(id: id, url: url, api_key: key, max_concurrent_requests: max)
-    end
-
-    # @param hash [Object] one raw +[[llm]]+ entry; anything but a table raises
-    # @param index [Integer] its position, for error messages
-    # @param by_id [Hash{String => Server}] every {Server} the merged file
-    #   defined
+    # @param table [LlmTable] one +[[llm]]+ entry
+    # @param by_id [Hash{String => Server}] every +[[server]]+, by id — the
+    #   whole layered set, not just the file the entry was written in
     # @return [Llm]
-    # @raise [Error] on a malformed entry or an unresolvable +server+
-    def self.build_llm(hash, index, by_id)
-      raise Error, "llm[#{index}] must be a table" unless hash.is_a?(Hash)
-
-      # +api_key+ is legal this far so that an old entry reaches the message
-      # naming where the key moved to, rather than a bare "unknown key".
-      unknown = hash.keys - %w[name server model api_key context_window params]
-      raise Error, "llm[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      name = hash['name']
-      raise Error, "llm[#{index}]: `name` is required and must be a non-empty string" unless non_empty_string?(name)
-
-      %w[server model].each do |k|
-        next if non_empty_string?(hash[k])
-
-        raise Error, "llm #{name.inspect}: `#{k}` is required and must be a non-empty string"
+    # @raise [Error] on a +server+ that resolves to nothing, or a stray +api_key+
+    def self.resolve_llm(table, by_id)
+      server = resolve_server(table.server, table.name, by_id, table.api_key)
+      if table.api_key
+        raise Error, "llm #{table.name.inspect}: `api_key` belongs on [[server]] #{server.id.inspect}, not here."
       end
-
-      cw = hash['context_window']
-      if cw && !(cw.is_a?(Integer) && cw.positive?)
-        raise Error, "llm #{name.inspect}: `context_window` must be a positive integer"
-      end
-
-      params = hash.fetch('params', {})
-      unless params.is_a?(Hash)
-        raise Error, "llm #{name.inspect}: `params` must be a table, " \
-                     'e.g. params = { chat_template_kwargs = { enable_thinking = false } }'
-      end
-
-      key = hash['api_key']
-      server = resolve_server(hash['server'], name, by_id, key)
-      raise Error, "llm #{name.inspect}: `api_key` belongs on [[server]] #{server.id.inspect}, not here." if key
 
       Llm.new(
-        name:           name,
+        name:           table.name,
         server:         server.url,
-        model:          hash['model'],
+        model:          table.model,
         api_key:        server.api_key, # nil when omitted → "not-needed" at the bin
-        context_window: cw, # nil when omitted → pikuri auto-detects
-        params:         params
+        context_window: table.context_window, # nil when omitted → pikuri auto-detects
+        params:         table.params
       )
     end
 
-    # Look up the +[[server]]+ an +[[llm]]+ names, raising a message that
-    # names the fix when there is none.
+    # Each way a reference can fail gets its own message, since with no compat
+    # path the raise *is* the whole migration. A URL in +server+ earns the most
+    # effort: it parses cleanly and fails as a *lookup*, which reads like the
+    # user's mistake rather than a key whose meaning changed. The entry's stray
+    # +api_key+ rides along into the suggested block, so one edit fixes both
+    # halves of an old file instead of two round trips.
     #
-    # There is no compatibility path for a file written before +[[server]]+
-    # existed, so each shape such a file fails in gets its own message — the
-    # raise *is* the migration. A URL left in +server+ earns the most effort:
-    # it parses cleanly and fails as a *lookup*, which reads like the user's
-    # mistake rather than like a key whose meaning changed under them.
-    #
-    # @param ref [String] the +[[llm]]+ entry's +server+ value: an +id+ to
-    #   look up, or, in an old file, a URL.
-    # @param name [String] the entry's +name+, for error messages.
-    # @param by_id [Hash{String => Server}] every {Server} the merged file
-    #   defined.
-    # @param api_key [String, nil] the entry's stray +api_key+, folded into
-    #   the suggested block so one edit fixes both halves of an old file.
-    # @return [Server] the referenced server.
-    # @raise [Error] when +ref+ resolves to nothing.
+    # @param ref [String] the entry's +server+ value
+    # @param name [String] the entry's +name+, for messages
+    # @param by_id [Hash{String => Server}] every +[[server]]+, by id
+    # @param api_key [String, nil] the entry's stray +api_key+, quoted in the migration hint
+    # @return [Server] the referenced server
+    # @raise [Error] when +ref+ names no server
     def self.resolve_server(ref, name, by_id, api_key)
       found = by_id[ref]
       return found if found
@@ -801,6 +863,19 @@ module PikuriWeb
         "#{api_key ? ', dropping its `api_key`.' : '.'}"
     end
 
+    # @param table [TitlerTable] the +[titler]+ table
+    # @param llms [Array<Llm>] every configured connection, names already
+    #   checked for uniqueness.
+    # @return [Llm] the connection +table+ names
+    # @raise [Error] on a name no +[[llm]]+ defines
+    def self.resolve_titler(table, llms)
+      found = llms.find { |llm| llm.name == table.llm }
+      return found if found
+
+      raise Error, "titler.llm names no [[llm]]: #{table.llm.inspect}; " \
+                   "known: #{llms.map { |llm| llm.name.inspect }.join(', ')}"
+    end
+
     # Covers both "no config file at all" and "a file that defines no
     # connection" — the same hole with the same fix, so one message with the
     # path to write it to.
@@ -815,163 +890,8 @@ module PikuriWeb
         "Write #{candidate_paths(env).last}:\n\n#{EXAMPLE_CONFIG}"
     end
 
-    # @param hash [Object] one raw +[[code.mcp]]+ entry; anything but a table
-    #   raises
-    # @param index [Integer] its position, for error messages
-    # @return [McpServer]
-    # @raise [Error] on a malformed entry
-    def self.build_mcp(hash, index)
-      raise Error, "code.mcp[#{index}] must be a table" unless hash.is_a?(Hash)
-
-      unknown = hash.keys - %w[id command url bearer_token basic_auth headers env]
-      raise Error, "code.mcp[#{index}]: unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      id = hash['id']
-      raise Error, "code.mcp[#{index}]: `id` is required and must be a non-empty string" unless non_empty_string?(id)
-
-      command = hash['command']
-      url     = hash['url']
-      unless command.nil? ^ url.nil?
-        raise Error, "code.mcp #{id.inspect}: set exactly one of `command` (stdio) or `url` (http)"
-      end
-      if command && !(command.is_a?(Array) && !command.empty? && command.all?(String))
-        raise Error, "code.mcp #{id.inspect}: `command` must be a non-empty array of strings"
-      end
-      raise Error, "code.mcp #{id.inspect}: `url` must be a non-empty string" if url && !non_empty_string?(url)
-
-      auth_keys = hash.keys & %w[bearer_token basic_auth headers]
-      if command && !auth_keys.empty?
-        raise Error, "code.mcp #{id.inspect}: #{auth_keys.map { |k| "`#{k}`" }.join(', ')} apply only to " \
-                     'HTTP servers (set `url`, not `command`)'
-      end
-      if url && hash.key?('env')
-        raise Error, "code.mcp #{id.inspect}: `env` applies only to stdio servers (set `command`, not `url`)"
-      end
-
-      McpServer.new(
-        id:      id,
-        command: command,
-        url:     url,
-        headers: build_mcp_headers(hash, id),
-        env:     build_mcp_env(hash, id)
-      )
-    end
-
-    # Validate and return a stdio MCP entry's +env+ table (a
-    # +Hash{String => String}+ merged over the subprocess's inherited
-    # environment), or +{}+ when absent.
-    #
-    # @param hash [Hash] the raw +[[code.mcp]]+ table.
-    # @param id [String] the entry id, for error messages.
-    # @return [Hash{String => String}] the env overrides (empty when none).
-    # @raise [Error] when +env+ is not a table of string => string.
-    def self.build_mcp_env(hash, id)
-      env = hash['env']
-      return {} if env.nil?
-      unless env.is_a?(Hash) && env.all? { |k, v| k.is_a?(String) && v.is_a?(String) }
-        raise Error, "code.mcp #{id.inspect}: `env` must be a table of string => string"
-      end
-
-      env
-    end
-
-    # Resolve an HTTP MCP entry's auth/custom keys into the single
-    # +Hash{String => String}+ +HttpEntry+ consumes. +bearer_token+ and
-    # +basic_auth+ are convenience sugar that both yield an +Authorization+
-    # header, so they are mutually exclusive and also conflict with an
-    # explicit +Authorization+ inside +headers+; the +headers+ table carries
-    # arbitrary extras verbatim.
-    #
-    # @param hash [Hash] the raw +[[code.mcp]]+ table.
-    # @param id [String] the entry id, for error messages.
-    # @return [Hash{String => String}] the merged headers (empty when none).
-    # @raise [Error] on a malformed +headers+/+bearer_token+/+basic_auth+
-    #   value or an +Authorization+ conflict.
-    def self.build_mcp_headers(hash, id)
-      headers = {}
-
-      custom = hash['headers']
-      unless custom.nil?
-        unless custom.is_a?(Hash) && custom.all? { |k, v| k.is_a?(String) && v.is_a?(String) }
-          raise Error, "code.mcp #{id.inspect}: `headers` must be a table of string => string"
-        end
-
-        headers.merge!(custom)
-      end
-
-      bearer = hash['bearer_token']
-      basic  = hash['basic_auth']
-      raise Error, "code.mcp #{id.inspect}: set at most one of `bearer_token` or `basic_auth`" if bearer && basic
-
-      auth =
-        if bearer
-          unless non_empty_string?(bearer)
-            raise Error, "code.mcp #{id.inspect}: `bearer_token` must be a non-empty string"
-          end
-
-          "Bearer #{bearer}"
-        elsif basic
-          build_basic_auth(basic, id)
-        end
-      return headers unless auth
-
-      if headers.keys.any? { |k| k.casecmp?('Authorization') }
-        raise Error, "code.mcp #{id.inspect}: `bearer_token`/`basic_auth` conflicts with an `Authorization` " \
-                     'entry in `headers` — set only one'
-      end
-      headers['Authorization'] = auth
-      headers
-    end
-
-    # Build the +Authorization: Basic+ value from a +basic_auth+ table.
-    # Encodes +username:password+ with strict (newline-free) Base64 via
-    # +Array#pack+ so no +base64+ require is needed.
-    #
-    # @param basic [Object] the raw +basic_auth+ value (expected a table).
-    # @param id [String] the entry id, for error messages.
-    # @return [String] the full +"Basic <base64>"+ header value.
-    # @raise [Error] when +basic_auth+ is not a table with a non-empty
-    #   +username+ and a +password+ string.
-    def self.build_basic_auth(basic, id)
-      raise Error, "code.mcp #{id.inspect}: `basic_auth` must be a table" unless basic.is_a?(Hash)
-
-      unknown = basic.keys - %w[username password]
-      raise Error, "code.mcp #{id.inspect}: basic_auth unknown key(s): #{unknown.join(', ')}" unless unknown.empty?
-
-      username = basic['username']
-      password = basic['password']
-      unless non_empty_string?(username) && password.is_a?(String)
-        raise Error, "code.mcp #{id.inspect}: `basic_auth` needs a non-empty `username` and a `password` string"
-      end
-
-      "Basic #{["#{username}:#{password}"].pack('m0')}"
-    end
-
-    # First non-nil value — precedence resolution that treats +false+ as a
-    # real value (so a +sandbox = false+ in a file is not skipped).
-    #
-    # @param values [Array<Object>] candidates, highest priority first
-    # @return [Object] the first non-nil one, or +nil+ when all are
-    def self.pick(*values) = values.find { |v| !v.nil? }
-
-    # @param values [Array<String>] the ids or names to check
-    # @param label [String] what they are, for the error message
-    # @return [void]
-    # @raise [Error] naming every duplicate
-    def self.check_unique!(values, label)
-      dups = values.tally.select { |_, n| n > 1 }.keys
-      raise Error, "duplicate #{label}(s): #{dups.join(', ')}" unless dups.empty?
-    end
-
-    # @param value [Object] a raw TOML value
-    # @return [Boolean] whether it is a string with a non-blank character
-    def self.non_empty_string?(value) = value.is_a?(String) && !value.strip.empty?
-
     private_class_method :candidate_paths, :warn_loose_perms, :holds_secret?, :parse_file, :deep_merge,
-                         :validate_top!, :validate_code!, :validate_ui!, :build_server, :build_llm,
-                         :resolve_server, :server_is_now_an_id, :no_connection_message,
-                         :build_mcp, :build_mcp_headers, :build_credentials,
-                         :build_basic_auth, :build_mcp_env, :build_search,
-                         :pick, :check_unique!, :non_empty_string?
+                         :drop_unread_ui_keys, :map, :resolve_llm, :resolve_server, :server_is_now_an_id,
+                         :resolve_titler, :no_connection_message
   end
 end

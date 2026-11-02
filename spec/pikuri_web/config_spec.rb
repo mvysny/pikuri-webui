@@ -385,22 +385,28 @@ describe PikuriWeb::Config do
 
     it 'rejects an empty [titler] table' do
       e = assert_raises(described_class::Error) { load_with("[titler]\n") }
-      assert_includes e.message, 'titler.llm is required'
+      assert_includes e.message, 'titler.llm: required'
+    end
+
+    it 'rejects a blank titler.llm, which a type alone would let through' do
+      e = assert_raises(described_class::Error) { load_with("[titler]\nllm = \"  \"\n") }
+      assert_includes e.message, 'titler: `llm` must not be blank'
     end
 
     it 'rejects an unknown [titler] key' do
       e = assert_raises(described_class::Error) { load_with("[titler]\nllm = \"Local\"\nmodel = \"x\"\n") }
-      assert_includes e.message, 'titler: unknown key(s): model'
+      assert_includes e.message, 'titler.model: unknown key'
     end
 
     it 'rejects titler written as an array of tables' do
       e = assert_raises(described_class::Error) { load_with("[[titler]]\nllm = \"Local\"\n") }
-      assert_includes e.message, '`titler` must be a table ([titler])'
+      assert_includes e.message, 'titler: expected TitlerTable, got an array of one TitlerTable; ' \
+                                 'write [titler], not [[titler]]'
     end
 
     it 'rejects params that is not a table' do
       e = assert_raises(described_class::Error) { load_with("params = \"enable_thinking=false\"\n") }
-      assert_includes e.message, '`params` must be a table'
+      assert_includes e.message, 'llm[0] "Local".params: expected Hash[String, Object]'
     end
   end
 
@@ -426,27 +432,29 @@ describe PikuriWeb::Config do
     end
 
     it 'rejects a [web] table missing either half' do
-      ["[web]\nuser = \"mavi\"\n", "[web]\npassword = \"a long passphrase\"\n", "[web]\n"].each do |body|
+      { "[web]\nuser = \"mavi\"\n" => 'web.password: required',
+        "[web]\npassword = \"a long passphrase\"\n" => 'web.user: required',
+        "[web]\n" => 'web.user: required' }.each do |body, message|
         e = assert_raises(described_class::Error) { load_with(body) }
-        assert_includes e.message, 'web: `user` and `password` are both required'
+        assert_includes e.message, message
       end
     end
 
     it 'rejects a blank password' do
       e = assert_raises(described_class::Error) { load_with("[web]\nuser = \"mavi\"\npassword = \"  \"\n") }
-      assert_includes e.message, 'web: `user` and `password` are both required'
+      assert_includes e.message, 'web: `password` must not be blank'
     end
 
     it 'rejects an unknown [web] key' do
       e = assert_raises(described_class::Error) do
         load_with("[web]\nuser = \"m\"\npassword = \"p\"\nrealm = \"x\"\n")
       end
-      assert_includes e.message, 'web: unknown key(s): realm'
+      assert_includes e.message, 'web.realm: unknown key'
     end
 
     it 'rejects web written as an array of tables' do
       e = assert_raises(described_class::Error) { load_with("[[web]]\nuser = \"m\"\npassword = \"p\"\n") }
-      assert_includes e.message, '`web` must be a table ([web])'
+      assert_includes e.message, 'web: expected Credentials, got an array of one Credentials; write [web], not [[web]]'
     end
   end
 
@@ -624,7 +632,7 @@ describe PikuriWeb::Config do
 
     it 'rejects a non-string env value' do
       e = expect_error("[[code.mcp]]\nid = \"x\"\ncommand = [\"a\"]\nenv = { A = 1 }")
-      assert_includes e.message, '`env` must be a table'
+      assert_includes e.message, 'code.mcp[0] "x".env.A: expected String, got 1; quote it to make it a string'
     end
 
     it 'rejects auth/headers keys on a stdio MCP server' do
@@ -670,12 +678,12 @@ describe PikuriWeb::Config do
 
     it 'rejects a non-integer context_window' do
       e = expect_llm_error("context_window = \"2000000\"\n")
-      assert_includes e.message, '`context_window` must be a positive integer'
+      assert_includes e.message, 'llm[0] "Local".context_window: expected Integer, got "2000000"; remove the quotes'
     end
 
     it 'rejects a non-positive context_window' do
       e = expect_llm_error("context_window = 0\n")
-      assert_includes e.message, '`context_window` must be a positive integer'
+      assert_includes e.message, 'llm[0] "Local".context_window: must be at least 1, got 0'
     end
 
     it 'rejects duplicate llm names' do
@@ -697,60 +705,86 @@ describe PikuriWeb::Config do
     # would belong to that table rather than to the top level.
     it 'rejects an unknown top-level key' do
       e = expect_error("foo = 1\n\n#{MINIMAL}")
-      assert_includes e.message, 'unknown top-level'
+      assert_includes e.message, 'foo: unknown key'
     end
 
     it 'rejects an llm entry without a name' do
       e = expect_error("[[llm]]\nserver = \"s\"")
-      assert_includes e.message, '`name` is required'
+      assert_includes e.message, 'llm[0].name: required'
+    end
+
+    it 'rejects a blank llm name, which a type alone would let through' do
+      e = expect_error("[[llm]]\nname = \"  \"\nserver = \"s\"\nmodel = \"m\"")
+      assert_includes e.message, 'llm[0]: `name` must not be blank'
     end
 
     it 'rejects an llm entry without a server reference' do
       e = expect_error("[[llm]]\nname = \"a\"\nmodel = \"m\"")
-      assert_includes e.message, '`server` is required'
+      assert_includes e.message, 'llm[0] "a".server: required'
     end
 
     it 'rejects an llm entry without a model' do
       e = expect_error("[[llm]]\nname = \"a\"\nserver = \"local\"")
-      assert_includes e.message, '`model` is required'
+      assert_includes e.message, 'llm[0] "a".model: required'
     end
 
     it 'rejects a server entry without a url' do
       e = expect_error("[[server]]\nid = \"a\"")
-      assert_includes e.message, '`url` is required'
+      assert_includes e.message, 'server[1] "a".url: required'
     end
 
     it 'rejects a non-positive max_concurrent_requests' do
       e = expect_error("[[server]]\nid = \"a\"\nurl = \"http://x\"\nmax_concurrent_requests = 0")
-      assert_includes e.message, '`max_concurrent_requests` must be a positive integer'
+      assert_includes e.message, 'server[1] "a".max_concurrent_requests: must be at least 1, got 0'
     end
 
     it 'rejects [[server]] written as a plain table' do
       with_dirs do |home, _|
-        write_exact_config(home, "[server]\nid = \"a\"\n")
+        write_exact_config(home, "[server]\nid = \"a\"\nurl = \"http://x\"\n")
         e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
-        assert_includes e.message, 'use [[server]]'
+        assert_includes e.message, 'server: expected Array[Server], got a single Server; write [[server]], not [server]'
       end
+    end
+
+    it 'rejects [[llm]] written as a plain table' do
+      with_dirs do |home, _|
+        write_exact_config(home, "[llm]\nname = \"a\"\nserver = \"s\"\nmodel = \"m\"\n")
+        e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes e.message, 'llm: expected Array[LlmTable], got a single LlmTable; write [[llm]], not [llm]'
+      end
+    end
+
+    it 'rejects [[code.mcp]] written as a plain table' do
+      e = expect_error("[code.mcp]\nid = \"a\"\nurl = \"u\"")
+      assert_includes e.message, 'code.mcp: expected Array[McpTable], got a single McpTable; ' \
+                                 'write [[code.mcp]], not [code.mcp]'
+    end
+
+    # The permissions check reads the raw TOML before the schema does, so it
+    # must not assume a table's shape either.
+    it 'rejects [code] written as an array of tables' do
+      e = expect_error("[[code]]\nsandbox = false")
+      assert_includes e.message, 'code: expected CodeTable, got an array of one CodeTable; write [code], not [[code]]'
     end
 
     it 'rejects a non-boolean sandbox' do
       e = expect_error("[code]\nsandbox = \"yes\"")
-      assert_includes e.message, 'true or false'
+      assert_includes e.message, 'code.sandbox: expected bool, got "yes"'
     end
 
     it 'rejects a non-boolean ui.show_thinking' do
       e = expect_error("[ui]\nshow_thinking = \"yes\"")
-      assert_includes e.message, 'true or false'
+      assert_includes e.message, 'ui.show_thinking: expected bool, got "yes"'
     end
 
     it 'rejects a non-string ui.tool_lines' do
       e = expect_error("[ui]\ntool_lines = 3")
-      assert_includes e.message, 'must be a string'
+      assert_includes e.message, 'ui.tool_lines: expected String, got 3; quote it to make it a string'
     end
 
     it 'rejects [ui] declared as an array of tables' do
       e = expect_error("[[ui]]\nshow_thinking = false")
-      assert_includes e.message, 'must be a table'
+      assert_includes e.message, 'ui: expected UiTable, got an array of one UiTable; write [ui], not [[ui]]'
     end
 
     it 'rejects an unknown key in the [search] table' do
@@ -760,22 +794,22 @@ describe PikuriWeb::Config do
 
     it 'rejects a non-string search key' do
       e = expect_error("[search]\nbrave_key = 42")
-      assert_includes e.message, 'must be a string'
+      assert_includes e.message, 'search.brave_key: expected String, got 42; quote it to make it a string'
     end
 
     it 'rejects a non-array engine selection' do
       e = expect_error("[search]\nengines = \"brave\"")
-      assert_includes e.message, 'must be an array of strings'
+      assert_includes e.message, 'search.engines: expected Array[String], got a single String; wrap it in [ ]'
     end
 
     it 'rejects an engine selection holding a non-string' do
       e = expect_error("[search]\nengines = [\"brave\", 3]")
-      assert_includes e.message, 'must be an array of strings'
+      assert_includes e.message, 'search.engines[1]: expected String, got 3; quote it to make it a string'
     end
 
     it 'rejects [search] declared as an array of tables' do
       e = expect_error("[[search]]\nbrave_key = \"b\"")
-      assert_includes e.message, 'must be a table'
+      assert_includes e.message, 'search: expected Search, got an array of one Search; write [search], not [[search]]'
     end
 
     it 'wraps malformed TOML in Config::Error' do

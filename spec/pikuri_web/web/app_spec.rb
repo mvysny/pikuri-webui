@@ -418,7 +418,7 @@ RSpec.describe PikuriWeb::Web::App do
         assert_includes last_response.body, 'data-tools="short"'
       end
 
-      # `Config.validate_ui!` checks this key's shape and not its vocabulary
+      # `Config` checks this key's shape and not its vocabulary
       # on purpose, so the reader is the only thing between a typo in the
       # shared config file and an unstyled page showing both forms at once.
       context 'when the config file named a form this shell cannot render' do
