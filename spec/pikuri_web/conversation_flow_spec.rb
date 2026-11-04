@@ -31,7 +31,7 @@ RSpec.describe 'conversations end to end' do
   class SkillInjector
     include Pikuri::Agent::Extension
 
-    def on_user_message(_ctx, _content) = '<skill name="writing-rdoc">the whole SKILL.md body</skill>'
+    def on_user_message(_ctx, _content, _attachments) = '<skill name="writing-rdoc">the whole SKILL.md body</skill>'
   end
 
   let(:extensions) { [] }
