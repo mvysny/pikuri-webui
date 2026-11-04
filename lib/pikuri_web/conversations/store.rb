@@ -34,7 +34,8 @@ module PikuriWeb
     #
     #   2026-08-27T12-03-51Z-3f9a/
     #       history.json   pikuri's — Pikuri::Agent::History#save
-    #       attachments/   pikuri's — content-addressed, only if there are any
+    #       attachments/   pikuri's — content-addressed, only if there are any;
+    #                      {#stash} writes a message's images here ahead of its turn
     #       meta.json      ours — title, timestamps, shell and connection
     #
     # == The connection a conversation is on
@@ -89,6 +90,13 @@ module PikuriWeb
       #
       # @return [String]
       META_FILE = 'meta.json'
+
+      # pikuri's folder for a conversation's images, beside +history.json+.
+      # Its *format* is pikuri's; {#stash} writes into it ahead of a save, under
+      # the names that save would choose.
+      #
+      # @return [String]
+      ATTACHMENTS_DIR = 'attachments'
 
       # +meta.json+'s format version. Bumped only for a change an old reader
       # could not survive; {#list} refuses that one conversation rather than
@@ -275,6 +283,61 @@ module PikuriWeb
         history.save(conversation.dir)
         write_meta(conversation, model: model, server: server, updated_at: updated_at)
         conversation.dir
+      end
+
+      # Write a message's images into the conversation's +attachments/+ *before*
+      # its turn, so a picture is on disk by the time any tab asks for it.
+      #
+      #   store.stash(conversation, [upload])   # => dir/attachments/3f9a1c8e2b-shot.png
+      #
+      # The names are the ones pikuri's +History#save+ uses ({Upload#stored_name}),
+      # and that save skips a name that already exists — so this does not write
+      # twice, it moves the write out of the turn-end save, which runs inside
+      # the domain, to the request thread, which does not. The folder appears
+      # here rather than at the first save when a conversation's opening
+      # message carries an image; it stays unlisted until +meta.json+ lands.
+      #
+      # A process killed mid-turn leaves the images with nothing referencing
+      # them — the orphan +History#save+ itself accepts. A delete racing the
+      # message is the caller's to clean up, by deleting again.
+      #
+      # @param conversation [Conversation]
+      # @param uploads [Array<Upload>]
+      # @return [void]
+      # @raise [SystemCallError] when the write fails
+      def stash(conversation, uploads)
+        return if uploads.empty?
+
+        mkdir_private(conversation.dir)
+        root = conversation.dir / ATTACHMENTS_DIR
+        root.mkpath
+        uploads.each do |upload|
+          path = root / upload.stored_name
+          next if path.exist?
+
+          # A name of its own, not atomic_write's fixed one: two tabs sending the
+          # same image at once would otherwise write through one temp file.
+          tmp = root / ".#{path.basename}.#{SecureRandom.hex(4)}.tmp"
+          tmp.binwrite(upload.bytes)
+          tmp.rename(path.to_path)
+        end
+        nil
+      end
+
+      # One stored image, by the name {#stash} or +History#save+ gave it.
+      #
+      #   store.attachment(conversation, params['name'])   # => Pathname, or nil
+      #
+      # Resolved through the folder's listing, like {#find}, so a name arriving
+      # from a URL can only ever pick a file that is already there.
+      #
+      # @param conversation [Conversation]
+      # @param name [String]
+      # @return [Pathname, nil] nil for a name that is not in the folder
+      def attachment(conversation, name)
+        (conversation.dir / ATTACHMENTS_DIR).children.find { |path| path.basename.to_s == name && path.file? }
+      rescue Errno::ENOENT, Errno::ENOTDIR
+        nil
       end
 
       # Whether this conversation still carries the start stamp it was minted

@@ -33,6 +33,11 @@ content has crept in.
 
 **A turn** (a `POST /messages` through to the save):
 
+0. A message with images first has them checked (count, size, type sniffed from the bytes)
+   and written into the conversation's `attachments/` **off-domain**
+   ({Conversations::Store#stash}), under the names pikuri's save will then skip — so the
+   `:user` block's `<img>` never points at a file not there yet. A delete landing between
+   the stash and the submit is answered by removing the folder again.
 1. `Web::App` runs the route body as one {BigAppLock} task: resolve the runner, `#submit`.
 2. `Agents::Runner#submit` starts a turn when idle and injects into the `Interloper` when
    busy (`D_interloper_mid_loop_input`); either way it broadcasts a status frame.

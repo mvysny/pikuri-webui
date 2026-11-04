@@ -293,6 +293,9 @@ end
 PikuriWeb::Web::App.set :big_app_lock, big_app_lock
 PikuriWeb::Web::App.set :broadcaster, broadcaster
 PikuriWeb::Web::App.set :registry, registry
+# Messages' images are written into a conversation's folder ahead of its turn,
+# and served back out of it, without a task around the disk.
+PikuriWeb::Web::App.set :store, conversations
 # Names, model ids and window sizes — no transport crosses this line. Also what
 # gates /model out of the palette when there is only one connection.
 PikuriWeb::Web::App.set :models, catalog.rows
@@ -374,7 +377,10 @@ PikuriWeb::Web::App.set :server_settings, {
   # Backstop for a request thread the sentinel can't reach: an SSE write
   # blocked on a socket whose peer vanished without a reset, or a :state
   # hook that a future Puma renames out from under us.
-  force_shutdown_after: 5
+  force_shutdown_after: 5,
+  # Puma sets no ceiling of its own and buffers any body to disk before a route
+  # can refuse it; this is a message's worth of images and text.
+  http_content_length_limit: PikuriWeb::Web::App::MAX_BODY_BYTES
 }
 PikuriWeb::Web::App.set :server, :puma
 

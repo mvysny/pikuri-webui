@@ -11,7 +11,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
   # until the spec releases it, and serves a real History (so #persist
   # exercises pikuri's own save rather than a stub).
   class FakeAgent
-    attr_reader :messages, :injected, :clears, :loaded, :transport, :switches
+    attr_reader :messages, :attachments, :injected, :clears, :loaded, :transport, :switches
     attr_accessor :history
 
     def initialize(interloper, transport)
@@ -19,6 +19,7 @@ RSpec.describe PikuriWeb::Agents::Runner do
       @transport = transport
       @gate = Thread::Queue.new
       @messages = []
+      @attachments = []
       @injected = []
       @switches = []
       @clears = 0
@@ -34,11 +35,12 @@ RSpec.describe PikuriWeb::Agents::Runner do
     # left the queue full would have the runner restarting forever. The
     # transport moves only on a non-nil one, and only at the top, which is what
     # makes +#transport+ mean "what this turn is actually on".
-    def run_loop(user_message:, transport: nil)
+    def run_loop(user_message:, attachments: [], transport: nil)
       @switches << transport
       @transport = transport if transport
       @injected.concat(@interloper.drain!.map(&:content))
       @messages << user_message
+      @attachments << attachments
       @gate.pop
       @at_turn_end&.call
       @at_turn_end = nil
@@ -169,6 +171,28 @@ RSpec.describe PikuriWeb::Agents::Runner do
       assert_equal [:user], interloper.peek.map(&:kind)
       assert_equal ['second'], interloper.peek.map(&:content)
       assert_equal ['first'], agent.messages
+    end
+  end
+
+  context '#submit with images' do
+    let(:upload) do
+      PikuriWeb::Conversations::Upload.from(filename: 'shot.png', bytes: "\x89PNG\r\n\x1A\n".b)
+    end
+
+    it 'hands them to run_loop as pikuri attachments' do
+      runner.submit('', uploads: [upload])
+      wait_until { agent.messages.any? }
+
+      assert_equal [[upload.to_attachment]], agent.attachments
+    end
+
+    it 'injects them beside the text when busy' do
+      runner.submit('first')
+      wait_until { agent.messages.any? }
+
+      runner.submit('and this', uploads: [upload])
+
+      assert_equal [[upload.to_attachment]], interloper.peek.map(&:attachments)
     end
   end
 

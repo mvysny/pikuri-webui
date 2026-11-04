@@ -46,7 +46,8 @@ Every fact lives in exactly one of these; the others link to it.
   never introduce client-only conversation state. See `D_server_authoritative_transcript`.
 - **`GET /events` subscribes *before* it snapshots, and the snapshot is one frame** — never a
   `reset` plus a `block` each, which blinks the tail. See `D_subscribe_then_snapshot`.
-- **A saved conversation is `history.json` plus our `meta.json`, and nothing else.** Blocks
+- **A saved conversation is `history.json` (with pikuri's `attachments/`) plus our
+  `meta.json`, and nothing else**; images reach the browser by URL, never inline. Blocks
   are re-derived by replaying synthesized events, never stored, so old conversations get
   today's renderer. See `D_replay_from_history`.
 - **The agent loop runs as a job on the shared executor, never on a request thread**, and

@@ -50,6 +50,24 @@ RSpec.describe PikuriWeb::Web::SseListener do
       listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
       assert_equal %w[block], event_types(drain_frames(queue))
     end
+
+    # Linked by URL, never inlined: the snapshot frame carries every block on
+    # each reconnect.
+    it 'shows its images as a strip of links under the text' do
+      png = Pikuri::Attachment.new(mime: 'image/png', filename: 'a"b.png', bytes: "\x89PNG\r\n\x1A\n".b)
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'look', attachments: [png]))
+
+      html = transcript.to_a.fetch(0).html
+      url = "/c/c-1/attachments/#{png.stored_name}"
+      link = %(<a href="#{url}" target="_blank" rel="noopener" title="a&quot;b.png">)
+      img = %(<img src="#{url}" alt="a&quot;b.png" loading="lazy" decoding="async">)
+      assert_equal %(look<div class="attachments">#{link}#{img}</a></div>), html
+    end
+
+    it 'draws no strip for a message without images' do
+      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi'))
+      refute_includes transcript.to_a.fetch(0).html, 'attachments'
+    end
   end
 
   context 'assistant streaming' do

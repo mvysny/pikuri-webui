@@ -312,6 +312,31 @@ body {
   color: var(--accent);
 }
 
+/* A message's images: one row under its text that never grows taller than a
+   thumbnail and scrolls sideways when it outgrows the column, so a tall
+   screenshot and a ten-image message both cost the transcript the same height.
+   The cap moves down at the phone breakpoint. Each image links to the
+   original at full size (SseListener#images_html). */
+.block.user .attachments {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+  overflow-x: auto;
+  white-space: normal;
+}
+
+.block.user .attachments a { flex: none; max-width: 100%; }
+
+.block.user .attachments img {
+  display: block;
+  height: auto;
+  width: auto;
+  max-height: 12rem;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
 .block.thinking { color: var(--fg-muted); }
 
 /* The disclosure row is the whole affordance: it says reasoning happened here
@@ -732,6 +757,8 @@ button:hover { border-color: var(--accent); }
   }
 
   body.drawer-open #drawer { display: flex; }
+
+  .block.user .attachments img { max-height: 7rem; }
 
   #drawer-header { display: flex; }
 

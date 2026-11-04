@@ -166,6 +166,23 @@ RSpec.describe 'conversations end to end' do
       assert_equal produced, rendered(reopened.transcript)
     end
 
+    # The whole image path but the browser: stashed, sent, rendered as a strip,
+    # saved under the stashed name, and drawn again identically on reopen.
+    it 'shows a message\'s images again, from the same files' do
+      conversation = runner.conversation
+      upload = PikuriWeb::Conversations::Upload.from(filename: 'shot.png', bytes: "\x89PNG\r\n\x1A\n".b)
+      store.stash(conversation, [upload])
+      runner.submit('What is 2 + 2?', uploads: [upload])
+      produced = rendered(transcript)
+
+      reopened = guard(PikuriWeb::Conversations::Registry.new(store: store, factory: factory, lock: lock),
+                       lock).open_id(conversation.id)
+
+      assert_includes produced.first.last, "/c/#{conversation.id}/attachments/#{upload.stored_name}"
+      assert_equal produced, rendered(reopened.transcript)
+      assert_equal([upload.stored_name], (conversation.dir / 'attachments').children.map { |c| c.basename.to_s })
+    end
+
     context 'with an extension injecting a reference block' do
       let(:extensions) { [SkillInjector.new] }
 

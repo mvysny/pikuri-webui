@@ -403,6 +403,51 @@ RSpec.describe PikuriWeb::Conversations::Store do
     end
   end
 
+  context '#stash and #attachment' do
+    let(:png) { "\x89PNG\r\n\x1A\n#{'pixels' * 10}".b }
+    let(:upload) { PikuriWeb::Conversations::Upload.from(filename: 'shot.png', bytes: png) }
+
+    it 'writes each image under the name it is served by, in a private folder' do
+      conversation = store.create(at: at)
+
+      store.stash(conversation, [upload])
+
+      path = store.attachment(conversation, upload.stored_name)
+      assert_equal png, path.binread
+      assert_equal 0o700, conversation.dir.stat.mode & 0o777
+      # A folder holding only images is not a committed conversation yet.
+      assert_empty store.list
+    end
+
+    # What lets the stash replace pikuri's own write rather than double it:
+    # the turn-end save finds the file under the name it would have chosen.
+    it 'agrees with History#save on the name' do
+      conversation = store.create(at: at)
+      store.stash(conversation, [upload])
+      history = Pikuri::Agent::History.new(
+        messages: [
+          Pikuri::Agent::History::Message.new(
+            id: Pikuri::Agent::History.mint_id, role: 'user', content: '', attachments: [upload.to_attachment]
+          )
+        ]
+      )
+
+      save(conversation, history)
+
+      assert_equal([upload.stored_name], (conversation.dir / 'attachments').children.map { |c| c.basename.to_s })
+      assert_equal [upload.to_attachment], Pikuri::Agent::History.load(conversation.dir).messages.first.attachments
+    end
+
+    it 'finds nothing for a name that is not in the folder' do
+      conversation = store.create(at: at)
+      store.stash(conversation, [upload])
+
+      assert_nil store.attachment(conversation, 'other.png')
+      assert_nil store.attachment(conversation, "../#{upload.stored_name}")
+      assert_nil store.attachment(store.create(at: at), upload.stored_name)
+    end
+  end
+
   context 'sharing the folder with pikuri' do
     it 'leaves history.json and attachments alone, and survives a save' do
       conversation = store.create(at: at)

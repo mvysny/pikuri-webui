@@ -29,6 +29,17 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
   and now fires on an attachment-only turn with `""` — check any override here.
 - Reference: pikuri's `pikuri-core/bin/chat_attachments.rb` (PNG/JPEG/GIF/WebP, 5 MiB cap).
 
+## Status
+
+- **Done (server side):** pikuri bumped; `Conversations::Upload` (sniffed type, safe name,
+  caps in `Web::App`); `Store#stash` / `#attachment`; `POST /messages` multipart + delete-race
+  cleanup; `GET /c/:id/attachments/:name`; `Runner#submit(uploads:)` at both call sites;
+  `SseListener` strip + CSS; `HistoryReplay` keeps the pictures; Puma's
+  `http_content_length_limit`.
+- **Next:** the browser (`composer.js` picker / paste / drop, previews, downscale, caps from
+  the server — render `MAX_IMAGES` / `MAX_IMAGE_BYTES` into `index.erb`), then the eager
+  modality probe.
+
 ## Decided
 
 - **Input: a button in the composer, plus clipboard paste and drag-and-drop onto it** — all
@@ -95,6 +106,13 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
   transcript. The chat's tool set reads no disk, so only web-fetched images; not now.
 
 ## Open
+
+- A blind model on a **brand-new** conversation with an image-only opener: `run_loop` raises
+  before anything is appended, so no save happens and the stashed folder has no `meta.json` —
+  an unlisted orphan holding the image. Fix with the probe: `POST /messages` refuses images
+  (422) when the conversation's model is known `vision: false`, *before* stashing. Today the
+  refusal also shows nothing in the browser (logged to stderr only) — give it an `:error`
+  block.
 
 - Where the previews sit at phone width — a row above the textarea is the likely answer.
 - Does the eager probe report anything for a non-llama.cpp server (OpenAI-compatible SaaS)?

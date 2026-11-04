@@ -5,13 +5,14 @@ require 'socket'
 
 module PikuriWeb
   module Web
-    # The Sinatra app: nine routes around the {Conversations::Registry} /
+    # The Sinatra app: ten routes around the {Conversations::Registry} /
     # {Broadcaster} pair, which the host injects via class-level settings before
     # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
     #
     #   PikuriWeb::Web::App.set :big_app_lock, lock
     #   PikuriWeb::Web::App.set :registry,    registry
     #   PikuriWeb::Web::App.set :broadcaster, broadcaster
+    #   PikuriWeb::Web::App.set :store,       store          # where images are written and served from
     #   PikuriWeb::Web::App.set :models,      catalog.rows   # what /model lists
     #
     # Every route body that touches server state is one {BigAppLock} task, so
@@ -91,6 +92,22 @@ module PikuriWeb
 
       # {TOOL_LINES} fallback, set by the host from `Config#tool_lines`.
       set :tool_lines, :short
+
+      # Images one message may carry, and how large each may be. The browser
+      # holds the draft to the same numbers; these are the authority.
+      #
+      # @return [Integer]
+      MAX_IMAGES = 10
+      # @return [Integer]
+      MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+      # The largest request body Puma accepts at all (+http_content_length_limit+,
+      # set in bin/pikuri-web-chat): a full set of images plus a MiB for the
+      # text and the multipart framing. Without it Puma buffers any body to
+      # disk before a route can say no.
+      #
+      # @return [Integer]
+      MAX_BODY_BYTES = (MAX_IMAGES * MAX_IMAGE_BYTES) + (1024 * 1024)
 
       # No page of its own: there is no "current" conversation any more, only the
       # one a tab has open, so a bare +/+ picks the newest and hands over a real
@@ -204,17 +221,51 @@ module PikuriWeb
       # rather than rejected: that wait is the whole reason the executor is the
       # admission gate. The only 4xx past a blank prompt is a conversation that
       # has ceased to exist.
+      #
+      # Images come as multipart +attachments[]+ parts beside +prompt+, and a
+      # message may be images alone. They are written into the conversation's
+      # folder *before* the submit and outside the domain ({#stash_uploads}),
+      # so the block showing them never links to a file not there yet.
       post '/messages' do
         prompt = params['prompt'].to_s
-        halt 422, 'prompt must not be blank' if prompt.strip.empty?
+        uploads = uploads_from(params['attachments'])
+        halt 422, 'prompt must not be blank' if prompt.strip.empty? && uploads.empty?
 
+        stashed = stash_uploads(params['conversation'], uploads) unless uploads.empty?
         # Resolve + submit is one task, so no delete can land between them.
         # +:discarded+ stays answered: it is the runner's own contract, reachable
         # through a stale reference held from an earlier request.
-        outcome = settings.big_app_lock.run { open_conversation(params['conversation']).submit(prompt) }
-        halt 404, 'no such conversation' if outcome == :discarded
+        outcome = settings.big_app_lock.run do
+          settings.registry.open_id(params['conversation'].to_s)&.submit(prompt, uploads: uploads) || :discarded
+        end
+        if outcome == :discarded
+          # A delete won the race since the stash: it may have put the folder
+          # back, and a deleted conversation's pictures do not outlive it
+          # (`D_delete_no_undo`).
+          discard_stash(stashed) if stashed
+          halt 404, 'no such conversation'
+        end
 
         status 204
+      end
+
+      # One image of a conversation, by the name it is stored under — what a
+      # +:user+ block's strip links to. Saved and resident conversations alike:
+      # {#stash_uploads} put the file there before the turn began.
+      #
+      # Content-addressed, so it never changes and the browser may keep it for
+      # good; behind the gate like every other route. Only the four image
+      # extensions are served, typed by extension and marked +nosniff+, so a
+      # file in that folder can never be handed to the browser as a page.
+      get '/c/:id/attachments/:name' do
+        conversation = settings.big_app_lock.run { settings.registry.find(params['id'].to_s) }
+        path = conversation && settings.store.attachment(conversation, params['name'].to_s)
+        type = path && Conversations::Upload::TYPES.key(path.extname)
+        halt 404, 'no such attachment' if type.nil?
+
+        headers 'X-Content-Type-Options' => 'nosniff'
+        cache_control :private, :immutable, max_age: 31_536_000
+        send_file path, type: type
       end
 
       # Put one conversation on another connection, by +[[llm]]+ name. Applied at
@@ -304,6 +355,62 @@ module PikuriWeb
       def default_tool_lines
         configured = settings.tool_lines.to_s
         TOOL_LINES.include?(configured) ? configured : 'short'
+      end
+
+      # The message's images, checked against the caps and typed by their bytes.
+      #
+      # Halts rather than dropping a bad one: the browser checks the same caps
+      # before sending, so a refusal here means a client that skipped them,
+      # and sending the rest without a word would show the model less than the
+      # user meant.
+      #
+      # @param parts [Array<Hash>, Hash, nil] Rack's multipart file hashes for
+      #   +attachments[]+ (+:filename+, +:tempfile+, …)
+      # @return [Array<Conversations::Upload>]
+      def uploads_from(parts)
+        parts = [parts] if parts.is_a?(Hash)
+        parts = Array(parts)
+        halt 422, "at most #{MAX_IMAGES} images per message" if parts.size > MAX_IMAGES
+        parts.map do |part|
+          file = part.is_a?(Hash) && part[:tempfile]
+          halt 422, 'attachments must be files' unless file
+          halt 413, "an image may be at most #{MAX_IMAGE_BYTES / 1024 / 1024} MiB" if file.size > MAX_IMAGE_BYTES
+
+          file.rewind
+          Conversations::Upload.from(filename: part[:filename], bytes: file.read) ||
+            halt(415, 'attachments must be PNG, JPEG, GIF or WebP images')
+        end
+      end
+
+      # Write a message's images into its conversation's folder, outside the
+      # domain: up to {MAX_BODY_BYTES} of disk is no task's business
+      # (`D_global_monitor`).
+      #
+      # The conversation is resolved in a task of its own, so a delete can
+      # land between this and the submit; that is what {#discard_stash} is for.
+      #
+      # @param id [String, nil] the conversation the message is for
+      # @param uploads [Array<Conversations::Upload>]
+      # @return [Conversations::Store::Conversation] the one written to
+      def stash_uploads(id, uploads)
+        conversation = settings.big_app_lock.run { open_conversation(id).conversation }
+        settings.store.stash(conversation, uploads)
+        conversation
+      rescue SystemCallError => e
+        PikuriWeb.logger.error("stashing images for #{conversation&.id} failed (#{e.class}: #{e.message})")
+        halt 500, 'the images could not be saved'
+      end
+
+      # Remove what {#stash_uploads} wrote for a conversation that was deleted
+      # before its message could land. Safe because the submit answered that it
+      # no longer exists: nothing else will ever write that folder.
+      #
+      # @param conversation [Conversations::Store::Conversation]
+      # @return [void]
+      def discard_stash(conversation)
+        settings.store.delete(conversation)
+      rescue SystemCallError => e
+        PikuriWeb.logger.error("removing images of deleted #{conversation.id} failed (#{e.class}: #{e.message})")
       end
 
       # Resolve an id and open it, 404ing on anything not listed — which is what

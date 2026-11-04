@@ -20,13 +20,14 @@ RSpec.describe PikuriWeb::Web::App do
   # Stands in for Agents::Runner: records calls, serves canned status, and owns a
   # real Transcript so the page has blocks to render.
   class FakeRunner
-    attr_reader :conversation, :transcript, :submitted, :cancels, :selected
+    attr_reader :conversation, :transcript, :submitted, :uploads, :cancels, :selected
     attr_accessor :busy, :submit_outcome, :select_outcome
 
     def initialize(conversation, lock:)
       @conversation = conversation
       @transcript = PikuriWeb::Web::Transcript.new(lock: lock)
       @submitted = []
+      @uploads = []
       @selected = []
       @cancels = 0
       @busy = false
@@ -34,8 +35,9 @@ RSpec.describe PikuriWeb::Web::App do
       @select_outcome = :selected
     end
 
-    def submit(message)
+    def submit(message, uploads: [])
       @submitted << message
+      @uploads << uploads
       @submit_outcome
     end
 
@@ -147,6 +149,8 @@ RSpec.describe PikuriWeb::Web::App do
   # Ditto `[ui] tool_lines`, which unlike show_thinking is not validated
   # against this shell's vocabulary — so a nonsense value has to reach here.
   let(:tool_lines) { :short }
+  # Only the image examples reach it; they bring a real one on a temp root.
+  let(:store) { nil }
 
   # The runner GET /c/:id would open for the default conversation.
   let(:runner) { registry.runner_for(live) }
@@ -160,6 +164,7 @@ RSpec.describe PikuriWeb::Web::App do
     described_class.set :big_app_lock, lock
     described_class.set :broadcaster, broadcaster
     described_class.set :registry, registry
+    described_class.set :store, store
     described_class.set :models, models
     # Class-level and therefore sticky across examples: set every time, or an
     # example that overrides it leaks into the next.
@@ -668,6 +673,122 @@ RSpec.describe PikuriWeb::Web::App do
       post '/messages', prompt: 'hi', conversation: live.id
 
       assert_equal 404, last_response.status
+    end
+  end
+
+  # A real store on a temp root, and a conversation living in it, so the
+  # stash and the serving route touch an actual folder.
+  context 'images' do
+    around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) and example.run } }
+
+    let(:store) { PikuriWeb::Conversations::Store.new(root: @root, shell: 'pikuri-web-chat') }
+    let(:pictured) { store.create }
+    let(:registry) { FakeRegistry.new([pictured], lock: lock) }
+    let(:runner) { registry.runner_for(pictured) }
+    let(:png) { "\x89PNG\r\n\x1A\n#{'pixels' * 10}".b }
+
+    def image(bytes = png, name = 'shot.png')
+      Rack::Test::UploadedFile.new(StringIO.new(bytes), 'image/png', original_filename: name)
+    end
+
+    def stored_name = PikuriWeb::Conversations::Upload.from(filename: 'shot.png', bytes: png).stored_name
+
+    context 'POST /messages' do
+      it 'writes the images into the conversation before handing them over' do
+        post '/messages', prompt: 'what is this?', conversation: pictured.id, attachments: [image]
+
+        assert_equal 204, last_response.status
+        assert_equal ['what is this?'], runner.submitted
+        assert_equal([['shot.png']], runner.uploads.map { |u| u.map(&:filename) })
+        assert_equal png, (pictured.dir / 'attachments' / stored_name).binread
+      end
+
+      it 'takes images with no text' do
+        post '/messages', prompt: '', conversation: pictured.id, attachments: [image]
+
+        assert_equal 204, last_response.status
+        assert_equal [''], runner.submitted
+      end
+
+      it 'refuses an eleventh image, and writes none of them' do
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: Array.new(11) { image }
+
+        assert_equal 422, last_response.status
+        assert_empty runner.submitted
+        refute pictured.dir.exist?
+      end
+
+      it 'refuses an image over the cap with 413' do
+        big = png + ('x' * PikuriWeb::Web::App::MAX_IMAGE_BYTES)
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: [image(big)]
+
+        assert_equal 413, last_response.status
+        assert_empty runner.submitted
+      end
+
+      # The type is the bytes', whatever the part's name and Content-Type claim.
+      it 'refuses a file that is not one of the four image types with 415' do
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: [image('<html>', 'shot.png')]
+
+        assert_equal 415, last_response.status
+        assert_empty runner.submitted
+      end
+
+      it 'refuses an attachment that is not a file' do
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: ['just text']
+
+        assert_equal 422, last_response.status
+      end
+
+      # A delete landing between the stash and the submit: the stash put the
+      # folder back, and the route takes it away again.
+      it 'removes what it wrote when the conversation was deleted in between' do
+        runner.submit_outcome = :discarded
+
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: [image]
+
+        assert_equal 404, last_response.status
+        refute pictured.dir.exist?
+      end
+    end
+
+    context 'GET /c/:id/attachments/:name' do
+      before { store.stash(pictured, [PikuriWeb::Conversations::Upload.from(filename: 'shot.png', bytes: png)]) }
+
+      it 'serves the image, typed, unsniffable and cacheable for good' do
+        get "/c/#{pictured.id}/attachments/#{stored_name}"
+
+        assert_equal 200, last_response.status
+        assert_equal png, last_response.body.b
+        assert_equal 'image/png', last_response.content_type
+        assert_equal 'nosniff', last_response.headers['X-Content-Type-Options']
+        assert_includes last_response.headers['Cache-Control'], 'immutable'
+      end
+
+      it 'answers 404 for a name not in the folder' do
+        get "/c/#{pictured.id}/attachments/0000000000-other.png"
+        assert_equal 404, last_response.status
+      end
+
+      it 'answers 404 for a conversation that does not exist' do
+        get "/c/nope/attachments/#{stored_name}"
+        assert_equal 404, last_response.status
+      end
+
+      it 'never walks out of the folder' do
+        get "/c/#{pictured.id}/attachments/..%2F..%2Fmeta.json"
+        assert_equal 404, last_response.status
+      end
+
+      # Something other than our stash may write there; it is never served as
+      # a page on this origin.
+      it 'serves nothing but the four image types' do
+        (pictured.dir / 'attachments' / 'page.html').write('<script>alert(1)</script>')
+
+        get "/c/#{pictured.id}/attachments/page.html"
+
+        assert_equal 404, last_response.status
+      end
     end
   end
 

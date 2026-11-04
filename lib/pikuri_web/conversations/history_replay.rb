@@ -93,7 +93,7 @@ module PikuriWeb
 
         # mid_loop is not stored, and nothing renders it differently: an
         # Interloper injection replays as the plain turn it looked like.
-        Pikuri::Agent::Event::UserTurn.new(content: message.content)
+        Pikuri::Agent::Event::UserTurn.new(content: message.content, attachments: message.attachments)
       end
 
       # The tool that composed a call's display strings is gone by replay time,

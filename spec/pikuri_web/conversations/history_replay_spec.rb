@@ -26,6 +26,14 @@ RSpec.describe PikuriWeb::Conversations::HistoryReplay do
     assert_equal 'What is 2 + 2?', events.first.content
   end
 
+  # Without them a reopened conversation shows the words and loses the
+  # pictures the model still has.
+  it 'carries a user turn\'s images' do
+    png = Pikuri::Attachment.new(mime: 'image/png', filename: 'shot.png', bytes: "\x89PNG\r\n\x1A\n".b)
+    events = replay(message('user', '', attachments: [png]))
+    assert_equal [png], events.first.attachments
+  end
+
   it 'renders an assistant answer' do
     events = replay(message('assistant', 'Four.'))
     assert_equal %w[Assistant], kinds(events)

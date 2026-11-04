@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require 'erb'
 require 'pikuri-core'
 
 module PikuriWeb
@@ -36,7 +37,8 @@ module PikuriWeb
     #
     # - +UserTurn+ renders as its own block (both the initial turn and
     #   +mid_loop: true+ Interloper injections — the flag isn't
-    #   distinguished visually yet).
+    #   distinguished visually yet), its images as a strip of links under the
+    #   text ({#images_html}).
     # - Streaming deltas go through a {StreamingMessage} per turn; the
     #   +Assistant+ / +Thinking+ bookends finalize with the authoritative
     #   content (deltas are preview-only). Reasoning gets the disclosure
@@ -89,11 +91,11 @@ module PikuriWeb
       # @return [void]
       def on_event(event)
         case event
-        in Pikuri::Agent::Event::UserTurn(content:)
+        in Pikuri::Agent::Event::UserTurn(content:, attachments:)
           flush_assistant(:wipe)
           release_thinking
           @thinking_streamed = false
-          add_block(:user, Util::MarkdownRenderer.escape(content))
+          add_block(:user, Util::MarkdownRenderer.escape(content) + images_html(attachments))
         in Pikuri::Agent::Event::ThinkingDelta(content:)
           flush_assistant(:wipe)
           @thinking ||= open_stream(:thinking)
@@ -173,6 +175,36 @@ module PikuriWeb
         name = content[/\A<skill name="([^"]*)"/, 1]
         text = name ? "loaded skill: #{name}" : content
         add_block(:notice, Util::MarkdownRenderer.escape("⊕ #{text}"))
+      end
+
+      # A user message's images, as the strip CSS lays out under its text:
+      #
+      #   <div class="attachments"><a href="/c/ID/attachments/3f9a1c8e2b-shot.png" …><img …></a></div>
+      #
+      # Each one is a URL the server answers from the conversation's folder,
+      # never the bytes inline: a snapshot frame goes out whole on every
+      # reconnect, and megabytes of base64 in it would go out each time. The
+      # link opens the original at full size, with no script involved.
+      #
+      # No whitespace between the tags, because the +:user+ block is
+      # +pre-wrap+ and would show it. A listener with no conversation — one
+      # rendering for no tab — has nothing to address a picture by, and draws
+      # none.
+      #
+      # @param attachments [Array<Pikuri::Attachment>] what the model was shown
+      # @return [String] the strip's HTML; empty when there is nothing to show
+      def images_html(attachments)
+        return '' if attachments.empty? || @conversation.nil?
+
+        links = attachments.map do |attachment|
+          url = Util::MarkdownRenderer.escape(
+            "/c/#{ERB::Util.url_encode(@conversation)}/attachments/#{ERB::Util.url_encode(attachment.stored_name)}"
+          )
+          name = Util::MarkdownRenderer.escape(Pikuri::Sanitizer.sanitize(attachment.filename.to_s).text)
+          %(<a href="#{url}" target="_blank" rel="noopener" title="#{name}">) +
+            %(<img src="#{url}" alt="#{name}" loading="lazy" decoding="async"></a>)
+        end
+        %(<div class="attachments">#{links.join}</div>)
       end
 
       # Empty the transcript and tell every browser to do the same.

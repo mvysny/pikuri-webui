@@ -11,6 +11,7 @@ module PikuriWeb
     #
     #   runner.restore!               # replay what is on disk, once, at mint time
     #   runner.submit('hello')        # => :started (queued on the executor) or :injected
+    #   runner.submit('', uploads: [upload])   # an image-only message
     #   runner.select_model('Remote') # => :selected — applied at the top of the next turn
     #   runner.state                  # => :idle | :queued | :running
     #   runner.cancel                 # dequeue if queued, stop at a tool boundary if running
@@ -229,26 +230,36 @@ module PikuriWeb
       # reports. +:discarded+ is not a refusal either, but the answer that this
       # conversation no longer exists ({#discard!}).
       #
-      # @param message [String] non-blank user text (Web::App rejects blanks before
-      #   calling; Interloper/run_loop double-check)
+      # Images ride along as pikuri attachments, already on disk
+      # ({Conversations::Store#stash}) so the block that shows them can link to
+      # them. A model known to be blind refuses them inside +run_loop+, which
+      # this logs like any other failed turn; mid-loop, pikuri withholds them
+      # with a note instead.
+      #
+      # @param message [String] user text — blank only when +uploads+ is not
+      #   empty (Web::App rejects the rest before calling; Interloper/run_loop
+      #   double-check)
+      # @param uploads [Array<Conversations::Upload>] the message's images
       # @return [:started, :injected, :discarded]
-      def submit(message)
+      def submit(message, uploads: [])
         @lock.assert!
         return :discarded if @discarded
 
+        attachments = uploads.map(&:to_attachment)
         if busy?
           # An injection landing after the turn ended is delivered by the
           # restart {#finish_turn} claims, not stranded.
-          @interloper.inject_user_message(message)
+          @interloper.inject_user_message(message, attachments: attachments)
           broadcast_status
           :injected
         else
           @abandon = false
           @state = :queued
-          @executor.post { run_turn(message) }
+          @executor.post { run_turn(message, attachments) }
           broadcast_status
-          # After the turn is posted, so a title never delays an answer.
-          maybe_title(message)
+          # After the turn is posted, so a title never delays an answer. An
+          # image-only opener has no words to name it by.
+          maybe_title(message) unless message.strip.empty?
           :started
         end
       end
@@ -399,8 +410,10 @@ module PikuriWeb
       #
       # @param message [String, nil] +nil+ on a restart, where the turn exists
       #   for the Interloper drain +run_loop+ does before its first completion
+      # @param attachments [Array<Pikuri::Attachment>] the message's images;
+      #   empty on a restart
       # @return [void]
-      def run_turn(message)
+      def run_turn(message, attachments = [])
         # Named for Puma's backtrace-signal dump (`D_puma_thread_dump`): a turn
         # wedged in run_loop then says which conversation it is.
         Thread.current.name = "turn #{@conversation.id}"
@@ -409,7 +422,7 @@ module PikuriWeb
         # Both ways into a turn come through here — a submit and the restart
         # {#finish_turn} claims — so one drain covers both; a second entry point
         # into +run_loop+ would silently run the old model.
-        @agent.run_loop(user_message: message, transport: @lock.run { take_pending })
+        @agent.run_loop(user_message: message, attachments: attachments, transport: @lock.run { take_pending })
         completed = true
       rescue StandardError => e
         PikuriWeb.logger.error("agent run_loop failed (#{e.class}: #{e.message})")

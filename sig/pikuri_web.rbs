@@ -36,13 +36,14 @@ module PikuriWeb
   # {BigAppLock} (+D_global_monitor+). Reading this namespace as "request thread
   # only" is how an +assert!+ guard gets dropped as redundant.
   module Web
-    # The Sinatra app: nine routes around the {Conversations::Registry} /
+    # The Sinatra app: ten routes around the {Conversations::Registry} /
     # {Broadcaster} pair, which the host injects via class-level settings before
     # boot (see bin/pikuri-web-chat; specs inject fakes the same way):
     # 
     #   PikuriWeb::Web::App.set :big_app_lock, lock
     #   PikuriWeb::Web::App.set :registry,    registry
     #   PikuriWeb::Web::App.set :broadcaster, broadcaster
+    #   PikuriWeb::Web::App.set :store,       store          # where images are written and served from
     #   PikuriWeb::Web::App.set :models,      catalog.rows   # what /model lists
     # 
     # Every route body that touches server state is one {BigAppLock} task, so
@@ -68,6 +69,9 @@ module PikuriWeb
       DEFAULT_THEME: String
       THINKING: ::Array[String]
       TOOL_LINES: ::Array[String]
+      MAX_IMAGES: Integer
+      MAX_IMAGE_BYTES: Integer
+      MAX_BODY_BYTES: Integer
 
       # _@return_ — the {THINKING} state a browser with no cookie gets.
       def default_thinking: () -> String
@@ -88,6 +92,37 @@ module PikuriWeb
       # the config file's, or `short` when the file named a form this shell
       # has no renderer for.
       def default_tool_lines: () -> String
+
+      # The message's images, checked against the caps and typed by their bytes.
+      # 
+      # Halts rather than dropping a bad one: the browser checks the same caps
+      # before sending, so a refusal here means a client that skipped them,
+      # and sending the rest without a word would show the model less than the
+      # user meant.
+      # 
+      # _@param_ `parts` — Rack's multipart file hashes for +attachments[]+ (+:filename+, +:tempfile+, …)
+      def uploads_from: ((::Array[::Hash[untyped, untyped]] | ::Hash[untyped, untyped])? parts) -> ::Array[Conversations::Upload]
+
+      # Write a message's images into its conversation's folder, outside the
+      # domain: up to {MAX_BODY_BYTES} of disk is no task's business
+      # (`D_global_monitor`).
+      # 
+      # The conversation is resolved in a task of its own, so a delete can
+      # land between this and the submit; that is what {#discard_stash} is for.
+      # 
+      # _@param_ `id` — the conversation the message is for
+      # 
+      # _@param_ `uploads`
+      # 
+      # _@return_ — the one written to
+      def stash_uploads: (String? id, ::Array[Conversations::Upload] uploads) -> Conversations::Store::Conversation
+
+      # Remove what {#stash_uploads} wrote for a conversation that was deleted
+      # before its message could land. Safe because the submit answered that it
+      # no longer exists: nothing else will ever write that folder.
+      # 
+      # _@param_ `conversation`
+      def discard_stash: (Conversations::Store::Conversation conversation) -> void
 
       # Resolve an id and open it, 404ing on anything not listed — which is what
       # keeps user input from ever becoming a path.
@@ -631,7 +666,8 @@ module PikuriWeb
     # 
     # - +UserTurn+ renders as its own block (both the initial turn and
     #   +mid_loop: true+ Interloper injections — the flag isn't
-    #   distinguished visually yet).
+    #   distinguished visually yet), its images as a strip of links under the
+    #   text ({#images_html}).
     # - Streaming deltas go through a {StreamingMessage} per turn; the
     #   +Assistant+ / +Thinking+ bookends finalize with the authoritative
     #   content (deltas are preview-only). Reasoning gets the disclosure
@@ -696,6 +732,25 @@ module PikuriWeb
       # 
       # _@param_ `content` — the unwrapped reference block
       def render_system_injection: (String content) -> void
+
+      # A user message's images, as the strip CSS lays out under its text:
+      # 
+      #   <div class="attachments"><a href="/c/ID/attachments/3f9a1c8e2b-shot.png" …><img …></a></div>
+      # 
+      # Each one is a URL the server answers from the conversation's folder,
+      # never the bytes inline: a snapshot frame goes out whole on every
+      # reconnect, and megabytes of base64 in it would go out each time. The
+      # link opens the original at full size, with no script involved.
+      # 
+      # No whitespace between the tags, because the +:user+ block is
+      # +pre-wrap+ and would show it. A listener with no conversation — one
+      # rendering for no tab — has nothing to address a picture by, and draws
+      # none.
+      # 
+      # _@param_ `attachments` — what the model was shown
+      # 
+      # _@return_ — the strip's HTML; empty when there is nothing to show
+      def images_html: (::Array[Pikuri::Attachment] attachments) -> String
 
       # Empty the transcript and tell every browser to do the same.
       # 
@@ -993,6 +1048,7 @@ module PikuriWeb
     # 
     #   runner.restore!               # replay what is on disk, once, at mint time
     #   runner.submit('hello')        # => :started (queued on the executor) or :injected
+    #   runner.submit('', uploads: [upload])   # an image-only message
     #   runner.select_model('Remote') # => :selected — applied at the top of the next turn
     #   runner.state                  # => :idle | :queued | :running
     #   runner.cancel                 # dequeue if queued, stop at a tool boundary if running
@@ -1163,8 +1219,16 @@ module PikuriWeb
       # reports. +:discarded+ is not a refusal either, but the answer that this
       # conversation no longer exists ({#discard!}).
       # 
-      # _@param_ `message` — non-blank user text (Web::App rejects blanks before calling; Interloper/run_loop double-check)
-      def submit: (String message) -> Symbol
+      # Images ride along as pikuri attachments, already on disk
+      # ({Conversations::Store#stash}) so the block that shows them can link to
+      # them. A model known to be blind refuses them inside +run_loop+, which
+      # this logs like any other failed turn; mid-loop, pikuri withholds them
+      # with a note instead.
+      # 
+      # _@param_ `message` — user text — blank only when +uploads+ is not empty (Web::App rejects the rest before calling; Interloper/run_loop double-check)
+      # 
+      # _@param_ `uploads` — the message's images
+      def submit: (String message, ?uploads: ::Array[Conversations::Upload]) -> Symbol
 
       # Put this conversation on another connection, from the top of its next
       # turn.
@@ -1258,7 +1322,9 @@ module PikuriWeb
       # broadcasts idle so the browser's input re-enables even on the error path.
       # 
       # _@param_ `message` — +nil+ on a restart, where the turn exists for the Interloper drain +run_loop+ does before its first completion
-      def run_turn: (String? message) -> void
+      # 
+      # _@param_ `attachments` — the message's images; empty on a restart
+      def run_turn: (String? message, ?::Array[Pikuri::Attachment] attachments) -> void
 
       # Save, go idle, and — when the Interloper still holds something — claim
       # the next turn before anyone can observe the gap.
@@ -2596,7 +2662,8 @@ module PikuriWeb
     # 
     #   2026-08-27T12-03-51Z-3f9a/
     #       history.json   pikuri's — Pikuri::Agent::History#save
-    #       attachments/   pikuri's — content-addressed, only if there are any
+    #       attachments/   pikuri's — content-addressed, only if there are any;
+    #                      {#stash} writes a message's images here ahead of its turn
     #       meta.json      ours — title, timestamps, shell and connection
     # 
     # == The connection a conversation is on
@@ -2647,6 +2714,7 @@ module PikuriWeb
     # and a caller must tolerate the conversation having vanished inside it.
     class Store
       META_FILE: String
+      ATTACHMENTS_DIR: String
       SCHEMA: Integer
       ID_TIME: String
       ID: Regexp
@@ -2759,6 +2827,41 @@ module PikuriWeb
                   server: String,
                   ?updated_at: Time
                 ) -> Pathname
+
+      # Write a message's images into the conversation's +attachments/+ *before*
+      # its turn, so a picture is on disk by the time any tab asks for it.
+      # 
+      #   store.stash(conversation, [upload])   # => dir/attachments/3f9a1c8e2b-shot.png
+      # 
+      # The names are the ones pikuri's +History#save+ uses ({Upload#stored_name}),
+      # and that save skips a name that already exists — so this does not write
+      # twice, it moves the write out of the turn-end save, which runs inside
+      # the domain, to the request thread, which does not. The folder appears
+      # here rather than at the first save when a conversation's opening
+      # message carries an image; it stays unlisted until +meta.json+ lands.
+      # 
+      # A process killed mid-turn leaves the images with nothing referencing
+      # them — the orphan +History#save+ itself accepts. A delete racing the
+      # message is the caller's to clean up, by deleting again.
+      # 
+      # _@param_ `conversation`
+      # 
+      # _@param_ `uploads`
+      def stash: (Conversation conversation, ::Array[Upload] uploads) -> void
+
+      # One stored image, by the name {#stash} or +History#save+ gave it.
+      # 
+      #   store.attachment(conversation, params['name'])   # => Pathname, or nil
+      # 
+      # Resolved through the folder's listing, like {#find}, so a name arriving
+      # from a URL can only ever pick a file that is already there.
+      # 
+      # _@param_ `conversation`
+      # 
+      # _@param_ `name`
+      # 
+      # _@return_ — nil for a name that is not in the folder
+      def attachment: (Conversation conversation, String name) -> Pathname?
 
       # Whether this conversation still carries the start stamp it was minted
       # with — i.e. nothing has named it yet.
@@ -2921,6 +3024,68 @@ module PikuriWeb
         # _@return_ — the +server+ half of the same pair
         attr_reader server_at_mint: String?
       end
+    end
+
+    # One image the user attached to a message, checked and renamed, on its way
+    # to the conversation's +attachments/+ folder and to the model:
+    # 
+    #   upload = Upload.from(filename: 'Screen Shot.PNG', bytes: png)
+    #   upload.filename      # => "Screen-Shot.png"
+    #   upload.stored_name   # => "3f9a1c8e2b-Screen-Shot.png"
+    #   Upload.from(filename: 'notes.txt', bytes: 'hello')   # => nil
+    # 
+    # The type is decided by the bytes, never by the name or by the browser's
+    # +Content-Type+, and the extension is then *rewritten* to match it. That is
+    # what keeps {#stored_name} — which becomes a URL path segment and a file
+    # name — inside +[A-Za-z0-9._-]+ whatever the multipart part claimed.
+    # 
+    # Plain on purpose, so {Web::App} can build one without naming a pikuri
+    # type (`D_pikuri_free_core`); {#to_attachment} is where it crosses.
+    # 
+    # @!attribute [r] mime
+    #   @return [String] one of {TYPES}' keys, sniffed from the bytes
+    # @!attribute [r] filename
+    #   @return [String] the name the model is shown: the uploaded stem, made
+    #     path-safe, plus the extension {TYPES} gives +mime+
+    # @!attribute [r] bytes
+    #   @return [String] the file's contents, binary
+    class Upload < Data
+      TYPES: ::Hash[String, String]
+
+      # _@param_ `filename` — the name the browser sent; only its stem survives
+      # 
+      # _@param_ `bytes` — the file's contents
+      # 
+      # _@return_ — nil when the bytes are not an image of {TYPES}
+      def self.from: (filename: String?, bytes: String) -> Upload?
+
+      # The image type a file's leading bytes announce, for the four formats a
+      # vision model takes.
+      # 
+      # _@param_ `bytes`
+      # 
+      # _@return_ — a {TYPES} key, or nil for anything else
+      def self.sniff: (String bytes) -> String?
+
+      # The name pikuri's +History#save+ will store this image under, so a file
+      # {Store#stash} wrote ahead of the turn is the one the save then skips.
+      # 
+      # _@return_ — a bare basename: ten hex digits, a dash, {#filename}
+      def stored_name: () -> String
+
+      # _@return_ — the same image as pikuri's type, for
+      # +run_loop+ and the Interloper
+      def to_attachment: () -> Pikuri::Attachment
+
+      # _@return_ — one of {TYPES}' keys, sniffed from the bytes
+      attr_reader mime: String
+
+      # _@return_ — the name the model is shown: the uploaded stem, made
+      # path-safe, plus the extension {TYPES} gives +mime+
+      attr_reader filename: String
+
+      # _@return_ — the file's contents, binary
+      attr_reader bytes: String
     end
 
     # The conversations resident in memory: one {Agents::Runner} — and therefore one
