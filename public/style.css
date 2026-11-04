@@ -435,6 +435,7 @@ body {
 #composer {
   position: relative; /* the anchor #slash-menu floats against */
   display: flex;
+  flex-wrap: wrap; /* so #attachments can take a row of its own */
   align-items: flex-end;
   gap: 0.5rem;
   padding: 0.5rem 1rem;
@@ -509,7 +510,60 @@ body {
 
 #prompt:focus { outline: 1px solid var(--accent); }
 
-#send, #cancel {
+/* — the message's images (attachments.js) —
+
+   A full-width row above the textarea, scrolling sideways past what fits. The
+   × shows on hover where there is one, and always on touch, which has none —
+   the same rule as the sidebar's delete. */
+#attachments {
+  flex: 0 0 100%;
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0.25rem;
+}
+
+#attachments[hidden] { display: none; }
+
+.attachment { position: relative; flex: none; }
+
+/* Cropped to between a square and a 2:1 strip, so a tall screenshot is still
+   something to aim the × at. */
+.attachment img {
+  display: block;
+  height: 4rem;
+  width: auto;
+  min-width: 4rem;
+  max-width: 8rem;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border-radius: 50%;
+  line-height: 1;
+  opacity: 0;
+}
+
+.attachment:hover .attachment-remove,
+.attachment-remove:focus-visible { opacity: 1; }
+
+@media (hover: none) {
+  .attachment-remove { opacity: 1; }
+}
+
+#attach, #send, #cancel {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
@@ -794,7 +848,8 @@ button:hover { border-color: var(--accent); }
   /* 44px minimums: iOS's tap-target guidance, which nothing here met. */
   .conversation { padding: 0.6rem 0.75rem; min-height: 44px; }
   .conversation-delete { min-width: 44px; }
-  #send, #cancel { width: 44px; height: 44px; font-size: 1.15rem; }
+  #attach, #send, #cancel { width: 44px; height: 44px; font-size: 1.15rem; }
+  .attachment-remove { width: 28px; height: 28px; }
   .flat-button { min-height: 44px; padding: 0.3rem 0.6rem; }
   .dialog-close { min-width: 44px; min-height: 44px; }
   #slash-menu li { min-height: 44px; align-items: center; }

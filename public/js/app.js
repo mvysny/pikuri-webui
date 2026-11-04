@@ -7,6 +7,7 @@
 // its own would be ceremony, and the dialogs a command opens. Their bodies are
 // `<template>`s the server rendered; nothing here builds markup.
 import { cloneTemplate, openDialog } from './dom.js';
+import { initAttachments } from './attachments.js';
 import { initComposer } from './composer.js';
 import { initStatusBar } from './statusbar.js';
 import { initTranscript } from './transcript.js';
@@ -128,6 +129,7 @@ const reportUnknownCommand = (name) => {
 // rendered a row to reach it by.
 initComposer({
   conversation: viewing,
+  attachments: initAttachments({ onrefused: statusbar.say }),
   onunknown: reportUnknownCommand,
   onsend: transcript.follow,
   onsendfailed: () => statusbar.say('not sent'),

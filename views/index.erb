@@ -136,6 +136,20 @@
         <% end %>
       </ul>
 
+      <!-- The message's images, and the way to add them, are
+           public/js/attachments.js's: the tray of previews (a full-width row
+           above the textarea, empty and hidden at rest), the + button and the
+           file picker it opens. The caps are the server's own constants, so the
+           browser holds a draft to exactly what POST /messages will take. The
+           picker's types are the four it accepts; iOS converts a HEIC photo to
+           JPEG for a list that does not name HEIC. -->
+      <ul id="attachments" aria-label="Images to send" hidden
+          data-max-images="<%= PikuriWeb::Web::App::MAX_IMAGES %>"
+          data-max-bytes="<%= PikuriWeb::Web::App::MAX_IMAGE_BYTES %>"></ul>
+      <input type="file" id="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+      <button type="button" id="attach" aria-label="Attach images"
+              title="Attach images — or paste or drop them here">+</button>
+
       <!-- The hint is a title, not the placeholder: a paragraph of placeholder
            wraps to three lines in a phone-width composer, and Chrome sizes an
            empty textarea to its wrapped placeholder, so the composer's
@@ -235,6 +249,13 @@
     <p class="dialog-detail">Short names the tool and its first argument, then
       what came back. Verbose is the raw argument dump and the observation
       itself.</p>
+  </template>
+
+  <!-- One preview in the composer's tray; attachments.js fills in the img
+       from the file in hand, which no server could have rendered. -->
+  <template id="tpl-attachment">
+    <li class="attachment"><img alt=""><button type="button" class="attachment-remove"
+        aria-label="Remove image" title="Remove image">×</button></li>
   </template>
 
   <template id="tpl-unknown-command">

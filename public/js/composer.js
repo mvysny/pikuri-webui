@@ -24,6 +24,10 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  *   server may render. A rendered row with no arm does nothing; an arm the
  *   server did not render is unreachable, which is how a config-gated command
  *   stays gated in the one place that decides it.
+ * @param {{add: (files: Iterable<File>) => void, count: () => number,
+ *   take: () => Promise<File[]>, restore: (files: File[]) => void}} opts.attachments
+ *   the message's images (`initAttachments`): sent with the text, put back
+ *   with it on a failed send, and what a pasted or dropped image is handed to.
  * @param {(text: string) => void} [opts.onunknown] a `/word` matching no row.
  *   The buffer is left alone, so the typo can be fixed instead of retyped.
  * @param {() => void} [opts.onsend] a message is going out, before its post;
@@ -31,7 +35,7 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  * @param {() => void} [opts.onsendfailed] a message that did not go out; the
  *   text is already back in the box by then, this is only the telling.
  */
-export const initComposer = ({ conversation, commands = {}, onunknown, onsend, onsendfailed }) => {
+export const initComposer = ({ conversation, attachments, commands = {}, onunknown, onsend, onsendfailed }) => {
   const form = document.getElementById('composer');
   const input = document.getElementById('prompt');
   const menu = document.getElementById('slash-menu');
@@ -88,25 +92,27 @@ export const initComposer = ({ conversation, commands = {}, onunknown, onsend, o
 
   // Cleared before the post, so a send that lands leaves no text in the box.
   // Sending is never refused for being busy — a turn queues — so a failure
-  // means the conversation went away underneath this tab, and the text comes
-  // back rather than being swallowed.
-  const send = (text) => {
+  // means the conversation went away underneath this tab, and the text and the
+  // images come back rather than being swallowed.
+  const send = async (text) => {
     input.value = '';
     autogrow();
     input.focus();
+    const files = await attachments.take();
+    // Every image refused while it was still being redrawn, and no words.
+    if (!text.trim() && files.length === 0) return;
     onsend?.();
 
     const body = new FormData();
     body.set('conversation', conversation);
     body.set('prompt', text);
-    fetch('/messages', { method: 'POST', body })
-      .then((r) => r.ok, () => false)
-      .then((sent) => {
-        if (sent) return;
-        input.value = text;
-        autogrow();
-        onsendfailed?.();
-      });
+    files.forEach((file) => body.append('attachments[]', file, file.name));
+    const sent = await fetch('/messages', { method: 'POST', body }).then((r) => r.ok, () => false);
+    if (sent) return;
+    input.value = text;
+    autogrow();
+    attachments.restore(files);
+    onsendfailed?.();
   };
 
   // A command's own effect is its only feedback (D_slash_command_palette), so
@@ -124,7 +130,10 @@ export const initComposer = ({ conversation, commands = {}, onunknown, onsend, o
   // survives that. A `/word` resolving to nothing is a typo, not a message.
   const submit = () => {
     const text = input.value;
-    if (!text.trim()) return;
+    if (!text.trim()) {
+      if (attachments.count() > 0) send(text);
+      return;
+    }
     if (!picking(text) || text === '/') {
       send(text);
       return;
@@ -151,6 +160,29 @@ export const initComposer = ({ conversation, commands = {}, onunknown, onsend, o
 
   // Clicking away leaves an open palette floating over the transcript.
   input.addEventListener('blur', closeMenu);
+
+  // A pasted screenshot becomes an image of the message. Not when the clipboard
+  // also holds text: copying from a word processor carries a rendered picture
+  // of the selection beside the words, and the words are what was meant.
+  input.addEventListener('paste', (e) => {
+    const data = e.clipboardData;
+    const images = [...data.files].filter((file) => file.type.startsWith('image/'));
+    if (images.length === 0 || data.types.includes('text/plain')) return;
+    e.preventDefault();
+    attachments.add(images);
+  });
+
+  // Dropped anywhere on the composer. The dragover has to be cancelled for the
+  // drop to fire at all, and the drop for Firefox not to open the file in place
+  // of this page.
+  form.addEventListener('dragover', (e) => {
+    if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+  });
+  form.addEventListener('drop', (e) => {
+    if (e.dataTransfer.files.length === 0) return;
+    e.preventDefault();
+    attachments.add(e.dataTransfer.files);
+  });
 
   // Enter sends only from a real keyboard: the phone's on-screen Return is left
   // to insert its newline, because a Return that sends makes a multi-line

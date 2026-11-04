@@ -36,9 +36,14 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
   cleanup; `GET /c/:id/attachments/:name`; `Runner#submit(uploads:)` at both call sites;
   `SseListener` strip + CSS; `HistoryReplay` keeps the pictures; Puma's
   `http_content_length_limit`.
-- **Next:** the browser (`composer.js` picker / paste / drop, previews, downscale, caps from
-  the server — render `MAX_IMAGES` / `MAX_IMAGE_BYTES` into `index.erb`), then the eager
-  modality probe.
+- **Done (browser):** `public/js/attachments.js` owns the tray (`#attachments`, `#attach`,
+  `#attach-input`, `tpl-attachment`), caps read off `data-max-*` that `index.erb` renders from
+  `Web::App`'s constants; `composer.js` sends `attachments[]`, restores them on a failed send,
+  and hands paste (image-only clipboards) and drop to the tray; over-cap or non-accepted
+  images are redrawn as JPEG (2048 → 1536 → 1024 long side). Smoke-tested in Chromium at
+  desktop and 390px widths; **not yet on a real iPhone/iPad** (the `(hover: none)` ×, the
+  photo picker, HEIC).
+- **Next:** the eager modality probe (see Open), then graduate this idea.
 
 ## Decided
 
