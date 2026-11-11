@@ -61,7 +61,8 @@ content has crept in.
 3. The browser then opens `GET /events`, which **subscribes before it snapshots** and writes
    the whole transcript as one `snapshot` frame; a block finalized in the gap arrives twice
    rather than not at all (`D_subscribe_then_snapshot`).
-4. SSE carries deltas from there; `transcript.js` upserts blocks by id.
+4. SSE carries deltas from there; `transcript.js` upserts blocks by id, and splices a
+   streaming reply's `stream` diffs around its `<!--tail-->` marker (`D_stream_blocks_once`).
 
 **Shutdown:** Puma's `:state, :stop` fires on the line before the graceful wait —
 `broadcaster.close` pushes the sentinel that releases every parked `/events` drain loop and

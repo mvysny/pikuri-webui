@@ -101,9 +101,10 @@ Every fact lives in exactly one of these; the others link to it.
   never writes to the transcript.** Rows activate on `pointerup` (a tap on iOS never becomes
   a `click`), and `openDialog` takes a *Node*, never an HTML string. See
   `D_slash_command_palette`.
-- **Streaming is re-render-and-replace** — deltas preview-only, the bookend finalizes with
-  authoritative content, dead after finalize; coalescing stays in pikuri at 15 fps. See
-  `D_rerender_and_replace`.
+- **A streamed reply sends each finished block once** — `stream` diffs insert before the
+  `<!--tail-->` marker and replace only after it; the bookend re-renders whole as a `block`,
+  dead after finalize; coalescing stays in pikuri at 15 fps. Store and broadcast stay one
+  task, or a diff lands twice. See `D_stream_blocks_once`.
 - **Mid-loop input goes through `Control::Interloper`, and the input stays enabled while
   busy.** {Agents::Runner#submit} injects when busy and never refuses for it; the one
   non-answer is a conversation deleted under it. See `D_interloper_mid_loop_input`.

@@ -80,17 +80,28 @@ RSpec.describe PikuriWeb::Web::SseListener do
       assert_includes blocks.fetch(0).html, '<strong>world</strong>'
     end
 
-    # Promoted from the seam audit (PROBE 2): deltas re-send the whole
-    # accumulated source under one id (`D_rerender_and_replace`), so a tab
-    # that missed deltas 1..n is correct again on n+1.
-    it 'lets a late subscriber catch up from the next delta alone' do
-      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'Hel'))
-      late = broadcaster.subscribe('c-1')
-      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'lo'))
+    # D_stream_blocks_once: the first frame creates the tab's div, later ones
+    # carry only what changed, and the bookend replaces the whole block.
+    it 'sends a full block first, then stream diffs, then a full block at the bookend' do
+      queue # subscribe before the events
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: "One.\n\nTw"))
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: "o.\n\nThree"))
+      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: "One.\n\nTwo.\n\nThree"))
 
-      frames = drain_frames(late)
-      assert_equal 1, frames.size
-      assert_includes frames.first, 'Hello'
+      frames = drain_frames(queue)
+      assert_equal %w[block stream block], event_types(frames)
+      diff = JSON.parse(frames[1][/^data: (.*)$/, 1])
+      assert_equal({ 'id' => 'b1', 'append' => "<p>One.</p>\n", 'tail' => "<p>Two.</p>\n<p>Three</p>\n" }, diff)
+    end
+
+    # A diff is not idempotent, so the stored html must be exactly what the
+    # frames add up to: a tab snapshotting mid-stream applies the next diff to it.
+    it 'stores the html the diffs build, marker included' do
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: "One.\n\nTw"))
+      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: "o.\n\nThree"))
+
+      assert_equal "<p>One.</p>\n#{PikuriWeb::Web::StreamingMessage::MARKER}<p>Two.</p>\n<p>Three</p>\n",
+                   transcript.to_a.fetch(0).html
     end
 
     it 'finalizes with the authoritative bookend content' do

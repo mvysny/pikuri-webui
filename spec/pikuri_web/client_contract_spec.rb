@@ -76,6 +76,14 @@ RSpec.describe 'the client/server contract' do
     assert_includes sidebar_erb, "' current' if c[:current]"
   end
 
+  # A mismatch drops every stream frame silently: the client finds no marker,
+  # skips the diff, and the reply appears only when the bookend lands.
+  it 'looks for the streaming marker StreamingMessage writes' do
+    texts = client_js.scan(/COMMENT_NODE && node\.data === '([^']*)'/).flatten.uniq
+    assert_equal ["<!--#{texts.first}-->"], [PikuriWeb::Web::StreamingMessage::MARKER]
+    assert_equal 1, texts.size
+  end
+
   # A mistyped path here is not a subtle bug: the module never loads and the
   # page is inert, with nothing but a console error nobody is watching.
   it 'imports only sibling modules that exist' do

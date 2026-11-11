@@ -8,7 +8,7 @@ module PikuriWeb
     # Browser-targeted equivalent of pikuri-tui's TuileListener: renders the
     # normalized event stream into the {Transcript} (the server-side source
     # of truth) and mirrors every mutation to connected browsers through the
-    # {Broadcaster} (SSE +block+ / +remove+ events). Part of the Pikuri seam
+    # {Broadcaster} (SSE +block+ / +stream+ / +remove+ events). Part of the Pikuri seam
     # — this class and Agents::Runner are the only lib/ files that know what a
     # +Pikuri::Agent::Event+ is.
     #
@@ -39,7 +39,8 @@ module PikuriWeb
     #   +mid_loop: true+ Interloper injections — the flag isn't
     #   distinguished visually yet), its images as a strip of links under the
     #   text ({#images_html}).
-    # - Streaming deltas go through a {StreamingMessage} per turn; the
+    # - Streaming deltas go through a {StreamingMessage} per turn, which sends
+    #   each finished Markdown block once and re-sends only the open tail; the
     #   +Assistant+ / +Thinking+ bookends finalize with the authoritative
     #   content (deltas are preview-only). Reasoning gets the disclosure
     #   {#disclose} wraps it in; the +thinking+ block kind is the CSS hook
@@ -249,30 +250,40 @@ module PikuriWeb
       end
 
       # Open a streamed block: an empty transcript block claims the id and
-      # the document position; the returned {StreamingMessage} rewrites it
-      # on every delta.
+      # the document position; the returned {StreamingMessage} fills it
+      # delta by delta.
       #
       # @param kind [Symbol] +:assistant+ or +:thinking+
       # @return [StreamingMessage]
       def open_stream(kind)
         block = @lock.run { @transcript.add(kind: kind, html: '') }
-        StreamingMessage.new(id: block.id, render: Util::MarkdownRenderer.method(:render))
+        StreamingMessage.new(id: block.id)
       end
 
-      # Mirror a streamed re-render to the store and the browsers.
+      # Mirror one streamed frame to the store and the browsers: a full frame
+      # as a +block+ that replaces the tab's div, a diff as a +stream+ frame
+      # that +transcript.js+ applies around the marker (`D_stream_blocks_once`).
+      # Store and broadcast share one task, as must be: a diff is not
+      # idempotent, so a tab's snapshot has to sit exactly before the first
+      # diff it has not yet absorbed.
       #
       # @param kind [Symbol]
       # @param message [StreamingMessage]
-      # @param html [String] the render {StreamingMessage#append} /
-      #   +#finalize+ just produced (returned rather than re-read so the
-      #   no-op append path can't race)
+      # @param frame [StreamingMessage::Frame, nil] what {StreamingMessage#append}
+      #   / +#finalize+ just produced; +nil+ sends nothing
       # @return [void]
-      def push_stream(kind, message, html)
-        html = disclose(kind, html)
+      def push_stream(kind, message, frame)
+        return unless frame
+
+        html = disclose(kind, frame.html)
+        event, data = if frame.full?
+                        [:block, { id: message.id, kind: kind, html: html }]
+                      else
+                        [:stream, { id: message.id, append: frame.append, tail: frame.tail }]
+                      end
         @lock.run do
           @transcript.update(message.id, html)
-          @broadcaster.broadcast(event: :block, data: { id: message.id, kind: kind, html: html },
-                                 conversation: @conversation)
+          @broadcaster.broadcast(event: event, data: data, conversation: @conversation)
         end
       end
 

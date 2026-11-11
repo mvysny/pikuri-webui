@@ -4,6 +4,7 @@
  *
  *     const transcript = initTranscript();
  *     es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
+ *     es.addEventListener('stream', (e) => transcript.stream(JSON.parse(e.data)));
  *     es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
  *     transcript.setThinkingDefault(false);   // /thinking → collapsed
  *     transcript.follow();                    // this tab just sent a message
@@ -28,6 +29,7 @@
  * Call once.
  *
  * @returns {{upsert: (block: {id: string, kind: string, html: string}) => void,
+ *   stream: (frame: {id: string, append: string, tail: string}) => void,
  *   apply: (blocks: {id: string, kind: string, html: string}[]) => void,
  *   remove: (id: string) => void, reset: () => void,
  *   setThinkingDefault: (open: boolean) => void, follow: () => void}}
@@ -91,15 +93,49 @@ export const initTranscript = () => {
 
   return {
     /**
-     * Upserts one block: the first frame of a streamed message creates the div,
-     * every re-render replaces its content in place (D_rerender_and_replace).
-     * A block already in the pane keeps its position — a late update to a block
-     * something else has since followed must not move it to the end.
+     * Upserts one block: a new one is appended, a known one has its content
+     * replaced in place — a streamed message's first and last frames
+     * (D_stream_blocks_once). A block already in the pane keeps its position —
+     * a late update to a block something else has since followed must not move
+     * it to the end.
      */
     upsert(block) {
       const stick = nearBottom();
       const el = place(block);
       if (!el.parentNode) transcript.append(el);
+      if (stick) transcript.scrollTop = transcript.scrollHeight;
+    },
+
+    /**
+     * Applies one frame of a message still streaming (D_stream_blocks_once):
+     *
+     *     <p>Hello.</p> <p>More.</p> <!--tail--> <p>Wor</p>
+     *     └ finished, never touched ┘ ← append   └ tail, replaced ┘
+     *
+     * The blocks this delta finished go in before the `<!--tail-->` comment and
+     * stay; only what follows it is swapped, so text selected or a wide code
+     * block scrolled in a finished part survives the stream. The marker is a
+     * direct child of the block div, or of its `<details>` for reasoning, whose
+     * summary this never touches (D_details_survive_rewrites).
+     *
+     * A block with no marker is skipped rather than guessed at — the full frame
+     * that ends the stream replaces it whole.
+     *
+     * @param {{id: string, append: string, tail: string}} frame
+     */
+    stream({ id, append, tail }) {
+      const el = document.getElementById(id);
+      const body = el?.querySelector(':scope > details') ?? el;
+      const marker = body && [...body.childNodes].find(
+        (node) => node.nodeType === Node.COMMENT_NODE && node.data === 'tail',
+      );
+      if (!marker) return;
+      const stick = nearBottom();
+      while (marker.nextSibling) marker.nextSibling.remove();
+      scratch.innerHTML = append;
+      marker.before(scratch.content);
+      scratch.innerHTML = tail;
+      marker.after(scratch.content);
       if (stick) transcript.scrollTop = transcript.scrollHeight;
     },
 

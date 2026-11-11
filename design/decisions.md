@@ -890,11 +890,13 @@ in.
 
 ## D_details_survive_rewrites — Why does a rewrite keep a block's `<details>` rather than replace the whole html?
 
-**Context.** `upsert` refills a block on every streaming delta
-(`D_rerender_and_replace`), and pikuri coalesces those at 15 fps. A
+**Context.** `upsert` refills a block whenever a full frame arrives: a
+stream's first and last, a snapshot, and every delta of a stream that fell
+back to whole renders (`D_stream_blocks_once`) — at pikuri's 15 fps. A
 reasoning block's payload is a `<details><summary>` around the body, so a
 plain `innerHTML` swap destroys and rebuilds the summary about every 67 ms
-while reasoning streams.
+while such a stream runs. The ordinary diff path (`stream`) never reaches
+the summary at all.
 
 **Decision.** When the block div already holds a `<details>` and the new
 payload has one, `transcript.js` keeps the element and its `<summary>` and
@@ -988,12 +990,13 @@ missing from that tab until a reload.
 
 Found by reading during the `D_no_event_queue` seam audit, not by a
 report — which is the point of that entry's argument. The damage was
-bounded but real: a streaming block self-heals, because every delta
-re-sends the whole accumulated source under one id
-(`D_rerender_and_replace`), so only *finalized one-shot* blocks were lost
-— `tool_call`, `tool_result`, `thinking`, the assistant bookend,
-`notice`, `error`. Losing the tool line out of the middle of a turn you
-opened the page to watch.
+bounded but real: a streaming block self-healed, because every delta then
+re-sent the whole accumulated source under one id, so only *finalized
+one-shot* blocks were lost — `tool_call`, `tool_result`, `thinking`, the
+assistant bookend, `notice`, `error`. Losing the tool line out of the
+middle of a turn you opened the page to watch. Deltas are diffs now
+(`D_stream_blocks_once`), which do not self-heal, so the one-task
+subscribe-and-snapshot below is load-bearing for streams too.
 
 **Decision. Subscribe first, snapshot second, and let the duplicate
 absorb the race.** The route registers with the {Web::Broadcaster}, *then*
@@ -1833,7 +1836,7 @@ is not — the action bodies are a small enumerable set — but it is still
 discipline nothing enforces, and the realistic breach is not a blocking
 call, which review catches. It is head-of-line stalling behind a packet
 that merely runs *long*, and two are already in hand: kramdown, which
-`D_rerender_and_replace` runs at 15 fps, and {Conversations::Store#save} at
+`D_stream_blocks_once` runs at 15 fps, and {Conversations::Store#save} at
 turn end. Both sit on the agent thread today, where a stall costs one
 conversation; behind an owner they cost every conversation at once. But
 the cost is blast radius only, *not* diagnosis — and that asymmetry cuts
@@ -1880,7 +1883,7 @@ made** and would otherwise be rediscovered by hitting them:
 - **Backpressure is asymmetric:** blocking a request thread is fine,
   blocking the agent thread stalls a turn, and blocking `:state, :stop`
   recreates the bug `D_shutdown_on_state_stop` exists to prevent.
-- **Rendering need not move.** `D_rerender_and_replace` re-renders through
+- **Rendering need not move.** `D_stream_blocks_once` re-renders through
   kramdown at 15 fps; the owner owns *mutation*, not rendering, so
   markdown → HTML can stay on the agent thread and post the finished
   string.
@@ -2000,13 +2003,13 @@ tabs alone; server-side last-viewed is this decision reversed.
   ever built, the choice is already made and the two losing readings are
   why. *Render always, fan out selectively* (what ships today) re-runs
   kramdown at 15 fps for a conversation nobody is watching — the single
-  most expensive thing the server does, per `D_rerender_and_replace`.
+  most expensive thing the server does, per `D_stream_blocks_once`.
   *Drop the transcript and replay on attach* is cheapest while detached
   but shows a hole where the streaming answer is, because `history.json`
   holds no in-flight partial message. **Accumulate, don't render** wins
   by keeping the {Web::StreamingMessage} appends and the block structure while
   skipping the kramdown pass and the broadcast, then rendering once on
-  attach — which works because `D_rerender_and_replace` already makes the
+  attach — which works because `D_stream_blocks_once` already makes the
   HTML a pure function of the accumulated source, so it defers as easily
   as it moves threads. Open when it is picked up: whether
   `Listener::RateLimited`'s 15 fps timer should be wired at all for a
@@ -2826,37 +2829,54 @@ server-side, because its schema is the *file's*, not pikuri's
 (`D_schema_complete_config`) — the boundary licenses pikuri types where
 they help, it does not require them.
 
-## D_rerender_and_replace — Why re-render the whole message per delta rather than port the TUI's block-cutter?
+## D_stream_blocks_once — Why send a streamed reply's finished blocks once, and only re-send its tail?
 
-**Context.** pikuri-tui streams assistant output through a
-`StreamingMarkdownBuffer` — a block-cutter with committed-prefix
-machinery, easily the most intricate piece of the TUI's rendering. The
-obvious move for a sibling front-end is to port it.
+**Context.** A streamed reply arrives at 15 fps (pikuri's `Listener::RateLimited`). The
+obvious web shape is to re-render the whole accumulated Markdown per delta and replace the
+block's div, since a browser, unlike a terminal, can replace a node. Measured, that costs
+~6 ms of kramdown per frame at 5 KB and ~32 ms at 48 KB (half a core for one long reply),
+and the same O(length) in SSE bytes to every tab — ~1 MB/s at 48 KB, which a phone feels.
+And replacing the div 15×/s destroys a text selection or a sideways-scrolled code block in
+the part of the reply that is already finished.
 
-**Decision.** Don't. {Web::StreamingMessage} accumulates the source and
-re-renders **all** of it through kramdown per (rate-limited) delta; the
-browser refills one div, keeping a `<details>` it already holds
-(`D_details_survive_rewrites`). What *is* kept is the TUI
-buffer's lifecycle contract, because that part is about correctness
-rather than cost: deltas are preview-only, the bookend `finalize` carries
-the authoritative content (fast-path when equal), and the object is dead
-afterwards — `append` after `finalize` and a second `finalize` both
-raise.
+**Decision.** {Web::StreamingMessage} feeds deltas to `streaming-markdown-parser` (the
+same library pikuri-tui's streaming buffer runs on): each top-level block the reply
+finishes is rendered once, and only the open tail re-renders. The stored html is
+`finished + <!--tail--> + tail`. A tab gets the first render as a `block` frame, then
+`stream` frames `{id, append, tail}`: `transcript.js` inserts `append` before the marker
+comment and replaces everything after it, never touching what precedes it. The bookend
+`finalize` renders the authoritative text **whole**, a fresh parse, and sends it as a
+`block` frame with no marker — deltas are only a preview, and only the whole text resolves
+a reference link or footnote whose definition is a block away. The object is dead after
+`finalize`: `append` after it and a second `finalize` both raise.
 
-**Rejected: porting `StreamingMarkdownBuffer`.** It exists to bound
-per-token `TTY::Markdown` cost on a terminal that can only append. The
-browser can replace a node, and kramdown over one message is cheap — so
-the port would carry the terminal's constraint into a medium that doesn't
-have it, along with its bug surface.
+**Why this is safe without client bookkeeping.** A diff is not idempotent, but nothing can
+deliver one twice or out of place: {Web::SseListener} stores and broadcasts each frame in
+one {BigAppLock} task, and `GET /events` subscribes and snapshots in one task
+(`D_subscribe_then_snapshot`), so a tab's snapshot sits exactly before the first diff it
+has not absorbed. The marker rides in the stored html, so a snapshot or a page rendered
+mid-stream carries the boundary too; the DOM is the state, as with
+`D_details_survive_rewrites`. A tab that somehow lacks the marker skips the diff, and the
+bookend's full frame heals it.
 
-**Rejected: coalescing deltas here.** That already lives in pikuri as
-`Listener::RateLimited` (15 fps). Reimplementing it would put two rate
-limiters in one path and make the effective frame rate a function of
-both.
+**Rejected: whole re-render per delta,** what shipped first. Simple, and wrong on cost
+for long replies and on selection for every reply; the numbers are above.
 
-**Consequences.** Per-delta cost is O(message length), which is fine at
-chat scale and would not be for a very long single message; that is the
-tripwire to watch if this ever changes.
+**Rejected: re-rendering only the tail on the server but still sending the whole html.**
+It fixes the CPU and neither of the things a reader notices.
+
+**Rejected: counting top-level nodes instead of a marker.** One Markdown block is not one
+element — a footnote list, raw HTML, a math block — so an index drifts; a comment is
+invisible to CSS (`p + p` skips it) and to layout.
+
+**Rejected: coalescing deltas here.** That lives in pikuri as `Listener::RateLimited`
+(15 fps); a second limiter makes the frame rate a function of both.
+
+**Consequences.** While streaming, a reference or footnote a block from its definition
+shows literal, and footnote numbers restart per block; the bookend fixes both, at the cost
+of one whole-block replace per message. A kramdown raise inside the parser drops the
+message to whole renders through {Util::MarkdownRenderer} as full frames for the rest of
+the stream (logged).
 
 ## D_server_authoritative_transcript — Why does the server hold the rendered blocks rather than the browser?
 

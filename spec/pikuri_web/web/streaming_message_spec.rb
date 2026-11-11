@@ -1,43 +1,59 @@
 # frozen_string_literal: true
 
 RSpec.describe PikuriWeb::Web::StreamingMessage do
-  # Counting renderer: assertions about the fast path need to observe
-  # whether a render actually ran.
-  let(:render_calls) { [] }
-  let(:render) do
-    lambda do |src|
-      render_calls << src
-      "<r>#{src}</r>"
-    end
-  end
+  let(:marker) { described_class::MARKER }
 
-  def build
-    described_class.new(id: 'b1', render: render)
-  end
+  def build = described_class.new(id: 'b1')
 
-  context 'construction' do
-    it 'is not finalized and has empty source' do
-      msg = build
-      refute msg.finalized?
-      assert_equal '', msg.source
-    end
+  # What transcript.js#stream does to a block's DOM, done to its html.
+  def splice(html, frame)
+    done, = html.split(marker, 2)
+    "#{done}#{frame.append}#{marker}#{frame.tail}"
   end
 
   context '#append' do
-    it 'accumulates source and re-renders the whole of it' do
-      msg = build
-      msg.append('Hello ')
-      html = msg.append('world')
-      assert_equal '<r>Hello world</r>', html
-      assert_equal 'Hello world', msg.source
+    it 'sends the first render as a full frame, marker included' do
+      frame = build.append("Hello.\n\nWor")
+
+      assert frame.full?
+      assert_equal "#{marker}<p>Hello.</p>\n<p>Wor</p>\n", frame.html
     end
 
-    it 'is a no-op on nil and empty content' do
+    it 'sends a finished block once, then only the open tail' do
+      msg = build
+      msg.append("Hello.\n\nWor")
+      frame = msg.append("ld.\n\nAnd")
+
+      refute frame.full?
+      assert_equal "<p>Hello.</p>\n", frame.append
+      assert_equal "<p>World.</p>\n<p>And</p>\n", frame.tail
+
+      frame = msg.append(' more')
+      assert_equal '', frame.append
+      assert_equal "<p>World.</p>\n<p>And more</p>\n", frame.tail
+    end
+
+    # The contract the client rests on: a tab holding the last frame's html and
+    # applying this diff around the marker holds this frame's html.
+    it 'diffs that, spliced around the marker, give the stored html' do
+      msg = build
+      html = msg.append("# Title\n\nSome ").html
+      ["prose.\n\n- one\n", "- two\n\n```ruby\nx = 1\n", "```\n\n| a | b |\n|---|---|\n", "| 1 | 2 |\n\nEnd"]
+        .each do |delta|
+          frame = msg.append(delta)
+          html = splice(html, frame)
+          assert_equal frame.html, html
+        end
+      assert_includes html, '<h1'
+      assert_includes html, '<table>'
+    end
+
+    it 'sends nothing for a delta that changes nothing' do
       msg = build
       msg.append('hi')
-      assert_equal '<r>hi</r>', msg.append(nil)
-      assert_equal '<r>hi</r>', msg.append('')
-      assert_equal 1, render_calls.size
+
+      assert_nil msg.append(nil)
+      assert_nil msg.append('')
     end
 
     it 'raises after finalize' do
@@ -48,21 +64,25 @@ RSpec.describe PikuriWeb::Web::StreamingMessage do
   end
 
   context '#finalize' do
-    it 'replaces the accumulated source with the authoritative content' do
+    it 'renders the authoritative content whole, as a full frame with no marker' do
       msg = build
-      msg.append('Helo wrold')
-      html = msg.finalize('Hello world')
-      assert_equal '<r>Hello world</r>', html
-      assert_equal 'Hello world', msg.source
+      msg.append("Helo wrold.\n\nNext")
+      frame = msg.finalize("Hello world.\n\nNext")
+
+      assert frame.full?
+      assert_includes frame.html, 'Hello world.'
+      refute_includes frame.html, marker
       assert msg.finalized?
     end
 
-    it 'skips the re-render when authoritative equals the source (fast path)' do
+    # A block alone can't see a definition a block away; the whole text can.
+    it 'resolves a reference whose definition streamed a block away' do
       msg = build
-      msg.append('Hello')
-      html = msg.finalize('Hello')
-      assert_equal '<r>Hello</r>', html
-      assert_equal 1, render_calls.size
+      text = "See [the docs][1].\n\nMore.\n\n[1]: https://example.com\n"
+      streamed = msg.append(text)
+      refute_includes streamed.html, 'href'
+
+      assert_includes msg.finalize(text).html, 'href="https://example.com"'
     end
 
     it 'raises when called twice' do
