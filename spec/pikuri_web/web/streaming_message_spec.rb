@@ -48,6 +48,17 @@ RSpec.describe PikuriWeb::Web::StreamingMessage do
       assert_includes html, '<table>'
     end
 
+    # Streamed blocks are converted one by one, not through MarkdownRenderer.render.
+    it 'escapes model-written markup in streamed blocks as in a whole render' do
+      msg = build
+      msg.append(%(<img src="x" onerror="alert(1)">\n\n[a](javascript:alert(2))\n\n<!--tail-->\n\nend))
+
+      html = msg.append("\n\nmore").html
+      refute_includes html, '<img'
+      refute_includes html, 'javascript:'
+      assert_equal 1, html.scan(marker).size
+    end
+
     it 'sends nothing for a delta that changes nothing' do
       msg = build
       msg.append('hi')

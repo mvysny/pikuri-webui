@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require 'kramdown'
 require 'streaming_markdown_parser'
 
 module PikuriWeb
@@ -68,7 +67,7 @@ module PikuriWeb
       # @param id [String] transcript block id (assigned by Transcript#add)
       def initialize(id:)
         @id = id
-        @parser = StreamingMarkdownParser.new(self)
+        @parser = StreamingMarkdownParser.new(self, **Util::MarkdownRenderer::OPTIONS)
         @source = +''
         @done = +''
         @fresh = +''
@@ -151,7 +150,7 @@ module PikuriWeb
 
       # @param root [Kramdown::Element]
       # @return [String] html
-      def convert(root) = Kramdown::Converter::Html.convert(root, @parser.options).first
+      def convert(root) = Util::MarkdownRenderer.to_html(root)
     end
   end
 end

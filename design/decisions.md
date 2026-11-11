@@ -2878,6 +2878,34 @@ of one whole-block replace per message. A kramdown raise inside the parser drops
 message to whole renders through {Util::MarkdownRenderer} as full frames for the rest of
 the stream (logged).
 
+## D_markdown_renders_no_html — Why does model-written Markdown render no HTML of its own?
+
+**Context.** The model's text is attacker-steerable: a page a tool fetched can carry a prompt
+injection. kramdown, as configured for GFM, passes raw HTML through (`<img onerror=…>`), sets
+any attribute from a `{: …}` list, emits `{::nomarkdown}` verbatim, and keeps a
+`javascript:` link. Any of those runs script in the chat tab, as the user, behind the gate —
+read every conversation, delete them, send messages. That is a capability the trifecta
+reasoning never granted the agent (`D_chat_only_entry_point`): it has egress, not the
+conversation store.
+
+**Decision.** {Util::MarkdownRenderer} renders Markdown and nothing a page could run. Its
+parser recognizes no raw HTML, no attribute list and no extension, so each reads as the
+literal text the model wrote; `<br>` alone becomes a line break, as models break table-cell
+lines with it. A scrub then holds every element to `href`/`src`/`alt`/`title` (and a code
+block's `language-` class), and every URL to http, https, mailto or relative, checked as
+written and handed to the browser with its `&` escaped. No heading gets an `id`, which would
+shadow an element `app.js` finds by id. Both render paths, whole and streamed, share it.
+
+**Rejected: an HTML sanitizer on the output** (Loofah and kin). A native dependency to
+undo what we asked kramdown to produce; not recognizing the syntax at all is smaller, and
+shows the reader what the model actually wrote.
+
+**Rejected: a Content-Security-Policy alone.** It would stop the script, not the markup —
+a fake form or a restyled page still renders. Worth adding beside this, not instead of it.
+
+**Consequences.** A model that answers in HTML shows HTML source. The streaming marker
+(`D_stream_blocks_once`) cannot be forged, since a comment is text too.
+
 ## D_server_authoritative_transcript — Why does the server hold the rendered blocks rather than the browser?
 
 **Context.** A browser front-end has to answer three things at once:

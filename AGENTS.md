@@ -219,6 +219,9 @@ file carries its own admission rule.
   *before* `Util::MarkdownRenderer.escape`** — escaping stops markup, not a bidi override.
   Markdown-rendered prose (`:assistant`, `:thinking`) is the known exemption; a title is
   sanitized where model output becomes one, so no renderer has to remember.
+- **Model-written Markdown renders no HTML of its own** — no raw HTML, attribute list,
+  extension, heading `id` or non-http(s)/mailto URL; all of it goes through
+  {Util::MarkdownRenderer}, the streamed path included. See `D_markdown_renders_no_html`.
 - **Library exceptions are logged, our bugs raise:** kramdown failures degrade to escaped
   text and `run_loop` failures return the UI to idle, but contract violations (double
   finalize, bad flush mode, a call from outside a task) raise.
