@@ -52,6 +52,15 @@ gem 'kramdown', '~> 2.5'
 # tables, which kramdown's native syntax doesn't cover.
 gem 'kramdown-parser-gfm', '~> 1.1'
 
+# The parse half of pikuri-tui's streamed-Markdown rendering, shared rather
+# than ported. Today only its kramdown options and its Repair (em-dash table
+# separators, which kramdown won't take for a table) run here, inside
+# Util::MarkdownRenderer, so both shells render a reply alike. Git rather
+# than a release: pre-1.0 and not on RubyGems, so Gemfile.lock pins the
+# commit and `bundle update streaming-markdown-parser` moves it.
+gem 'streaming-markdown-parser', git: 'https://github.com/mvysny/streaming-markdown-parser.git',
+                                 branch: 'master'
+
 # TOML parser for the layered config file (PikuriWeb::Config), which
 # shares its schema and its `~/.config/pikuri/config.toml` location with
 # pikuri-tui's Shared::Config — one file configures every pikuri shell on

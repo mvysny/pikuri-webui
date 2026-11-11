@@ -902,9 +902,10 @@ module PikuriWeb
     # What doesn't, and why: the block-cutter / committed-prefix machinery
     # existed to bound per-token TTY::Markdown cost on a terminal that
     # re-splices regions per hard line. Here each {#append} re-renders the
-    # whole accumulated source through kramdown (~1 ms at chat sizes) and
-    # the browser replaces one div's innerHTML — at the 15 fps the
-    # RateLimited listener delivers, that's negligible, and Markdown's
+    # whole accumulated source through kramdown and the browser replaces one
+    # div's innerHTML. Not free — ~6 ms per render at 5 KB, ~32 ms at 48 KB,
+    # so at the RateLimited listener's 15 fps a long reply costs half a core
+    # and ~1 MB/s of SSE per tab — but simple, and Markdown's
     # retroactive reformatting (a closing fence, a widening table row)
     # falls out for free. If pathological message sizes ever bite, the
     # surface to optimize is {#append}'s render call — the API stays put.
@@ -994,12 +995,17 @@ module PikuriWeb
     # (Markdown → ANSI). Stateless module function; width is not a concern
     # here — the browser is the layout engine.
     # 
+    #   MarkdownRenderer.render("| a | b |\n|—-|—-|\n| 1 | 2 |")   # => a table, header and all
+    # 
+    # Parses as pikuri-tui does, so a reply renders alike in both shells:
+    # +StreamingMarkdownParser::DEFAULT_OPTIONS+ (GFM, no hard wraps), after
+    # +StreamingMarkdownParser::Repair+ — without it, that em-dash separator
+    # row makes kramdown read a headerless table with a row of literal +—-+.
+    # 
     # Degrades to escaped raw text when kramdown raises: on a long-running
     # chat we'd rather show ugly Markdown than lose an in-flight message.
     # Same "library exceptions are logged, our bugs raise" rule as the TUI.
     module MarkdownRenderer
-      KRAMDOWN_OPTIONS: ::Hash[Symbol, Object]
-
       # _@param_ `markdown` — Markdown source (assistant or thinking content)
       # 
       # _@return_ — HTML, or the escaped source wrapped in +<pre>+ when

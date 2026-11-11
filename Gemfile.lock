@@ -15,6 +15,15 @@ GIT
       pdf-reader (~> 2.15)
       pikuri-core (= 0.1.0)
 
+GIT
+  remote: https://github.com/mvysny/streaming-markdown-parser.git
+  revision: 6aa9e8f68bc26aca726352b227f9a4f539f72cc8
+  branch: master
+  specs:
+    streaming-markdown-parser (0.1.0)
+      kramdown (~> 2.5)
+      kramdown-parser-gfm (~> 1.1)
+
 GEM
   remote: https://rubygems.org/
   specs:
@@ -207,6 +216,7 @@ DEPENDENCIES
   rubocop (~> 1.92)
   sinatra (~> 4.1)
   sord (~> 7.1)
+  streaming-markdown-parser!
   tomlrb (~> 3.0)
   typemap (~> 0.1)
   yard (~> 0.9.45)
@@ -283,6 +293,7 @@ CHECKSUMS
   sinatra (4.2.1) sha256=b7aeb9b11d046b552972ade834f1f9be98b185fa8444480688e3627625377080
   sorbet-runtime (0.6.13612) sha256=a2dbdac03698445fc4d5d0d172e505645c34fe21ad8ace910cf8832a6ee775f4
   sord (7.1.0) sha256=e02fd59294da520e50cea80a07fb9bc93db709c552d055871379ae8d8e87601f
+  streaming-markdown-parser (0.1.0)
   tilt (2.9.0) sha256=da5735d0280bba96e9a91041bb14aee435ccad5c17b0fa519249ae543d9aa3a5
   timeout (0.6.1) sha256=78f57368a7e7bbadec56971f78a3f5ecbcfb59b7fcbb0a3ed6ddc08a5094accb
   tomlrb (3.0.0) sha256=e7122820cbb9b940d1758eecb6d1d4ee97c582efa37f06e0100a97cb17a566f5

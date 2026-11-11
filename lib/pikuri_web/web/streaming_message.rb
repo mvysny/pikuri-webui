@@ -22,9 +22,10 @@ module PikuriWeb
     # What doesn't, and why: the block-cutter / committed-prefix machinery
     # existed to bound per-token TTY::Markdown cost on a terminal that
     # re-splices regions per hard line. Here each {#append} re-renders the
-    # whole accumulated source through kramdown (~1 ms at chat sizes) and
-    # the browser replaces one div's innerHTML — at the 15 fps the
-    # RateLimited listener delivers, that's negligible, and Markdown's
+    # whole accumulated source through kramdown and the browser replaces one
+    # div's innerHTML. Not free — ~6 ms per render at 5 KB, ~32 ms at 48 KB,
+    # so at the RateLimited listener's 15 fps a long reply costs half a core
+    # and ~1 MB/s of SSE per tab — but simple, and Markdown's
     # retroactive reformatting (a closing fence, a widening table row)
     # falls out for free. If pathological message sizes ever bite, the
     # surface to optimize is {#append}'s render call — the API stays put.
