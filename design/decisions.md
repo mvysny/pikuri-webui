@@ -2900,8 +2900,11 @@ shadow an element `app.js` finds by id. Both render paths, whole and streamed, s
 undo what we asked kramdown to produce; not recognizing the syntax at all is smaller, and
 shows the reader what the model actually wrote.
 
-**Rejected: a Content-Security-Policy alone.** It would stop the script, not the markup —
-a fake form or a restyled page still renders. Worth adding beside this, not instead of it.
+**Second line: a Content-Security-Policy** ({Web::App}`::CONTENT_SECURITY_POLICY`) runs
+script only from our own files, so markup that gets past the renderer anyway runs nothing.
+Alone it would not do: it stops the script, not the markup — a fake form or a restyled page
+still renders. It allows inline style as an attribute only, for kramdown's own table
+`text-align`, and images from the web, which a Markdown image may link.
 
 **Consequences.** A model that answers in HTML shows HTML source. The streaming marker
 (`D_stream_blocks_once`) cannot be forged, since a comment is text too.

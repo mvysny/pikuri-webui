@@ -109,6 +109,32 @@ module PikuriWeb
       # @return [Integer]
       MAX_BODY_BYTES = (MAX_IMAGES * MAX_IMAGE_BYTES) + (1024 * 1024)
 
+      # What a page may load and run: script only from our own files, so markup
+      # that reached the transcript anyway runs nothing (`D_markdown_renders_no_html`
+      # is the first line, this the second).
+      #
+      # +style-src-attr+ allows the one inline style the page has — the
+      # +text-align+ kramdown writes on an aligned table column; model text can
+      # set no attribute. +img-src+ takes the web, as a Markdown image may link
+      # one.
+      #
+      # @return [String]
+      CONTENT_SECURITY_POLICY = [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "style-src-attr 'unsafe-inline'",
+        "img-src 'self' http: https:",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'"
+      ].join('; ')
+
+      before do
+        headers 'Content-Security-Policy' => CONTENT_SECURITY_POLICY
+      end
+
       # No page of its own: there is no "current" conversation any more, only the
       # one a tab has open, so a bare +/+ picks the newest and hands over a real
       # URL to sit on.

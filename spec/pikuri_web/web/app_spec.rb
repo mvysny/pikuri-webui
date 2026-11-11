@@ -190,6 +190,27 @@ RSpec.describe PikuriWeb::Web::App do
   end
 
   context 'GET /c/:id' do
+    # D_markdown_renders_no_html's second line: markup that reached the page
+    # anyway runs no script.
+    it 'lets the page run script only from its own files' do
+      visit_live
+      policy = last_response.headers['Content-Security-Policy'].to_s.split(/;\s*/)
+
+      assert_includes policy, "script-src 'self'"
+      assert_includes policy, "object-src 'none'"
+    end
+
+    # The policy allows no inline script and inline style only as a kramdown
+    # table's text-align, so the shell itself must need neither.
+    it 'renders a shell that works under that policy' do
+      visit_live
+      body = last_response.body
+
+      refute_match(/<script(?![^>]*\bsrc=)/, body)
+      refute_match(/\son[a-z]+=/, body)
+      refute_match(/\sstyle=|<style/, body)
+    end
+
     it 'renders transcript blocks with kind classes and ids' do
       lock.run do
         runner.transcript.add(kind: :user, html: 'hello there')

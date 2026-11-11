@@ -221,7 +221,9 @@ file carries its own admission rule.
   sanitized where model output becomes one, so no renderer has to remember.
 - **Model-written Markdown renders no HTML of its own** — no raw HTML, attribute list,
   extension, heading `id` or non-http(s)/mailto URL; all of it goes through
-  {Util::MarkdownRenderer}, the streamed path included. See `D_markdown_renders_no_html`.
+  {Util::MarkdownRenderer}, the streamed path included; behind it, a CSP runs script only from
+  our own files, so the shell never gains an inline script, handler or `<style>`. See
+  `D_markdown_renders_no_html`.
 - **Library exceptions are logged, our bugs raise:** kramdown failures degrade to escaped
   text and `run_loop` failures return the UI to idle, but contract violations (double
   finalize, bad flush mode, a call from outside a task) raise.

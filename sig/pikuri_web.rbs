@@ -72,6 +72,7 @@ module PikuriWeb
       MAX_IMAGES: Integer
       MAX_IMAGE_BYTES: Integer
       MAX_BODY_BYTES: Integer
+      CONTENT_SECURITY_POLICY: String
 
       # _@return_ — the {THINKING} state a browser with no cookie gets.
       def default_thinking: () -> String
