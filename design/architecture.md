@@ -10,14 +10,14 @@ content has crept in.
 
 ## Wiring
 
-- **`bin/pikuri-web-chat` constructs everything once**, and hands it in: no globals, no
+- **`bin/pikuri-webui-chat` constructs everything once**, and hands it in: no globals, no
   service locator, nothing reloaded (`D_dev_flag_no_reload`).
 - **One conversation factory builds every agent** — transport, system prompt, listener stack,
   the four tools — so the trifecta report printed at boot is true of every agent in the
   process (**A chat, not an agent with hands on your machine**).
 - **Dependencies point toward data.** `Web` may name anything; nothing under `agents/` or
   `conversations/` may name a constant under `web/`, so a renderer can never be summoned from
-  inside the agent loop (`D_namespaces`, checked by `spec/pikuri_web/namespaces_spec.rb`).
+  inside the agent loop (`D_namespaces`, checked by `spec/pikuri_webui/namespaces_spec.rb`).
   Every crossing is an object injected at the boot script and held duck-typed.
 - **The split is per conversation, and everything above it is process-wide**: the
   {Agents::ModelCatalog}, the {Agents::Titler}, {Conversations::Store}, the
@@ -71,7 +71,7 @@ content has crept in.
 
 ## Where to start reading
 
-`bin/pikuri-web-chat` — every object in the process is constructed there, in order, with the
+`bin/pikuri-webui-chat` — every object in the process is constructed there, in order, with the
 conversation factory in the middle showing the whole per-conversation graph. Then
 {Agents::Runner} for the turn lifecycle and {Web::SseListener} for how an event becomes a
 block.

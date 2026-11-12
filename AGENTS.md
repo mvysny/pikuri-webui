@@ -1,4 +1,4 @@
-# pikuri-web — AGENTS.md
+# pikuri-webui — AGENTS.md
 
 ## What this is
 
@@ -41,7 +41,7 @@ Every fact lives in exactly one of these; the others link to it.
   `D_pikuri_free_core`.
 - **Nothing under `agents/` or `conversations/` may name a constant under `web/`** — a
   component reaching down into a service is the sanctioned shape, the reverse is not. Checked
-  by `spec/pikuri_web/namespaces_spec.rb`. See `D_namespaces`.
+  by `spec/pikuri_webui/namespaces_spec.rb`. See `D_namespaces`.
 - **The transcript is server-authoritative** — {Web::Transcript} holds the rendered blocks;
   never introduce client-only conversation state. See `D_server_authoritative_transcript`.
 - **`GET /events` subscribes *before* it snapshots, and the snapshot is one frame** — never a
@@ -81,7 +81,7 @@ Every fact lives in exactly one of these; the others link to it.
   the far side of Puma's unbounded graceful wait. {Web::Broadcaster#close} must stay
   idempotent *and* keep refusing new subscribers. See `D_shutdown_on_state_stop`.
 - **The browser shows the conversation; diagnostics go to stderr.** {Web::SseListener}
-  renders events, never log lines, and `PikuriWeb.logger` is never pointed at the
+  renders events, never log lines, and `PikuriWebUI.logger` is never pointed at the
   {Web::Broadcaster}. See `D_diagnostics_to_stderr`.
 - **A wedge is diagnosed with Puma's own backtrace signal (`SIGPWR`), never a handler of
   ours.** See `D_puma_thread_dump`.
@@ -146,7 +146,7 @@ Every fact lives in exactly one of these; the others link to it.
 - **One config file for every pikuri shell, and a connection has exactly one source.**
   {Config} carries the *whole* schema including sections this host never reads; no flag, no
   `ENV`, no project-local overlay, so there is never a precedence rule. Schema-completeness
-  is a *standing* obligation: a config addition in pikuri-tui is a pikuri-web change. See
+  is a *standing* obligation: a config addition in pikuri-tui is a pikuri-webui change. See
   `D_schema_complete_config`.
 - **A `[ui]` view preference is the one thing the file does not own outright** — it sets the
   starting value and a per-browser cookie outranks it. See `D_ui_cookie_over_config`.
@@ -170,20 +170,20 @@ Every fact lives in exactly one of these; the others link to it.
 
 ## Module map
 
-Everything we ship is under `PikuriWeb::`; `lib/pikuri_web.rb` boots Zeitwerk over
-`lib/pikuri_web/` and carries `PikuriWeb.logger`. Four namespaces cut by *what a class
+Everything we ship is under `PikuriWebUI::`; `lib/pikuri_webui.rb` boots Zeitwerk over
+`lib/pikuri_webui/` and carries `PikuriWebUI.logger`. Four namespaces cut by *what a class
 produces*, plus the root for what belongs to no half (`D_namespaces`); each namespace module
 file carries its own admission rule.
 
-- `lib/pikuri_web/web/` — {Web}: everything whose output is what the browser sees.
-- `lib/pikuri_web/agents/` — {Agents}: running one LLM turn.
-- `lib/pikuri_web/conversations/` — {Conversations}: the conversation set, saved / resident /
+- `lib/pikuri_webui/web/` — {Web}: everything whose output is what the browser sees.
+- `lib/pikuri_webui/agents/` — {Agents}: running one LLM turn.
+- `lib/pikuri_webui/conversations/` — {Conversations}: the conversation set, saved / resident /
   replayed.
-- `lib/pikuri_web/util/` — {Util}: knows nothing about this app, and the admission test is
+- `lib/pikuri_webui/util/` — {Util}: knows nothing about this app, and the admission test is
   meant to fail things.
-- `lib/pikuri_web/{config,big_app_lock,version}.rb` — the root: {Config} (the whole shared
+- `lib/pikuri_webui/{config,big_app_lock,version}.rb` — the root: {Config} (the whole shared
   TOML schema, Pikuri-free), {BigAppLock} (the serialization domain), `VERSION`.
-- `bin/pikuri-web-chat` — boot: config, catalog, permit sizing, the one conversation factory,
+- `bin/pikuri-webui-chat` — boot: config, catalog, permit sizing, the one conversation factory,
   the turn executor, the domain, the trifecta report, the gate, Puma and its shutdown hook.
 - `bin/probe-titler`, `bin/regen-icons` — maintainer tools, run by hand; each holds what it
   generates (the title corpus; the icon sizes and plate colour).
@@ -193,15 +193,15 @@ file carries its own admission rule.
   file per feature beside it, and `dom.js` knows no markup at all.
 - `public/` otherwise — the static root, served at the URL root: `style.css` holds both layouts
   off one 40rem breakpoint, and `images/` the mascot plus the set `bin/regen-icons` plates.
-- `sig/pikuri_web.rbs` — generated from the YARD tags by `rake sig`, never edited by hand;
+- `sig/pikuri_webui.rbs` — generated from the YARD tags by `rake sig`, never edited by hand;
   {Config} reads its types at runtime (`D_config_through_typemap`).
-- `spec/pikuri_web/` — mirrors `lib/pikuri_web/`, namespace folders included; the specs that
+- `spec/pikuri_webui/` — mirrors `lib/pikuri_webui/`, namespace folders included; the specs that
   cross namespaces on purpose sit at its root.
 
 ## Conventions
 
 - **A concrete YARD type on every method, attribute and constant in `lib/`, private ones
-  included** — sord compiles them into `sig/pikuri_web.rbs`, and `rake sig` fails on a missing
+  included** — sord compiles them into `sig/pikuri_webui.rbs`, and `rake sig` fails on a missing
   one or a name Ruby cannot resolve. A pikuri event is `[Data]`: there is no `Event::Base`.
 - **Tests: rspec-core `describe`/`it` with minitest-style assertions** (`assert_equal`,
   `refute`, …), the same as pikuri and pikuri-tui.
@@ -248,12 +248,12 @@ is needed. To edit both repos together, point Bundler's per-machine local overri
 - `bundle exec rake check` — the full check (the sord signatures, the spec suite, rubocop,
   the doc tripwires), the default task, the cross-repo standard entry point, and what
   `.woodpecker.yml` runs.
-- `bundle exec rspec spec/pikuri_web/web/app_spec.rb` — one file; `-e 'name'` for one example.
-- `bundle exec rake sig` — regenerate `sig/pikuri_web.rbs` after a YARD change, and commit it;
+- `bundle exec rspec spec/pikuri_webui/web/app_spec.rb` — one file; `-e 'name'` for one example.
+- `bundle exec rake sig` — regenerate `sig/pikuri_webui.rbs` after a YARD change, and commit it;
   CI fails on a stale one.
 - `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`),
   also a CI job of its own.
-- `bin/pikuri-web-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on
+- `bin/pikuri-webui-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on
   <http://localhost:4567>; needs `~/.config/pikuri/config.toml` with at least one `[[llm]]`.
 
 ## Skills this project follows

@@ -40,7 +40,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
-  <title><%= title %> · pikuri-web</title>
+  <title><%= title %> · pikuri-webui</title>
 
   <!-- Kuri, the mascot, at every size a browser asks for. Firefox takes the
        SVG; the 32px PNG is the fallback. iOS reads only `apple-touch-icon` for
@@ -125,7 +125,7 @@
            textarea and tracks its auto-grow with no geometry in JS.
 
            Every name here needs an arm in app.js's `commands` map; see
-           PikuriWeb::Web::SlashCommand. -->
+           PikuriWebUI::Web::SlashCommand. -->
       <ul id="slash-menu" role="listbox" aria-label="Commands" hidden>
         <% commands.each do |command| %>
         <li id="slash-<%= command.name.delete_prefix('/') %>" role="option"
@@ -144,8 +144,8 @@
            picker's types are the four it accepts; iOS converts a HEIC photo to
            JPEG for a list that does not name HEIC. -->
       <ul id="attachments" aria-label="Images to send" hidden
-          data-max-images="<%= PikuriWeb::Web::App::MAX_IMAGES %>"
-          data-max-bytes="<%= PikuriWeb::Web::App::MAX_IMAGE_BYTES %>"></ul>
+          data-max-images="<%= PikuriWebUI::Web::App::MAX_IMAGES %>"
+          data-max-bytes="<%= PikuriWebUI::Web::App::MAX_IMAGE_BYTES %>"></ul>
       <input type="file" id="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
       <button type="button" id="attach" aria-label="Attach images"
               title="Attach images — or paste or drop them here">+</button>

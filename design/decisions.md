@@ -176,8 +176,8 @@ front of `public/` as well as the routes.
 
 ## D_namespaces — Why four namespaces cut by what a class produces, and why may a service never name `Web`?
 
-**Context.** Nineteen classes sat flat under `PikuriWeb`. Coupling was already
-low — the wiring lives in `bin/pikuri-web-chat`, and most classes named one or
+**Context.** Nineteen classes sat flat under `PikuriWebUI`. Coupling was already
+low — the wiring lives in `bin/pikuri-webui-chat`, and most classes named one or
 two neighbours — so the question was purely where to draw lines, not how to
 untangle.
 
@@ -196,7 +196,7 @@ mechanism (`D_global_monitor`) that every namespace asserts into. Filing either
 under a namespace would assert an ownership that does not exist.
 
 **The one-way rule is the load-bearing half.** `Web` may name anything under
-`PikuriWeb`; nothing under `Agents` or `Conversations` may name anything under
+`PikuriWebUI`; nothing under `Agents` or `Conversations` may name anything under
 `Web`. A component reaching *down* into a service — or into pikuri — is the
 sanctioned shape, so the permissive direction costs nothing; the closed
 direction is what keeps a renderer from being summoned from inside the agent
@@ -204,7 +204,7 @@ loop. It held on the first pass but for one method, and the fix was an
 improvement on its own: `Agents::Runner#trifecta_html` became
 `Web::App` calling `Web::TrifectaView.render(runner.trifecta)`, so the runner
 hands out the report and renders nothing. Today every crossing is an object
-injected at `bin/pikuri-web-chat` and held duck-typed, which makes the rule
+injected at `bin/pikuri-webui-chat` and held duck-typed, which makes the rule
 greppable: no constant under `agents/` or `conversations/` names one under
 `web/`.
 
@@ -1652,7 +1652,7 @@ Four reasons, past the fact that it fixes nothing:
 
 Nothing shipped: this is a decision *not* to build a cross-process lock.
 
-**Context.** Two `pikuri-web-chat` processes on different ports share
+**Context.** Two `pikuri-webui-chat` processes on different ports share
 `~/.local/state/pikuri/pikuri-web-chat/conversations/`, and pikuri's
 `History#save` rewrites `history.json` whole. The failure is *not* a torn
 file — the save is temp-file-and-rename, so what is on disk is always a
@@ -1685,7 +1685,7 @@ Permanent cost, hypothetical benefit.
 
 **Rejected: one `flock` on the state root at boot,** refusing a second
 instance with `--port` named in the error. The cheap version — one lock in
-`bin/pikuri-web-chat` instead of per-conversation state — and it kills the
+`bin/pikuri-webui-chat` instead of per-conversation state — and it kills the
 failure outright rather than degrading it. Still rejected: it converts a
 mistake nobody makes into a startup failure everybody can hit (a stale
 lock after `kill -9`, a supervisor restarting faster than the old process
@@ -2540,7 +2540,14 @@ future pikuri-tui `/resume` should read the same files.
 ~/.local/state/pikuri/pikuri-web-chat/conversations/<id>/
 ```
 
-`bin/pikuri-web-chat` derives a single `state_root` local and composes
+The folder is named after the script as it was first called,
+`pikuri-web-chat`, and kept that name when the project was renamed to
+pikuri-webui (the `pikuri-web` name went to pikuri's web-tools gem).
+Renaming the folder would orphan every saved conversation or need a
+migration, for nothing: the name only has to be unique among pikuri's
+shells, and stable.
+
+`bin/pikuri-webui-chat` derives a single `state_root` local and composes
 every path from it, so the next thing worth persisting lands beside
 `conversations/` rather than in a second place. The root is created by
 {Conversations::Store} at construction — the folder exists from boot, not
@@ -2564,7 +2571,7 @@ state and touches nothing else.
 
 ## D_schema_complete_config — Why one config file for every pikuri shell, carrying the whole schema?
 
-**Context.** A machine can run pikuri-tui and pikuri-web side by side,
+**Context.** A machine can run pikuri-tui and pikuri-webui side by side,
 and both want the same model connections and the same search-provider
 keys. The loader raises on an unknown top-level key.
 
@@ -2572,7 +2579,7 @@ keys. The loader raises on an unknown top-level key.
 `~/.config/pikuri/config.toml` as the TUI and carries the **whole**
 schema — `[code]`, `[[code.mcp]]` and all — even though this host wires
 none of it. It names no `Pikuri` constant and logs through
-`PikuriWeb.logger`, staying on the Pikuri-free side of the seam
+`PikuriWebUI.logger`, staying on the Pikuri-free side of the seam
 (`D_pikuri_free_core`). Secrets (`[[llm]].api_key`, `[search]` provider
 keys) come from that file and from nowhere else; `--api-key-env` was
 dropped in the same change.
@@ -2626,7 +2633,7 @@ source in both projects.
 asymmetric.** pikuri-tui added a `[ui]` transcript-density table
 (`show_thinking`, `tool_lines`); `validate_top!` here still allowed only
 `llm` / `search` / `code`, so anyone who set a density preference in the
-TUI got `unknown top-level key(s): ui` and *could not start pikuri-web at
+TUI got `unknown top-level key(s): ui` and *could not start pikuri-webui at
 all*. Exactly the failure the "Rejected: trimming the schema" paragraph
 above forbids — carrying the whole schema is not a one-time act, it is a
 standing obligation to whatever the sibling shell adds next.
@@ -2655,8 +2662,8 @@ swallow a typo'd `[serach]` along with the Brave key inside it, and a new
 top-level section is a visible feature event far likelier to prompt a
 cross-repo sweep than one more key in a table that already exists. So the
 standing obligation remains a **procedure**: a config-schema addition in
-pikuri-tui is a pikuri-web change. The guard is the `cross-shell schema`
-describe in `spec/pikuri_web/config_spec.rb` — the test that existed for
+pikuri-tui is a pikuri-webui change. The guard is the `cross-shell schema`
+describe in `spec/pikuri_webui/config_spec.rb` — the test that existed for
 this and missed it, now carrying the `[ui]` case; a pikuri upgrade should
 read pikuri-tui's `Shared::Config` allow-list against ours.
 
@@ -2674,7 +2681,7 @@ This *reverses* a design that shipped in the original scaffold: `LogIO`, a Ctrl+
 collapsible in-page log panel, all removed.
 
 **Context.** The scaffold piped pikuri's per-subsystem loggers and
-`PikuriWeb.logger` into a collapsible panel in the page, on the theory
+`PikuriWebUI.logger` into a collapsible panel in the page, on the theory
 that a browser front-end should be self-contained. In use it made the
 transcript ambiguous: two unrelated streams — the LLM conversation and
 the program's internal diagnostics — shared one surface, and the panel
@@ -2687,13 +2694,13 @@ Markdown, reasoning, tool-call lines, tool observations, all driven by
 and never reach the page. Never cross the streams.
 
 **Rejected: the in-page log panel** (as shipped). The operator running
-`bin/pikuri-web-chat` already has a terminal; routing stderr through a
+`bin/pikuri-webui-chat` already has a terminal; routing stderr through a
 capture object, an SSE frame and a DOM node to arrive back in front of
 the same person is machinery bought for nothing, and it is machinery that
 every new block kind and every theme change then has to carry.
 
 **Consequences.** {Web::SseListener} renders *events*, never log lines, and
-`PikuriWeb.logger` must never be pointed at the {Web::Broadcaster}. A future
+`PikuriWebUI.logger` must never be pointed at the {Web::Broadcaster}. A future
 "show me what went wrong in the browser" want is a new decision, not a
 resurrection of `LogIO`.
 
@@ -2800,7 +2807,7 @@ reaches what the browser sees speaks a pikuri type:** {Web::Transcript},
 {Web::Broadcaster}, {Web::StreamingMessage}, {Util::MarkdownRenderer},
 {Conversations::Registry}, {Config} and {Web::App} deal in ids, kinds, HTML
 strings, paths and queues. **Server-side of that line, pikuri types are
-used freely** — `bin/pikuri-web-chat` (boot/wiring), {Web::SseListener},
+used freely** — `bin/pikuri-webui-chat` (boot/wiring), {Web::SseListener},
 {Agents::Runner}, {Conversations::HistoryReplay}, and {Conversations::Store#save}.
 
 **Rejected: keeping {Conversations::Store} on the Pikuri-free side by taking
@@ -3191,7 +3198,7 @@ same code.
 **Decision.** Typemap maps the merged Hash onto `Data` classes shaped like the file (`Root`,
 `LlmTable`, `McpTable`, `BasicAuth`, `CodeTable`, `UiTable`, `TitlerTable`; `Server`, `Search`
 and `Credentials` as they were) and checks each value against its YARD type, read back from
-`sig/pikuri_web.rbs`. A type is written once, in the doc comment; `constrain` adds the limits a
+`sig/pikuri_webui.rbs`. A type is written once, in the doc comment; `constrain` adds the limits a
 type can't say — ranges, `not_blank:`, `not_empty:`, `unique_by:` — and a class's `validate`
 keeps only what no limit can, such as `[[code.mcp]]`'s stdio/HTTP exclusivity. The same classes and the same Typemap pin
 as pikuri-tui, so a schema change ports between the two by copying.

@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Types are written once, as YARD tags in lib/; sord compiles them into sig/pikuri_web.rbs, which
+# Types are written once, as YARD tags in lib/; sord compiles them into sig/pikuri_webui.rbs, which
 # is committed but never edited by hand. `rake check` runs `sig`, and CI fails when the
 # regenerated file differs from the committed one.
 #
@@ -8,7 +8,7 @@
 # Rack:: and Concurrent:: name, and none of those gems ships a sig/. Their signatures exist only
 # as downloads (`rbs collection`).
 
-SIG_FILE = 'sig/pikuri_web.rbs'
+SIG_FILE = 'sig/pikuri_webui.rbs'
 
 # sord sees only this project, so it warns "wasn't able to be resolved to a constant" for every
 # Pikuri:: / Sinatra:: / stdlib name and writes it through unchanged. A warning only passes when
@@ -22,10 +22,10 @@ def sig_outside_constant?(line)
   return false unless name
 
   @sig_app_loaded ||= begin
-    # The same set bin/pikuri-web-chat wires; pikuri_web eager-loads itself on require.
+    # The same set bin/pikuri-webui-chat wires; pikuri_webui eager-loads itself on require.
     %w[pikuri-core pikuri-pdf concurrent rack].each { |gem| require gem }
     $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
-    require 'pikuri_web'
+    require 'pikuri_webui'
     true
   end
   Object.const_defined?(name)

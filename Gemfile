@@ -11,20 +11,20 @@ gem 'sinatra', '~> 4.1'
 
 # Rack server. Threaded: each open EventSource connection parks one
 # server thread in the SSE drain loop (see App#GET /events), so bin/
-# pikuri-web raises the thread pool above Puma's default.
+# pikuri-webui raises the thread pool above Puma's default.
 gem 'puma', '~> 8.0'
 
 # Sinatra 4's run! resolves its server through the rackup handler API,
 # which lives in this gem since Rack 3 split it out.
 gem 'rackup', '~> 2.2'
 
-# Convention-based autoloader for lib/. Wired up in lib/pikuri_web.rb so
-# every file under lib/pikuri_web/ declares exactly the constant matching
+# Convention-based autoloader for lib/. Wired up in lib/pikuri_webui.rb so
+# every file under lib/pikuri_webui/ declares exactly the constant matching
 # its path without per-file require_relative ceremony.
 gem 'zeitwerk', '~> 2.7'
 
 # The pikuri-core gem — Agent, Tool, prompts, listeners. Same wiring as
-# pikuri-tui's chat shell: bin/pikuri-web-chat binds Pikuri::Agent +
+# pikuri-tui's chat shell: bin/pikuri-webui-chat binds Pikuri::Agent +
 # Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
 #
 # A git dependency on pikuri master, not a released version: this shell
@@ -62,7 +62,7 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 gem 'streaming-markdown-parser', git: 'https://github.com/mvysny/streaming-markdown-parser.git',
                                  branch: 'master'
 
-# TOML parser for the layered config file (PikuriWeb::Config), which
+# TOML parser for the layered config file (PikuriWebUI::Config), which
 # shares its schema and its `~/.config/pikuri/config.toml` location with
 # pikuri-tui's Shared::Config — one file configures every pikuri shell on
 # the machine. Pure Ruby, parse-only (we only ever READ config, never
@@ -72,9 +72,9 @@ gem 'streaming-markdown-parser', git: 'https://github.com/mvysny/streaming-markd
 # checks the parsed Hash; no JSON Schema gem.
 gem 'tomlrb', '~> 3.0'
 
-# Maps the parsed TOML onto PikuriWeb::Config's Data classes, checking every
+# Maps the parsed TOML onto PikuriWebUI::Config's Data classes, checking every
 # value against the type its YARD tag gives. Typemap reads those types from
-# sig/pikuri_web.rbs through rbs's parser, so rbs is a runtime gem here (about
+# sig/pikuri_webui.rbs through rbs's parser, so rbs is a runtime gem here (about
 # 0.2 s of `require` at boot).
 gem 'rbs', '~> 4.2'
 gem 'typemap', '~> 0.1'
@@ -106,7 +106,7 @@ gem 'concurrent-ruby', '~> 1.3'
 gem 'erubi', '~> 1.13'
 
 # Types are written once, as YARD tags; sord compiles them into the committed
-# sig/pikuri_web.rbs, and `rake sig` (part of `rake check`) fails on any tag
+# sig/pikuri_webui.rbs, and `rake sig` (part of `rake check`) fails on any tag
 # sord cannot type. redcarpet renders the Markdown that .yardopts selects;
 # rubocop is `rake check`'s style gate. Versions track pikuri-tui's.
 group :development do

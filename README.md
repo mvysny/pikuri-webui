@@ -1,4 +1,4 @@
-# pikuri-web
+# pikuri-webui
 
 [![status](https://ci.codeberg.org/api/badges/17299/status.svg)](https://ci.codeberg.org/repos/17299)
 
@@ -30,7 +30,7 @@ no "which directory did I start this in", no wondering what the model
 just read — there is nothing on your machine for it to read.
 
 This is a property of the boot script, not a phase the project is
-passing through. Should pikuri-web ever grow OS or code capability, it
+passing through. Should pikuri-webui ever grow OS or code capability, it
 arrives as a *separate* script with its own tool set and its own
 trifecta report; this one stays chat-only.
 
@@ -49,8 +49,8 @@ go *find* one.
 ## Install
 
 ```sh
-git clone https://codeberg.org/mvysny/pikuri-web.git
-cd pikuri-web
+git clone https://codeberg.org/mvysny/pikuri-webui.git
+cd pikuri-webui
 bundle install
 ```
 
@@ -88,7 +88,7 @@ model  = "unsloth/Qwen3.6-35B-A3B-GGUF:Q4_K_M"
 Then:
 
 ```sh
-bin/pikuri-web-chat
+bin/pikuri-webui-chat
 ```
 
 and open <http://localhost:4567>. Boot without that file and it exits
@@ -99,7 +99,7 @@ shell's own — `--bind` off its loopback default wants a password with it,
 see [Locking the port](#locking-the-port):
 
 ```sh
-bin/pikuri-web-chat --port 9292
+bin/pikuri-webui-chat --port 9292
 ```
 
 Ctrl+C stops it. Open browser tabs don't delay the exit.
@@ -357,7 +357,7 @@ newest one with all the others a click away in the sidebar. What a restart
 does lose is a turn that was still running when you quit — saves land at
 turn end, and shutdown does not wait for one.
 
-Run one at a time. A second `pikuri-web-chat` on another port shares that
+Run one at a time. A second `pikuri-webui-chat` on another port shares that
 folder, and each writes `history.json` whole, so two of them in the same
 conversation will quietly overwrite each other's turns — and one of them
 can write back a conversation the other just deleted. Nothing stops you,
@@ -458,7 +458,7 @@ It drives the real titler, so what you see is what the sidebar would get.
 ## Develop
 
 ```sh
-bin/pikuri-web-chat --dev
+bin/pikuri-webui-chat --dev
 ```
 
 `--dev` runs Sinatra in development mode: `views/*.erb` is re-read per
@@ -475,8 +475,8 @@ from `history.json`, so a rendering change shows up on old conversations
 immediately. Let a watcher restart it:
 
 ```sh
-find bin lib views -type f | entr -r bin/pikuri-web-chat --dev
-# or: rerun --dir bin,lib,views -- bin/pikuri-web-chat --dev
+find bin lib views -type f | entr -r bin/pikuri-webui-chat --dev
+# or: rerun --dir bin,lib,views -- bin/pikuri-webui-chat --dev
 ```
 
 Both restart by signalling the process, which takes the same path as
@@ -489,7 +489,7 @@ thread, printed to its stdout. The process carries on — it is a
 snapshot, not a stop:
 
 ```sh
-kill -PWR $(pgrep -f pikuri-web-chat)
+kill -PWR $(pgrep -f pikuri-webui-chat)
 ```
 
 Threads name themselves: `turn <conversation-id>` is that conversation's
@@ -549,7 +549,7 @@ rather than trying Brave first. List `brave` alone to keep every query away
 from DuckDuckGo (and so from Bing, which fulfils its web results). Naming an
 engine whose key you did not set aborts at boot.
 
-`chmod 600` it — pikuri-web logs an advisory at boot if a file holding a
+`chmod 600` it — pikuri-webui logs an advisory at boot if a file holding a
 literal key or password is group/other-readable. The first `[[llm]]` is the connection
 a conversation starts on when it has no saved one of its own; every other
 entry is a `/model` away. Layering runs
@@ -622,7 +622,7 @@ proxy in front doing this job already.
 It is a gate, not accounts. One password for everyone, no logout, no
 lockout on repeated guesses — pick a passphrase, not a word — and
 everyone who gets in shares the same conversations. It stays single-user
-by construction: a second person runs their own `pikuri-web-chat` under
+by construction: a second person runs their own `pikuri-webui-chat` under
 their own OS account.
 
 > [!WARNING]

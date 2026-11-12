@@ -125,7 +125,7 @@ const reportUnknownCommand = (name) => {
   openDialog('No such command', body);
 };
 
-// One arm per name in PikuriWeb::SlashCommand's catalog — the other half of
+// One arm per name in PikuriWebUI::SlashCommand's catalog — the other half of
 // that contract. A name the config gated out keeps its arm; it is simply never
 // rendered a row to reach it by.
 initComposer({

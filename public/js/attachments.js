@@ -1,6 +1,6 @@
 import { cloneTemplate } from './dom.js';
 
-// What the server takes (PikuriWeb::Conversations::Upload::TYPES); anything
+// What the server takes (PikuriWebUI::Conversations::Upload::TYPES); anything
 // else the browser can decode is re-encoded as a JPEG rather than refused.
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 

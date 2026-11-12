@@ -9,13 +9,13 @@ require 'minitest/assertions'
 require 'rack/test'
 
 require 'pikuri-core'
-require 'pikuri_web'
+require 'pikuri_webui'
 
-# Silence pikuri's default $stderr logging and PikuriWeb's own logger
+# Silence pikuri's default $stderr logging and PikuriWebUI's own logger
 # during the suite so production log lines don't bleed into rspec output.
 # Specs that exercise logging swap the sinks for their own.
 Pikuri.log_io = File.open(File::NULL, 'w')
-PikuriWeb.logger = Logger.new(File::NULL)
+PikuriWebUI.logger = Logger.new(File::NULL)
 
 RSpec.configure do |config|
   config.include Minitest::Assertions
@@ -48,7 +48,7 @@ class Guarded
 end
 
 # @param object [Object] a guarded instance (Agents::Runner, Web::Transcript, …)
-# @param lock [PikuriWeb::BigAppLock] the domain it is guarded by
+# @param lock [PikuriWebUI::BigAppLock] the domain it is guarded by
 # @return [Guarded]
 def guard(object, lock) = Guarded.new(object, lock)
 
@@ -66,16 +66,16 @@ rescue ThreadError
   frames
 end
 
-# Run the block with PikuriWeb.logger writing to a StringIO, and return
+# Run the block with PikuriWebUI.logger writing to a StringIO, and return
 # everything it logged. Restores the silenced suite logger afterwards.
 #
 # @return [String]
 def capture_log
   io = StringIO.new
-  previous = PikuriWeb.logger
-  PikuriWeb.logger = Logger.new(io)
+  previous = PikuriWebUI.logger
+  PikuriWebUI.logger = Logger.new(io)
   yield
   io.string
 ensure
-  PikuriWeb.logger = previous
+  PikuriWebUI.logger = previous
 end

@@ -4,7 +4,7 @@ Status: **verified with a fake server (2026-10-29); fix not chosen.** Spotted wh
 first-turn echo, where the user turn is now emitted before the `/props` probe
 (the deferred cap probe entry in pikuri's `design/decisions.md`).
 
-The `[titler]` agent (`lib/pikuri_web/agents/titler.rb`) can sit on the same
+The `[titler]` agent (`lib/pikuri_webui/agents/titler.rb`) can sit on the same
 `[[server]]` as the conversation's model. When that server has
 `max_concurrent_requests = 1`, `Runner#maybe_title` posts the titling job beside
 the first turn. If the titler's request reaches `ServerPermits` first, the turn
