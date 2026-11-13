@@ -627,6 +627,20 @@ RSpec.describe PikuriWebUI::Agents::Runner do
       runner.cancel
       refute cancellable.cancelled?
     end
+
+    # pikuri's run_loop never clears the flag: the runner resets it as it
+    # claims each turn, or one cancel would stop every turn after it.
+    it 'does not carry a cancel over into the next turn' do
+      runner.submit('first')
+      wait_until { runner.state == :running }
+      runner.cancel
+      agent.release
+      wait_until { !runner.busy? }
+
+      runner.submit('second')
+      wait_until { runner.state == :running }
+      refute cancellable.cancelled?
+    end
   end
 
   # What keeps a deleted conversation deleted. Conversations::Registry#delete

@@ -464,9 +464,14 @@ module PikuriWebUI
       # really did wait for a slot: {#submit}'s frame says +:running+ only when
       # the executor happens to get here before it.
       #
+      # Resets the cancel flag in the same task that makes the turn +:running+,
+      # the state {#cancel} reads: a cancel it accepts lands after the reset,
+      # never before, however long the worker takes to reach +run_loop+.
+      #
       # @return [:running, :abandoned]
       def claim_running
         @state = @abandon ? :idle : :running
+        @cancellable.reset! if @state == :running
         broadcast_status
         @abandon ? :abandoned : :running
       end
