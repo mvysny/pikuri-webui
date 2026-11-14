@@ -51,14 +51,6 @@ module PikuriWebUI
     # (+Conversation#status+ takes the gem's lock), and the gem never calls out
     # under its own.
     class Runner < Pikuri::Agent::Listener::Base
-      # Every +Pikuri::Conversations::Event+ variant: what this runner handles
-      # itself rather than forwarding to the agent's listeners.
-      #
-      # @return [Array<Class>]
-      CONVERSATION_EVENTS = Pikuri::Conversations::Event.constants
-                                                        .map { |name| Pikuri::Conversations::Event.const_get(name) }
-                                                        .freeze
-
       # What the status bar's state segment says for each gem state.
       #
       # @return [Hash{Symbol => String}]
@@ -77,8 +69,8 @@ module PikuriWebUI
       # @param listener [Web::SseListener] the transcript's renderer, fed directly
       #   by {#open}'s replay
       # @param agent_listeners [Array<Pikuri::Agent::Listener::Base>] where the
-      #   agent's events go: +listener+ behind a delta rate-limiter, and
-      #   +token_log+
+      #   agent's events, and +TurnEnded+, go: +listener+ behind a delta
+      #   rate-limiter, and +token_log+
       # @param token_log [Pikuri::Agent::Listener::TokenLog] the status bar's
       #   context readout; the constructor claims its +on_status_line+ slot
       # @param lock [BigAppLock]
@@ -250,11 +242,21 @@ module PikuriWebUI
 
       # The gem's events update the page; the agent's go to +agent_listeners+.
       #
+      # +TurnEnded+ goes both ways, +agent_listeners+ first: a turn that fails
+      # mid-stream sends no agent event after its last delta, so the rate
+      # limiter's buffered tail would otherwise wait for the next turn. Flushed
+      # here, the tail reaches the transcript ahead of the failure's status
+      # frame. Every agent listener takes it: {Web::SseListener} and
+      # +TokenLog+ ignore what they don't know.
+      #
       # @param event [Data] an agent or conversation event
       # @return [void]
       def on_event(event)
         case event
-        when *CONVERSATION_EVENTS then conversation_event(event)
+        when Pikuri::Conversations::Event::TurnEnded
+          @agent_listeners.each { |listener| listener.on_event(event) }
+          conversation_event(event)
+        when *Pikuri::Conversations::Event::ALL then conversation_event(event)
         else @agent_listeners.each { |listener| listener.on_event(event) }
         end
       end

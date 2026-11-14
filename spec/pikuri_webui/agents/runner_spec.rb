@@ -149,6 +149,47 @@ RSpec.describe PikuriWebUI::Agents::Runner do
         refute runner.busy?
       end
     end
+
+    # A turn that fails mid-stream sends no agent event after its last delta,
+    # so only TurnEnded can flush the rate limiter's tail. Fed as the gem would,
+    # from outside the lock, to pin the frame order the browser sees.
+    context 'behind the rate limiter, on a turn that fails mid-stream' do
+      let(:raw_runner) do
+        listener = PikuriWebUI::Web::SseListener.new(transcript: transcript, broadcaster: broadcaster,
+                                                     conversation: entry.id, lock: lock)
+        # A clock that never moves: the first delta flushes, every later one buffers.
+        limiter = Pikuri::Conversations::RateLimitedListener.new(listener, fps: 15, clock: -> { 0.0 })
+        lock.run do
+          described_class.new(conversation: entry, store: store, catalog: catalog, broadcaster: broadcaster,
+                              transcript: transcript, listener: listener, agent_listeners: [limiter, token_log],
+                              token_log: token_log, lock: lock)
+                         .open(live, transport: local)
+        end
+      end
+
+      it "shows the reply's tail before the failure's status, not in the next turn" do
+        settle(runner, lock)
+        watching = broadcaster.subscribe(entry.id)
+        agent = Pikuri::Agent::Event
+        conversation = Pikuri::Conversations::Event
+        capture_log do
+          [agent::UserTurn.new(content: 'hi'),
+           agent::AssistantDelta.new(content: 'The ans'),
+           agent::AssistantDelta.new(content: 'wer is 42'),
+           conversation::TurnEnded.new(outcome: :failed, error: RuntimeError.new('server gone'), restarting: false),
+           conversation::TurnStarted.new(user_message: 'again', attachments: []),
+           agent::UserTurn.new(content: 'again')].each { |event| raw_runner.on_event(event) }
+        end
+
+        frames = drain_frames(watching)
+        tail = frames.index { |f| f.include?('wer is 42') }
+        failure_status = frames.index { |f| f.start_with?('event: status') }
+        next_message = frames.index { |f| f.include?('again') }
+        refute_nil tail
+        assert_operator tail, :<, failure_status
+        assert_operator tail, :<, next_message
+      end
+    end
   end
 
   context 'status frames' do

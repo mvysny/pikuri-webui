@@ -978,51 +978,6 @@ module PikuriWebUI
         attr_reader tail: String?
       end
     end
-
-    # Coalesces streaming deltas into at most +fps+ events a second before they
-    # reach +inner+; every other event flows straight through.
-    # 
-    #   listener = RateLimitedListener.new(sse_listener, fps: 15)
-    #   # 60 deltas/s from a fast llama.cpp → 15 Markdown re-renders/s
-    # 
-    # A buffered delta is dropped when its own bookend (+Assistant+ /
-    # +Thinking+) arrives, since the bookend carries the whole text and
-    # {SseListener} re-renders from it (+StreamingMessage#finalize+); any other
-    # event — a tool call, a cancel — first flushes what is buffered, so the
-    # stream reaches the transcript whole and in order.
-    # 
-    # == Implementation details
-    # 
-    # The tick schedule is anchored at construction, not at the first delta, so
-    # stream-startup latency doesn't leak into the cadence; after a flush it
-    # advances by whole periods, so a long-idle stream doesn't backlog ticks.
-    # Assistant and thinking deltas buffer independently.
-    # 
-    # No lock, unlike pikuri-tui's copy: only agent events come through here
-    # ({Agents::Runner} keeps the conversation's own events to itself), and an
-    # agent emits from one thread at a time — the boot thread, then each turn's.
-    # A lock here would also sit outside {BigAppLock}, the domain {SseListener}
-    # enters, which the domain-is-outermost rule forbids.
-    class RateLimitedListener < Pikuri::Agent::Listener::Base
-      # _@param_ `inner` — where the coalesced stream goes
-      # 
-      # _@param_ `fps` — the cap on delta events a second; positive
-      # 
-      # _@param_ `clock` — zero-arg → monotonic seconds; a spec's seam
-      def initialize: (Pikuri::Agent::Listener::Base inner, fps: (Integer | Float), ?clock: Proc) -> void
-
-      # _@param_ `event` — an agent event
-      def on_event: (Data event) -> void
-
-      # _@return_ — e.g. +"RateLimited(15fps, SseListener)"+
-      def to_s: () -> String
-
-      def tick: () -> void
-
-      def flush_assistant: () -> void
-
-      def flush_thinking: () -> void
-    end
   end
 
   # Generic helpers — the Ruby side of what public/js/dom.js is to the scripts.
@@ -1270,7 +1225,6 @@ module PikuriWebUI
     # (+Conversation#status+ takes the gem's lock), and the gem never calls out
     # under its own.
     class Runner < Pikuri::Agent::Listener::Base
-      CONVERSATION_EVENTS: ::Array[Class]
       STATE_NAMES: ::Hash[Symbol, String]
 
       # _@param_ `conversation` — the one this runner is for
@@ -1285,7 +1239,7 @@ module PikuriWebUI
       # 
       # _@param_ `listener` — the transcript's renderer, fed directly by {#open}'s replay
       # 
-      # _@param_ `agent_listeners` — where the agent's events go: +listener+ behind a delta rate-limiter, and +token_log+
+      # _@param_ `agent_listeners` — where the agent's events, and +TurnEnded+, go: +listener+ behind a delta rate-limiter, and +token_log+
       # 
       # _@param_ `token_log` — the status bar's context readout; the constructor claims its +on_status_line+ slot
       # 
@@ -1380,6 +1334,13 @@ module PikuriWebUI
       def status_data: () -> ::Hash[untyped, untyped]
 
       # The gem's events update the page; the agent's go to +agent_listeners+.
+      # 
+      # +TurnEnded+ goes both ways, +agent_listeners+ first: a turn that fails
+      # mid-stream sends no agent event after its last delta, so the rate
+      # limiter's buffered tail would otherwise wait for the next turn. Flushed
+      # here, the tail reaches the transcript ahead of the failure's status
+      # frame. Every agent listener takes it: {Web::SseListener} and
+      # +TokenLog+ ignore what they don't know.
       # 
       # _@param_ `event` — an agent or conversation event
       def on_event: (Data event) -> void

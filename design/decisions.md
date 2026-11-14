@@ -1921,7 +1921,7 @@ tabs alone; server-side last-viewed is this decision reversed.
   attach — which works because `D_stream_blocks_once` already makes the
   HTML a pure function of the accumulated source, so it defers as easily
   as it moves threads. Open when it is picked up: whether
-  {Web::RateLimitedListener} should be wired at all for a detached
+  the gem's `RateLimitedListener` should be wired at all for a detached
   conversation. Probably not — but a conversation's listener is fixed at
   `open`, so detaching means a switch inside the runner, not a new stack.
 
@@ -2645,7 +2645,7 @@ they help, it does not require them.
 
 ## D_stream_blocks_once — Why send a streamed reply's finished blocks once, and only re-send its tail?
 
-**Context.** A streamed reply arrives at 15 fps ({Web::RateLimitedListener}). The
+**Context.** A streamed reply arrives at 15 fps (pikuri-conversations' `RateLimitedListener`). The
 obvious web shape is to re-render the whole accumulated Markdown per delta and replace the
 block's div, since a browser, unlike a terminal, can replace a node. Measured, that costs
 ~6 ms of kramdown per frame at 5 KB and ~32 ms at 48 KB (half a core for one long reply),
@@ -2683,7 +2683,7 @@ It fixes the CPU and neither of the things a reader notices.
 element — a footnote list, raw HTML, a math block — so an index drifts; a comment is
 invisible to CSS (`p + p` skips it) and to layout.
 
-**Rejected: coalescing deltas here.** That is {Web::RateLimitedListener}'s, one listener
+**Rejected: coalescing deltas here.** That is the gem's `RateLimitedListener`'s, one listener
 ahead (15 fps); a second limiter makes the frame rate a function of both.
 
 **Consequences.** While streaming, a reference or footnote a block from its definition

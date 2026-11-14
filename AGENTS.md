@@ -103,8 +103,8 @@ Every fact lives in exactly one of these; the others link to it.
   `D_slash_command_palette`.
 - **A streamed reply sends each finished block once** — `stream` diffs insert before the
   `<!--tail-->` marker and replace only after it; the bookend re-renders whole as a `block`,
-  dead after finalize; {Web::RateLimitedListener} coalesces at 15 fps. Store and broadcast
-  stay one task, or a diff lands twice. See `D_stream_blocks_once`.
+  dead after finalize; pikuri-conversations' `RateLimitedListener` coalesces at 15 fps.
+  Store and broadcast stay one task, or a diff lands twice. See `D_stream_blocks_once`.
 - **Mid-loop input goes through `Control::Interloper`, and the input stays enabled while
   busy.** The gem's `Conversation#submit` injects when busy and never refuses for it; the
   non-answers are a conversation deleted under it and images a model states it cannot see.

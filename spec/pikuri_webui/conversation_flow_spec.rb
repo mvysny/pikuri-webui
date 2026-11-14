@@ -66,7 +66,7 @@ RSpec.describe 'conversations end to end' do
       PikuriWebUI::Agents::Runner.new(
         conversation: entry, store: store, catalog: catalog, broadcaster: broadcaster,
         transcript: transcript, listener: listener,
-        agent_listeners: [PikuriWebUI::Web::RateLimitedListener.new(listener, fps: 15), token_log],
+        agent_listeners: [Pikuri::Conversations::RateLimitedListener.new(listener, fps: 15), token_log],
         token_log: token_log, lock: lock
       ).open(conversations, transport: transport)
     end

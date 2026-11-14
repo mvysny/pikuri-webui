@@ -28,7 +28,9 @@ content has crept in.
   {Web::Broadcaster} and the {BigAppLock}, all injected into every runner.
   {Conversations::Registry} mints one {Agents::Runner} per conversation opened; the runner is
   its live `Conversation`'s one listener, and owns its `TokenLog`, {Web::Transcript} and
-  {Web::SseListener} (behind a {Web::RateLimitedListener}).
+  {Web::SseListener} (behind pikuri-conversations' `RateLimitedListener`, whose class doc
+  owns its reasoning; the runner hands it the agent's events and `TurnEnded`, so a failed
+  turn's buffered tail is flushed before its status).
 - **No `Pikuri::*` type reaches a browser-facing class** (`D_pikuri_free_core`); translation
   happens at {Web::SseListener}, {Agents::Runner} and {Conversations::HistoryReplay}, and the
   store's `Entry` crosses the rest as a value read by field.
