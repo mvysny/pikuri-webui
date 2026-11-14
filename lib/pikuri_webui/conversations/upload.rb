@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'pikuri-core'
+require 'pikuri-conversations'
 
 module PikuriWebUI
   module Conversations
@@ -55,11 +56,11 @@ module PikuriWebUI
         end
       end
 
-      # The name pikuri's +History#save+ will store this image under, so a file
-      # {Store#stash} wrote ahead of the turn is the one the save then skips.
+      # The name the store files this image under, ahead of the turn and at its
+      # save alike, so the stashed file is the one the save then skips.
       #
       # @return [String] a bare basename: ten hex digits, a dash, {#filename}
-      def stored_name = to_attachment.stored_name
+      def stored_name = Pikuri::Conversations::HistoryFile.stored_name(to_attachment)
 
       # @return [Pikuri::Attachment] the same image as pikuri's type, for
       #   +run_loop+ and the Interloper

@@ -11,7 +11,7 @@ A pencil on the sidebar row, `PATCH /conversations/:id`.
 - `ConversationStore#retitle(conversation, title)` — the whole write, in memory
   and on disk, tolerant of a conversation with no envelope yet. Built for the
   titler; a rename needs nothing more from the store.
-- `AgentRunner#land_title` is the shape the route body copies: rewrite the
+- `Agents::Runner#land_title` is the shape the route body copies: rewrite the
   envelope *and* the runner's `@conversation` in one task, because the next
   turn-end save writes the title off that object and would revert a disk-only
   rename.

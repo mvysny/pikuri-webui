@@ -239,8 +239,9 @@ for every file in the tree.
   dropped as redundant, so each namespace module states its own contract.
 - **`Web::App`'s `:root` is three levels up**, not two. Sinatra derives `views/`
   and `public/` from it, and the move silently repointed it at `lib/`.
-- **`Conversations::Store::Conversation`** stays nested where it was rather than
-  being promoted; `Conversations::Conversation` would stutter for nothing.
+- **`PikuriWebUI::Conversations` sits beside the gem's `Pikuri::Conversations`**, a module
+  beside a class of the same last name. Inside our namespace the gem's is always spelled out
+  in full; renaming ours was not worth the churn of every cite.
 
 ---
 
@@ -385,8 +386,8 @@ the adapter; a well-formed table is merged before serialization, and a table
 naming `messages` / `tools` / `stream` breaks the turn loudly instead. What
 survives untouched is the failure that motivated `D_canary_severity`: a server
 may accept a parameter and ignore it — `reasoning_effort` did exactly that — so
-a short title is still never *assumed*, and {Agents::Titler}'s caps and
-`</think>` strip stay load-bearing.
+a short title is still never *assumed*, and the titler's caps and `</think>`
+strip (pikuri-conversations' `Titler`) stay load-bearing.
 
 **Consequence — `faraday` left the Gemfile.** It was declared only because
 `Agents::RequestParams` subclassed `Faraday::Adapter::NetHttp`; nothing in this
@@ -453,18 +454,26 @@ because a passthrough cannot know that `chat_template_kwargs.enable_thinking`
 *means* thinking. This is `D_llm_params_passthrough`'s bill coming due, and it
 costs one spurious line in a config that set `params` for something else.
 
-## D_lazy_retro_titling — Why is a stored conversation titled when it is opened rather than by a sweep?
+## D_lazy_retro_titling — Why is a stored conversation titled at its next turn rather than by a sweep?
 
 **Context.** Titling only new conversations leaves every conversation from
 before the feature stamp-titled with no path to a name. A title needs the
 opening message, and the obvious way to get one for an old conversation is to
 load its history — which, done in bulk, means reading every history on disk.
 
-**Decision.** Title on open, off the `History` `#restore!` has already replayed.
-That makes the per-conversation cost exactly zero until someone opens it, needs
-no second disk read, and reaches precisely the conversations a person looks at.
-"Is this still stamp-titled" is `Conversations::Store#stamp_titled?`, comparing
-against `stamp_title(created_at)`.
+**Decision.** Every conversation still carrying its start stamp is opened `untitled: true` on
+pikuri-conversations' list, and the gem's titler names it from the history it already holds,
+once a turn there has ended — a new conversation after its first answer, an old one at its next
+turn. The per-conversation cost is zero until someone *uses* it, needs no second disk read, and
+reaches precisely the conversations a person is working in. "Is this still stamp-titled" is the
+store's `stamp_titled?`, comparing against the stamp the id was minted with.
+
+**Rejected: titling on open**, what this shell did with its own titler: the history replayed
+for the transcript was in hand, so an old conversation was named the moment anyone looked at it.
+It went with the move to the gem, whose titler fires after a turn rather than beside one: on a
+server with one slot, a title asked beside the first turn wins the permit and the answer waits
+for it (~2 s, measured). After the turn, the turn's requests are done before the title asks. The
+cost is that a conversation only read, never continued, keeps its stamp.
 
 **Rejected: a bulk sweep after Puma binds.** Priced, and affordable — 100
 conversations at 1.2 s is two minutes of background work — but it pays for
@@ -476,24 +485,19 @@ preference before `D_llm_params_passthrough`.)
 **Rejected: a sweep capped to the newest N.** Same cost shape, plus a number
 nobody can choose.
 
-**Rejected: titling at boot proper.** The boot script warms one conversation
-before Puma binds; work added there delays the listen.
-
 **Rejected: a `title_source` key in `meta.json`.** The better answer *once
 manual rename exists*, because it is what stops auto-titling overwriting a name
 a person chose. Rename is not built, so the key would carry nothing today, and
 the stamp-shape test costs one line. **Revisit when rename lands:** the regex is
 not enough then, and existing conversations need the key backfilled.
 
-**Consequence — the opener is capped at `Agents::Titler::MAX_OPENER_CHARS`.** This path
-forced it: a conversation from months ago can open with a pasted stack trace or
-a whole file, where a title still comes out of the first sentence or two.
-Applies to new conversations too.
+**Consequence — the opener is capped** (the gem's `Titler::MAX_OPENER_CHARS`): a conversation
+from months ago can open with a pasted stack trace or a whole file, where a title still comes
+out of the first sentence or two.
 
-**Consequence — retry is per process, not per message.** The once-per-runner
-guard means a title lost to an unreachable server is not retried on the next
-message (whose text is not the opener), but *is* retried when the conversation
-is opened in a fresh process.
+**Consequence — retry is per process, not per message.** The gem asks once per opened
+conversation, so a title lost to an unreachable server is not retried on the next turn, but
+*is* retried at a turn after the conversation is opened in a fresh process.
 
 ## D_max_concurrent_requests — Why does a `[[server]]` table size the permits rather than a `--turns` flag?
 
@@ -509,11 +513,11 @@ The schema was authored in pikuri-tui
 meant the same URL and the same key written four times. The box and the model
 are now separate tables, joined by an `id`.
 
-Independently, pikuri fixed the thing `--turns` existed for. That flag's
+Independently, upstream fixed the thing `--turns` existed for. That flag's
 remaining duty was the permit count, justified by *"an `[[llm]]` carrying an
 explicit `context_window` skips the `/props` probe, so its server would go
-unsized, and unsized means unlimited."* That premise is now false:
-pikuri skips the probe only when the
+unsized, and unsized means unlimited."* That premise is now false: the probe
+(pikuri-conversations' `Probe`, at a turn's start) is skipped only when the
 cap is stated **and** the server is already sized. An unsized server always
 gets probed, so it always gets llama.cpp's own `total_slots`.
 
@@ -539,7 +543,7 @@ probe already declines to answer for — where unsized already means unlimited.
 the probe answer. The probe reports what the *box* can do, and that is the
 honest number for a registry keyed on the box; a shell substituting its own
 opinion for the server's own report would be lying to every other consumer of
-`ServerPermits` in the process. The preference for 1 is real (below) but it is
+the `Throttle` in the process. The preference for 1 is real (below) but it is
 advice about how to configure a server, so it lives in `README.md` where a
 user reads it, not in a default that silently contradicts `/props`.
 
@@ -571,7 +575,7 @@ user reads it, not in a default that silently contradicts `/props`.
   behaviour to avoid, reached by omission. Writing 1 also keeps the queue on
   our side of the wire, where the permit wait is cancellable and ■ lands on a
   parked turn.
-- The permit key is safe against the two URL spellings: `ServerPermits.key_for`
+- The permit key is safe against the two URL spellings: `Throttle.key_for`
   strips a trailing `/` and `/v1`, so `Server#url` as written and
   `Choice#server` (a normalized `api_base`, `/v1` included) name one server.
   That is why the loop could move off the catalog and onto the config.
@@ -582,127 +586,91 @@ user reads it, not in a default that silently contradicts `/props`.
   or a file full of plaintext keys would keep passing with the `chmod 600`
   advisory silently disarmed.
 
-## D_upstream_request_throttle — Why does pikuri ration the server while this shell only sizes the pool?
+## D_upstream_request_throttle — Why does upstream ration the server while this shell only sizes it?
 
-Refined by `D_max_concurrent_requests`, which moved the sizing off `--turns` and onto the
-`[[server]]` table; what stands is the split of duties — pikuri rations, this shell only
-sizes. Why not a throttle of our own: this shell ran one until pikuri master grew
-`Agent::ServerPermits` — a Faraday adapter holding a semaphore per `api_base`, sized off
-`--turns` — and two throttles on one connection is two sizings to keep in step. That adapter
-is deleted; the properties it had to hand over are the ones argued below.
+**Context.** This shell first throttled requests itself, with a Faraday adapter holding a
+semaphore per `api_base` — an explicit stopgap that named its own retirement: the principled
+home for a throttle is a control around the agent loop's requests, and that home is upstream.
+It moved upstream twice: into pikuri-core (`Agent::ServerPermits`), then out of core into
+pikuri-conversations as `Throttle`, which is the `Agent.new(around_request:)` hook every agent
+the gem builds carries — its titler's included. pikuri's register, under the LLM request
+throttle, and the workshop's under the throttle, carry the upstream argument.
 
-**Context.** This shell's own Faraday adapter shipped as an explicit
-stopgap and named its own retirement condition: the principled home
-for a throttle is a control on the agent loop, that home is pikuri's, and
-"when it lands, this entry is superseded and {ThrottledAdapter} retires". It
-landed — `Agent::ServerPermits` (a process-wide per-server permit registry)
-plus `Agent::RequestThrottle` (the acquire site, in ruby_llm's `instrumenter`
-slot on the agent's own `RubyLLM::Context`). See pikuri's own register, under
-the LLM request throttle, for the upstream argument and its measurements.
+**Decision.** Ration nothing here. The gem's `Throttle` does; this shell only sizes a server
+with `Throttle.limit` from `[[server]] max_concurrent_requests` (`D_max_concurrent_requests`).
 
-**Decision.** Delete the adapter and take upstream's. Sizing is all this
-shell does, and it does it explicitly.
+Upstream keeps the two properties the adapter was kept for — the permit's scope is exactly one
+HTTP request (so a parent cannot deadlock against the sub-agent its tool spawns), and it spans
+the whole streamed response — and fixes the two it could not:
 
-Upstream keeps the two properties the adapter was kept for: the permit's
-scope is exactly one HTTP request (so a parent cannot deadlock against the
-sub-agent its tool spawns), and it spans the whole streamed response. It
-also fixes the two things the adapter could not:
+- **The wait is cancellable.** A turn parked on a permit polls its `Cancellable`, so ■ lands on
+  a turn waiting in the queue instead of after the server finally answers it.
+- **The key is normalized.** `http://x:8080`, `.../v1` and `.../v1/` are one server, so two
+  `[[llm]]` entries written differently share a pool instead of silently getting one each.
 
-- **The wait is cancellable.** `ServerPermits::Semaphore#take` polls a
-  `Control::Cancellable` on `SLICE_SECONDS`, so ■ lands on a turn parked in
-  the queue instead of after the server finally answers it. That is
-  precisely the consequence that adapter logged as accepted and
-  unfixable from where it sat.
-- **The key is normalized.** `http://x:8080`, `.../v1` and `.../v1/` are one
-  server, so two `[[llm]]` entries written differently share a pool instead
-  of silently getting one each. Our own pool keyed on the raw `api_base`.
-
-**Why size at all, when pikuri auto-sizes.** The `/props` probe pikuri already
-runs for the context cap also reports `total_slots` and seeds the permit count
-from it, so a zero-config local llama.cpp throttles correctly. Sizing stays
-available as the operator's word about their own server — a ceiling below what
+**Why size at all, when the probe auto-sizes.** The `/props` probe also reports `total_slots`
+and seeds the permit count from it, so a zero-config local llama.cpp throttles correctly.
+Sizing stays available as the operator's word about their own server — a ceiling below what
 the box reports, or one for a server the probe cannot reach.
 
-The original argument here was narrower and is now void: an explicit
-`context_window` used to skip the probe altogether, so an entry that opted out
-of the probe would silently opt out of the throttle. pikuri's probe-when-unknown rule
-fixed that — see `D_max_concurrent_requests`, which is
-what let the flag go.
+**Rejected: `Throttle.default` rather than `.limit`.** First-writer-wins rather than
+authoritative. Boot runs before any probe so it would win in practice, which is exactly the
+fragility — the file would be outranking the probe by timing rather than by decision.
 
-**Rejected: `ServerPermits.default` rather than `.limit`.** First-writer-wins
-rather than authoritative. Boot runs before any probe so it would win in
-practice today, which is exactly the fragility — the flag would be
-outranking the probe by timing rather than by decision.
-
-**Rejected: dropping `--turns` and trusting auto-sizing alone** — *later
-reversed by `D_max_concurrent_requests`*, once upstream fixed the
-`context_window` case this rejection rested on. At the time: it lost that
-case, and the flag was a documented promise in `README.md`.
-
-**Rejected: keeping {ThrottledAdapter} underneath as a belt.** Two throttles
-in series at N permits each gates nothing the outer one doesn't, and the
-adapter's `/chat/completions` path test is a narrower net than the
-instrumenter's.
+**Rejected: keeping our adapter underneath as a belt.** Two throttles in series at N permits
+each gate nothing the outer one doesn't, and are two sizings to keep in step.
 
 **Consequences.**
 
-- **This reverses the adapter's own "rejected: a process-global registry
-  keyed by server URL".** That rejection was `D_global_monitor`'s
-  rule — process-global mutable state either joins the domain or argues for
-  its own lock — and the adapter dodged it with a subclass. The registry now
-  arrives with its own `Mutex`, from a library whose thread-safety is its
-  own contract, and it is touched only from the turn worker inside
-  `run_loop`, never from a {BigAppLock} task. The rule is satisfied the way
-  {Web::Broadcaster} satisfies it, not waived.
-- **The `faraday_adapter` seam stops being load-bearing in production**,
-  back to `Pikuri::Testing`'s use of it alone.
-- `:queued` still means two things, both honest: no executor thread, or no
-  permit. The status bar does not distinguish them.
+- **The registry is process-global mutable state with its own `Mutex`** — `D_global_monitor`'s
+  rule satisfied the way {Web::Broadcaster} satisfies it, not waived: it is a library's own
+  thread-safety contract, touched from turn threads inside `run_loop`, never from a
+  {BigAppLock} task.
+- A turn parked on a permit reads `running`; the status bar cannot tell "generating" from
+  "queued behind another conversation's request".
 - A retried request holds its permit across ruby_llm's backoff, idling the
   slot for a moment — upstream's deliberate trade, so a re-enqueued request
   cannot pile in behind an original that is still generating.
 - Sizing is per *server*, not per `[[llm]]`: two entries running two models on
-  one box share its slots. That is now where `max_concurrent_requests` sits
+  one box share its slots. That is where `max_concurrent_requests` sits
   (`D_max_concurrent_requests`); everything else about a connection is still
   per entry.
 
-## D_git_dep_on_pikuri_master — Why a git dependency on pikuri master rather than released gems or a sibling checkout?
+## D_git_dep_on_pikuri_master — Why git dependencies on pikuri's and pikuri-workshop's masters rather than released gems or sibling checkouts?
 
-**Context.** `D_upstream_request_throttle` needs `Agent::ServerPermits`,
-which exists only on pikuri master — nothing on the 0.1 line has it. This
-shell ran on pikuri 0.1.0 from RubyGems until then, and it later ran on a
-path dependency on a sibling `../pikuri` checkout.
+**Context.** This shell tracks unreleased surface on both repos: one agent per conversation,
+`ChatTransport#params`, the tool display strings in pikuri; the whole of pikuri-conversations in
+the workshop. It ran on pikuri 0.1.0 from RubyGems once, and later on a path dependency on a
+sibling `../pikuri` checkout.
 
-**Decision.** `git 'https://codeberg.org/mvysny/pikuri.git', branch:
-'master'` for `pikuri-core` and `pikuri-pdf`. `Gemfile.lock` pins the
-commit, and `bundle update pikuri-core pikuri-pdf` moves it, verified by
-`rake check`.
+**Decision.** A `git … branch: 'master'` source for each: Codeberg's pikuri for `pikuri-core`,
+`pikuri-pdf` and `pikuri-web`, GitHub's pikuri-workshop for `pikuri-conversations`.
+`Gemfile.lock` pins one commit per repo, `bundle update pikuri-core pikuri-pdf pikuri-web
+pikuri-conversations` moves both, and `rake check` verifies. The workshop pins its own pikuri by
+commit, so ours stays at or past that one.
 
-**Rejected: waiting for pikuri 0.2.0.** The honest version of "wait" is
-"block this change on a release cut to unblock it", between two repos with
-one author. Master is what this shell validates against in any case.
+**Rejected: waiting for releases.** The honest version of "wait" is "block this change on a
+release cut to unblock it", between repos with one author. Master is what this shell validates
+against in any case.
 
-**Rejected: a path dependency on `../pikuri`** — what this entry used to
-argue for. A clone could not build alone and CI had to clone the sibling
-itself. The lock pinned nothing, so whatever the checkout held went into
-the build, and master could break this shell on any `bundle install`.
+**Rejected: path dependencies on `../pikuri` and `../pikuri-workshop`.** A clone could not
+build alone and CI had to clone the siblings itself. The lock pinned nothing, so whatever the
+checkout held went into the build, and master could break this shell on any `bundle install`.
 
-**Rejected: vendoring `ServerPermits` / `RequestThrottle` into `lib/`.** A
-third copy of a throttle, in the one area `AGENTS.md`'s reuse rule reserves
-for pikuri.
+**Rejected: vendoring what this shell needs from upstream** — the throttle, the turn state
+machine, the store. Each was built here first and moved upstream; a copy here is a third one to
+keep in step.
 
 **Consequences.**
 
-- **A pikuri bump is a commit of its own**, the lock diff included.
-  pikuri's `CHANGELOG.md` `**Breaking:**` entries carry the migration, and
-  `rake check` is what says it is done.
-- **Editing both repos together** is Bundler's local override, per machine
-  and never committed: `bundle config set local.pikuri-core ../pikuri` (and
-  the same for `pikuri-pdf`). The checkout must sit on `master`, and the lock
-  then follows its HEAD.
-- **Revisit at the next pikuri release.** Nothing here argues against a pin
-  in principle, so when a release carries this surface, going back to a
-  pinned release is a one-line change and a good one.
+- **A bump is a commit of its own**, the lock diff included. Each repo's `CHANGELOG.md`
+  `**Breaking:**` entries carry the migration, and `rake check` is what says it is done.
+- **Editing the repos together** is Bundler's local override, per machine and never
+  committed: `bundle config set local.pikuri-core ../pikuri` (the same for `pikuri-pdf` and
+  `pikuri-web`), and `local.pikuri-conversations ../pikuri-workshop`. The checkouts must sit
+  on `master`, and the lock then follows their HEADs.
+- **Revisit at the next releases.** Nothing here argues against a pin in principle, so when
+  releases carry this surface, going back to pinned versions is a one-line change each.
 
 ## D_both_forms_in_the_block — Why does a tool block carry the short line and the raw one both, with CSS picking?
 
@@ -1003,8 +971,7 @@ absorb the race.** The route registers with the {Web::Broadcaster}, *then*
 reads {Web::Transcript}`#to_a`, then writes that snapshot onto the connection
 ahead of the drain loop. A block landing between the two is now delivered
 **twice** rather than not at all, and a repeat costs nothing: the browser
-upserts blocks by id, and {Web::Transcript#clear} deliberately keeps its id
-counter so an id is never reused. A miss is permanent; a repeat is a
+upserts blocks by id, and {Web::Transcript} never reuses an id. A miss is permanent; a repeat is a
 no-op. The seam closes on *ordering*, with no lock and no new mechanism.
 
 **The catch-up is one `snapshot` frame** carrying the whole ordered block
@@ -1238,21 +1205,19 @@ pikuri-tui's `Shared::Model::Choice.key` ported into `Agents::ModelCatalog`, inc
 its fall back to the raw model id for a transport from outside the catalog.
 
 *It lives in `meta.json`, written at turn end from the agent's own transport.*
-`#save` runs from `finish_turn`, under the runner's mutex, on the executor
-thread. Reading the field off the agent rather than off the selection makes
-the envelope and `history.json`'s last `model_id` agree by construction.
+{Agents::Runner#persist} is the gem's `on_turn_end`, run on the turn's thread before the
+conversation goes idle; it reads the pair off `Conversation#status.model`, the transport the
+agent is on, rather than off a selection — so the envelope and `history.json`'s last `model_id`
+agree by construction.
 
-*A reopened conversation is **minted** on its saved transport* — the factory
-resolves `Conversation#model_at_mint` / `#server_at_mint` against the catalog
-and hands the result to `Agent.new`. The pending slot is only ever a live
-switch.
+*A reopened conversation is **opened** on its saved transport* — the factory resolves the
+entry's `model` / `server` against the catalog and hands the result to the gem's `open`. A
+pending pick is only ever a live switch.
 
-*The status bar is the model's only surface, and reality there is free.*
-`apply_transport!` assigns the agent's transport only *after* `with_model`
-returns, so `status_data[:model]` — read straight off it — can never advertise
-a model the switch did not reach. That is pikuri-tui's footer rule satisfied
-by construction rather than by a subscription: a footer cannot read the agent,
-and we can.
+*The status bar is the model's only surface, and reality there is free.* The gem moves a pick
+onto the conversation's current transport only at the next turn's start, so
+`status_data[:model]` — read off `status.model` — never advertises a model no turn has run on
+yet. That is pikuri-tui's footer rule satisfied by construction rather than by a subscription.
 
 **Rejected: deriving the model from `history.json`'s `model_id`** — it is a
 model *string*, so it cannot carry the server half; `#row` would have to parse
@@ -1266,13 +1231,10 @@ with no turn yet it also writes the *commit point* over no `history.json` — a
 listed conversation that cannot be opened. **Accepted cost:** a pick with no
 message after it is lost across a restart.
 
-**Rejected: seeding the pending slot instead of minting.** Two reasons, and
-neither is the tempting one — history integrity via `model_id`-mismatched
-thinking signatures is a measured no-op on every backend we point at
-(`../pikuri/ideas/thinking-block-replay.md`). First,
-`Agent#detect_and_emit_context_cap!` runs in the agent's **constructor**, so
-minting on the factory default probes the *wrong* server's window. Second, a
-pending slot set on every reopen stops meaning "picked and not yet landed",
+**Rejected: opening on the default with a pick pending instead.** History integrity via
+`model_id`-mismatched thinking signatures is a measured no-op on every backend we point at, so
+that is not the reason. The reasons: the gem's boot probe asks the *wrong* server what inputs
+its model takes, and a pick set on every reopen stops meaning "picked and not yet landed",
 which is the meaning the status bar's arrow and the dialog's marker need.
 
 **Rejected: a transcript block for a switch.** It would survive a reopen —
@@ -1285,25 +1247,21 @@ carries the model instead, leaving `Web::SseListener`'s `ModelSwitched` arm sile
 and raises `EmptyTurnError` against a prompt-only conversation on a
 separate-system-field provider.
 
-**Rejected: subscribing to `ModelSwitched` to clear the arrow at the landing.**
-Without it the arrow clears at `finish_turn`, so a pick made while idle leaves
-the bar reading `local → remote` for the turn already running. That is early,
-not wrong — the bar never claims a model the switch did not reach — and not
-worth a non-rendering hook on the renderer. Revisit if the lag grates against
-a slow first token.
+**No `ModelSwitched` subscription.** The gem reports the landing as `ModelPending(nil)` at the
+turn's start, and the runner's status frame follows it; the agent's own `ModelSwitched` stays
+silent in {Web::SseListener}.
 
 **Consequences.**
 
-- **Three readers, and they must not collapse into one.**
-  `Conversation#model_at_mint` (what disk said at mint; the factory is its only
-  reader), `Agents::Runner#model` (intent — `pending || current`, what
-  `registry.create(from:)` inherits), and `@agent.transport` (reality, read
-  only inside `Agents::Runner`). The `_at_mint` suffix and the *absence* of a
-  runner-level reader for reality are what keep a future convenience accessor
-  from merging them.
-- **The mint-time pair is stale against disk by design** — `#save` moves
+- **Three readers, and they must not collapse into one.** The entry's
+  `model` / `server` (what disk said when it was listed; the factory is its only
+  reader), {Agents::Runner#model} (intent — `status.next_model`, what
+  `registry.create(from:)` inherits), and `status.model` (reality, read only
+  inside {Agents::Runner}). The *absence* of a runner-level reader for reality is
+  what keeps a future convenience accessor from merging them.
+- **The entry's pair is stale against disk by design** — `save` moves
   `meta.json` on and the Data never follows. Harmless because the factory is
-  its only reader, at mint.
+  its only reader, at open.
 - **The saved `server` is a URL, never a `[[server]]` `id`** — the same
   renameable-reference argument as the `name`, one step sharper: an id means
   nothing away from the config file that defines it, so a saved id is a
@@ -1493,8 +1451,7 @@ selected by an explicit URL or cookie rather than by UA.
 **Rejected: dropping the status bar on the phone,** which is what Claude
 Mobile does. The queued count is load-bearing here — it is how a
 mid-turn injection's wait is made legible
-(`D_interloper_mid_loop_input`) and how a *queued* turn is distinguished
-from a refused one (`D_serial_turn_executor`). It stays, as one line of
+(`D_interloper_mid_loop_input`). It stays, as one line of
 text; its two buttons move instead.
 
 **Rejected: one button that is ↑ when idle and ■ when busy.** The
@@ -1546,106 +1503,59 @@ with `showModal()` for that is worse than the ten lines it saves.
   `env(safe-area-inset-*)`, and whether an always-visible per-row ✕
   mis-taps in practice (see `D_delete_no_undo`).
 
-## D_no_store_lock — Why does `Conversations::Store` get no lock?
+## D_no_store_lock — Why does the conversation store get no lock of ours?
 
-Nothing shipped *as a lock*: this is a decision not to build one. What did ship in the same
-pass is what made the decision honest — {Conversations::Store#save} taking the history and
-owning the whole commit.
+**Context.** pikuri-conversations' `Store` — the folder of saved conversations, which this shell
+wrote itself before the gem took it over — is `Thread-safe` in the narrow sense its header
+states: it holds no mutable state past its constructor arguments. That is a true claim about the
+*object*, sitting where a reader looks for a claim about the *folder*. Every mechanical argument
+for wrapping it in a lock of ours is settled elsewhere:
 
-**Context.** The store's consistency rested on a *discipline* nobody
-stated: writes went through {Agents::Runner}'s mutex, reads ran from
-Sinatra request threads, and the class's rdoc said "Thread-safe:
-stateless past its constructor arguments" — a true claim about the
-*object*, sitting exactly where a reader looks for a claim about the
-*folder*. Every mechanical argument for a lock has since been settled
-elsewhere:
+- **N writers, audited clean.** Per-conversation agents (`D_conversation_owns_agent`) mean
+  several turn-ends write at once, but into *disjoint subdirectories*, and one directory never
+  has two writers because a conversation admits one turn at a time
+  (`D_serial_turn_executor`).
+- **Reads are already serialized where it matters.** {Conversations::Registry}'s calls —
+  `list`, `find`, `create`, `delete` — run inside {BigAppLock} tasks; {Web::App} reaches the
+  store directly only to stash and serve attachments, content-addressed files written by
+  temp-file-and-rename.
+- **The listing tolerates concurrency.** A listing row takes a read's own `ENOENT` as the
+  answer instead of checking first, so a scan concurrent with a save or a delete is correct
+  with no coordination.
 
-- **N writers arrived and were audited clean.** Per-conversation agents
-  (`D_conversation_owns_agent`) mean several turn-ends write at once, but
-  into *disjoint subdirectories*, and one directory can never have two
-  writers because a conversation admits one turn at a time. The audit is
-  in `D_serial_turn_executor`, and it is why `--turns > 1` shipped
-  without a lock.
-- **Reads are already serialized.** Nothing in {Web::App} holds a store;
-  every call goes through {Conversations::Registry}, whose monitor wraps
-  `#list`, `#find`, `#create` and `#delete`.
-- **The listing already tolerates concurrency.** `#row` takes a read's
-  own `ENOENT` as the answer instead of checking `file?` first, so a scan
-  concurrent with a save or a delete is correct with no coordination.
+**Decision.** No lock around the store, and no plan for one. What holds the folder together is
+named in the gem's header: one writer per directory (the host's guarantee, which ours is), both
+files written temp-file-and-rename, `meta.json` the commit point, and cross-call sequences
+explicitly *not* atomic — `find` then `delete` has a gap and callers tolerate the conversation
+vanishing inside it. `save` owns the whole write path, history included, which is what lets
+this rest on "unnecessary" rather than "impossible": a lock that could guard only half a
+directory would claim more than its mechanism.
 
-**Decision.** No lock in `Conversations::Store`, and no plan for one. What
-holds the folder together is named in the class's `== Thread-safety`
-section: the partition gives one writer per directory, both files are
-written temp-file-and-rename, `#row` absorbs the races a listing can
-see, and cross-call sequences are explicitly *not* atomic — `#find` then
-`#delete` has a gap and callers tolerate the conversation vanishing
-inside it.
+**Rejected: a read-write lock.** It buys parallel readers, which pays only under read
+contention with long critical sections; a listing is a directory scan of a few hundred `stat`s
+for a single user with a handful of tabs. If a sidebar ever measures badly, the fix is the index
+file the store's `list` already rejects, not a fancier lock.
 
-**The store owns the whole write path, history included.** Previously
-{Agents::Runner#persist} wrote both halves itself — `history.save(dir)`
-then `store.write_meta` — which left the store claiming a folder it
-wrote half of. `#save` now creates the directory 0700, calls
-`History#save`, then writes `meta.json` as the commit point, and
-`write_meta` is private. This is what lets the decision above rest on
-"unnecessary" rather than on "impossible": a lock that could only ever
-guard our half of the directory would have been the same
-claim-wider-than-the-mechanism problem in a new place. Two things fell
-out of it beyond the lock question — a history is no longer written into
-a default-mode directory and tightened afterwards (`History#save`
-creates `attachments/` *before* it `mkpath`s the conversation directory,
-so the contents were briefly world-readable), and "an interrupted save
-leaves the conversation unlisted" became a spec instead of a comment,
-because the store can now be interrupted between the two halves where
-two separate calls could not be. The seam question this raised — a
-pikuri type in the store — is `D_pikuri_free_core`.
-
-**Rejected: `Concurrent::ReentrantReadWriteLock`.** An RWLock buys
-parallel readers, which pays only under read contention with long read
-critical sections; `#list` is a directory scan of a few hundred `stat`s
-for a single user with a handful of tabs. **Do not re-argue this on
-dependency cost** — the note that killed it for two rewrites ("a
-genuinely new direct dependency, and the only non-stdlib lock in the
-pikuri family") is void: `concurrent-ruby` is in the bundle for the turn
-executor (`D_serial_turn_executor`), so the gem is free and it *still*
-loses. If a sidebar ever measures badly the fix is the index file
-`#list` already rejects, not a fancier lock.
-
-**Rejected: a plain stdlib `Monitor`** (re-entrant, because `#find` calls
-`#list` and a `Mutex` would deadlock on itself — the accidental
-threading bug the lock was meant to prevent, introduced by the lock).
-Four reasons, past the fact that it fixes nothing:
+**Rejected: a plain stdlib `Monitor` around it** (re-entrant, because `find` calls `list`).
+Past the fact that it fixes nothing:
 
 - It would serialize operations that are already safe to interleave.
-- **It invites the false argument it was meant to prevent.** A monitor in
-  the store reads as *the* reason the folder is consistent, and the next
-  reader relaxes the atomic rename or puts the `file?` check back — the
-  only two mechanisms that work against a second process or against
-  pikuri's own writes. `D_serial_turn_executor` warns in exactly this
-  shape: distrust a correctness claim resting on the wrong mechanism.
-- It would be the third lock, needing a documented ordering (registry or
-  runner outermost, store innermost, never the reverse). Forced in
-  practice, still a cost to carry for no benefit.
-- Since `#save` owns the history write, any lock around it would hold
-  across `history.json` + `attachments/` — the longest filesystem
-  operation here — where it would once have held only a rename. That is
-  the one argument an RWLock has left, and it argues for no lock around
-  the write at all.
+- **It invites the false argument it was meant to prevent.** A monitor reads as *the* reason
+  the folder is consistent, and the next reader relaxes the atomic rename or puts a `file?`
+  check back — the only two mechanisms that work against a second process.
+- It would be another lock, needing a documented ordering against the domain and the gem's.
+- It would hold across `history.json` + `attachments/` — the longest filesystem operation here.
 
 **Consequences.**
 
-- **Adding a lock later is a two-line diff**, now that one method owns
-  the write path. Nothing is deferred at a cost, which is the whole
-  reason not to speculate.
-- **The trigger to reopen:** a store operation spanning two directories
-  (a move, a merge, an index file), or a second writer to one
-  conversation's folder. Either breaks the disjointness the audit rests
-  on.
-- **An in-process lock was never the answer to a second process** and
-  cannot be sold as one (`D_no_multi_process_lock`).
-- The one real bug this re-audit turned up was not a store problem at
-  all: a request thread holding a runner across a delete could resurrect
-  the conversation, fixed as runner state ({Agents::Runner#discard!}) and
-  written up in `D_delete_no_undo`'s consequences. A store lock would not
+- **The trigger to reopen:** a store operation spanning two directories (a move, a merge, an
+  index file), or a second writer to one conversation's folder. Either breaks the disjointness
+  the audit rests on — and either is now a pikuri-conversations change first.
+- **An in-process lock was never the answer to a second process** and cannot be sold as one
+  (`D_no_multi_process_lock`).
+- The one real bug the first audit turned up was not a store problem at all: a request thread
+  holding a runner across a delete could resurrect the conversation, fixed as runner state
+  ({Agents::Runner#discard!}) and written up in `D_delete_no_undo`. A store lock would not
   have caught it — a lock per method is not a transaction.
 
 ## D_no_multi_process_lock — Why no cross-process lock on the state root?
@@ -1653,8 +1563,8 @@ Four reasons, past the fact that it fixes nothing:
 Nothing shipped: this is a decision *not* to build a cross-process lock.
 
 **Context.** Two `pikuri-webui-chat` processes on different ports share
-`~/.local/state/pikuri/pikuri-web-chat/conversations/`, and pikuri's
-`History#save` rewrites `history.json` whole. The failure is *not* a torn
+`~/.local/state/pikuri/pikuri-web-chat/conversations/`, and the store's
+`save` rewrites `history.json` whole. The failure is *not* a torn
 file — the save is temp-file-and-rename, so what is on disk is always a
 complete valid history. It is a **silently clobbered conversation**: the
 loser's turns vanish at the next save with nothing on screen to say so.
@@ -1679,7 +1589,7 @@ by a configuration with no reason to exist does not earn a mechanism.
 locked row read-only in the sidebar. It is the *right* shape if the
 collision were worth defending against — a dimmed row with a reason is the
 affordance the busy-refusal already uses — but it puts per-conversation
-lock state in `Conversations::Store`, and file locks are the kind of state
+lock state in the store, and file locks are the kind of state
 that turns a hard kill into "why can't I open my own conversation".
 Permanent cost, hypothetical benefit.
 
@@ -1700,7 +1610,7 @@ default than a warning in the README.
   *in-process* twin — a request thread holding a runner across a delete —
   was a separate bug with a separate fix ({Agents::Runner#discard!}) and no
   bearing on this entry: one process cannot claim another's runner.
-- `Conversations::Store` never grows cross-process consistency. Its atomic
+- The store never grows cross-process consistency from us. Its atomic
   rename remains all a concurrent reader outside this process gets, and
   the in-process locking question is independent of this entry — settled
   separately in `D_no_store_lock`, and an in-process lock never bought
@@ -1742,7 +1652,7 @@ owner thread was the precondition for concurrent turns (false, see
 **No owner thread, and no coarse lock either.** The partition does the
 work: one agent, one history, one transcript and one listener per
 conversation, and a conversation admits one turn at a time
-({Agents::Runner#submit} injects rather than starting a second). Per-object
+(pikuri-conversations' `submit` injects rather than starting a second). Per-object
 locks survive where they guard genuinely shared things — the registry's
 monitor over the resident map, the broadcaster's over the subscriber list
 — and each now guards one small thing with a stated owner, which is not
@@ -1805,17 +1715,18 @@ concept this app refuses. Recorded as a rejection rather than an omission
 because it is what a reader who knows Vaadin reaches for first.
 
 **Amended: the case that reopens this is *reproducibility*, and a
-defect-shaped trigger could never have caught it.** Found by inspection:
-{Agents::Runner#claim_running} moved a turn from `:queued` to `:running`
-without broadcasting, so a turn that really waited for an executor slot
-left the status bar reading "waiting for a free slot" until it ended.
-It survived because `#submit` broadcasts *after* posting the job and the
-pool thread usually wins the race to set `:running` first — the frame is
+defect-shaped trigger could never have caught it.** Found by inspection,
+in the runner's own turn state machine of the time: the step that moved a turn
+from queued to running did not broadcast, so a turn that really waited for a
+pool thread left the status bar reading "waiting for a free slot" until it
+ended. It survived because the submit broadcast *after* posting the job and
+the pool thread usually won the race to set running first — the frame was
 right by luck. A lucky race making the system *usually* work is worse
 than one that always fails: what it hides is unreportable ("sometimes the
 status bar doesn't move") and, being a statement-level interleaving,
-unreproducible on demand. Fixed by broadcasting on both of
-`#claim_running`'s paths.
+unreproducible on demand. Fixed by broadcasting on both of that step's paths;
+the state machine itself has since moved into pikuri-conversations, whose
+`Conversation` emits from one place per transition.
 
 That is a better argument than the hygiene case rejected above, and a
 different one. The value of one global queue is not that it serializes
@@ -1826,7 +1737,7 @@ concurrency, and both orders stay reachable — but it shrinks the
 reachable set from arbitrary interleavings of *statements* to arbitrary
 orderings of *actions*, and an action ordering is finite, enumerable and
 writable as a test. This suite can already pin one interleaving, with a
-gate job holding the executor; what it cannot do is pin one nobody
+gated transport holding a turn open; what it cannot do is pin one nobody
 thought to look for.
 
 **What still holds it off, and neither reason is comfort.** The owner
@@ -1836,7 +1747,7 @@ is not — the action bodies are a small enumerable set — but it is still
 discipline nothing enforces, and the realistic breach is not a blocking
 call, which review catches. It is head-of-line stalling behind a packet
 that merely runs *long*, and two are already in hand: kramdown, which
-`D_stream_blocks_once` runs at 15 fps, and {Conversations::Store#save} at
+`D_stream_blocks_once` runs at 15 fps, and the store's `save` at
 turn end. Both sit on the agent thread today, where a stall costs one
 conversation; behind an owner they cost every conversation at once. But
 the cost is blast radius only, *not* diagnosis — and that asymmetry cuts
@@ -1854,7 +1765,7 @@ whose halves are two HTTP requests, which no server-side serialization
 can reach), one with the monitor {Conversations::Registry} already held.
 {Web::Transcript} had already solved a fourth the other way, with an immutable
 `Block` snapshot no reader can have rewritten underneath it. What is left
-is {Agents::Runner#status_data}: composed off unlocked state and handed to a
+was the runner's status frame: composed off unlocked state and handed to a
 {Web::Broadcaster} that snapshots subscribers under its lock and pushes
 *outside* it, so two threads can compose in one order and push in the
 other, leaving the browser holding the older frame. One remaining site is
@@ -1894,9 +1805,9 @@ made** and would otherwise be rediscovered by hitting them:
   one cannot work here** — this architecture is good at *hiding* the
   defects that argue against it, so "wait for a live one" waits forever.
   The trigger was **a second site needing atomicity across two objects**,
-  and it fired on the second: {Agents::Runner#claim_running}, a state change
-  and its notification, and {Agents::Runner#status_data}, a read from one
-  object and a publish to another. Both found by reading, neither by a
+  and it fired on the second: the runner's claim-running step, a state change
+  and its notification, and its status frame, a read from one object and a
+  publish to another. Both found by reading, neither by a
   report. The state-volume triggers never got the chance — more server
   state than the transcript and the resident runners, or a second writer
   to one conversation. Raising `--turns` was never one of them.
@@ -1914,7 +1825,7 @@ defects above are the evidence, and both were found by reading the code —
 which is the point, because this architecture cannot *report* them.
 
 **Scoped, because "we need ACID" over-buys.** D is already had:
-{Conversations::Store} commits by temp-file-and-rename with `meta.json` as
+the store commits by temp-file-and-rename with `meta.json` as
 the commit point (`D_no_store_lock`), which is durability enough for a
 single-user shell. C is domain invariants, and the partition holds most of
 them. I is largely had for the same reason — one writer per conversation
@@ -1925,9 +1836,7 @@ should be sized to that and no larger.
 **The mechanism is genuinely open, and no plugin exists.** Rack's contract
 is `call(env)` — middleware is request-scoped by construction and has no
 purchase on a graph that outlives a request — so there is no Sinatra
-answer to adopt. The primitive is already in the bundle: an owner queue is
-a `Concurrent::SingleThreadExecutor`, from the gem the `Gemfile` already
-justifies for the turn executor. Candidates in ascending cost: an atomic
+answer to adopt. Candidates in ascending cost: an atomic
 helper per seam; one global `Monitor`; a true owner thread. Vaadin's
 `UI.access()` is the middle one and Tuile is the last, as the entry above
 already notes.
@@ -1993,13 +1902,13 @@ tabs alone; server-side last-viewed is this decision reversed.
 
 **Consequences.**
 
-- The registry and {Conversations::Store} are now the only genuinely shared
+- The registry and the store are now the only genuinely shared
   mutable state. The registry has a `Monitor`; the folder needs no lock of
   its own, for the reasons in `D_no_store_lock`.
 - `Conversations::HistoryReplay.snapshot` became dead code and was removed.
 - Rendering a detached conversation is not optimized: the
-  accumulate-don't-render idea only pays at `--turns` > 1, which
-  `D_serial_turn_executor` now allows but does not default to. If it is
+  accumulate-don't-render idea pays once several conversations stream at
+  once, which `D_serial_turn_executor` allows. If it is
   ever built, the choice is already made and the two losing readings are
   why. *Render always, fan out selectively* (what ships today) re-runs
   kramdown at 15 fps for a conversation nobody is watching — the single
@@ -2012,144 +1921,73 @@ tabs alone; server-side last-viewed is this decision reversed.
   attach — which works because `D_stream_blocks_once` already makes the
   HTML a pure function of the accumulated source, so it defers as easily
   as it moves threads. Open when it is picked up: whether
-  `Listener::RateLimited`'s 15 fps timer should be wired at all for a
-  detached conversation. Probably not, but it is pikuri's class — check
-  whether a listener stack can be rebuilt mid-life before assuming.
+  {Web::RateLimitedListener} should be wired at all for a detached
+  conversation. Probably not — but a conversation's listener is fixed at
+  `open`, so detaching means a switch inside the runner, not a new stack.
 
-## D_serial_turn_executor — Why is the turn executor's size not a load cap?
+## D_serial_turn_executor — Why are turns unbounded, with no count of them a load cap?
 
-The executor itself stands: one shared pool injected into every {Agents::Runner}, still the
-admission gate that reports `:queued`. Sizing moved out of it — first to
-`D_upstream_request_throttle`, then off the pool altogether (`D_max_concurrent_requests`) —
-so two things below no longer describe the code.
+**Context.** A turn blocks on the LLM for minutes, so it cannot run on a Sinatra request thread
+(`D_worker_thread_agent_loop`). Once conversations own their own agents
+(`D_conversation_owns_agent`), "how many turns at once" stops being implied by "how many agents",
+and something has to decide whether that number is bounded.
 
-*The pool is unbounded* — `Concurrent::CachedThreadPool`, not
-`FixedThreadPool.new(turns * 2)`. `2N` was the compromise between two
-wrong answers, and once the permit moved to the request it stopped buying
-anything: a turn holds a thread for its whole `run_loop` but a permit only
-per HTTP request, so **any** number tied to the server's capacity strands
-conversations behind turns that are off in a tool using no slot. Doubling
-it just moved the stranding threshold. The bound that matters was already
-there and is not a number: a conversation admits one turn at a time, so
-turns in flight cannot exceed the conversations opened. Unbounded also
-retires a deadlock a bounded pool would hit the day a tool spawns a
-sub-agent posting back to the same executor.
+**Decision.** Unbounded: every turn runs on a thread of its own, started by pikuri-conversations'
+`Conversation` — one per boot, per turn, per title, per agent release — and nothing in front of
+`submit` counts them. Sending always succeeds. The wait for the server is the gem's per-server
+`Throttle`, taken around each HTTP request inside `run_loop` (`D_upstream_request_throttle`); a
+turn parked on one reads `running`.
 
-*`:queued` is no longer where a turn waits for the server.* It is now the
-posting-to-running gap, effectively instant; the wait for a slot is
-pikuri's permit, taken inside `run_loop`, and a turn parked on one reports
-`:running`. So the status bar can say "thinking" for a turn that is queued
-behind another conversation's completion — accepted, because the count that
-would fix it (`ServerPermits.for(base).available`) is upstream's and no
-event carries it. The paragraph below beginning "The pool size caps
-concurrent turns" describes a job this pool no longer has.
+**Never rest a correctness claim on a thread count.** Single-writer safety comes from the
+*partition*: per-conversation agents plus a conversation admitting one turn at a time (the gem's
+`submit` injects rather than starting a second). Two turns are two agents, two histories, two
+transcripts, two listeners and two disjoint folders, at any concurrency — which is why there is
+no owner thread (`D_no_event_queue`). Audited when concurrent turns were first allowed:
 
-Everything here about single-writer safety living in the partition rather
-than in the number is untouched, and is what makes an unbounded pool safe
-rather than merely convenient.
+- **The folder.** Two turn-ends write two *disjoint subdirectories*: the store's `save` touches
+  only that conversation's directory, through a sibling temp file and a rename; the shared root
+  is created in the constructor and otherwise only enumerated, and a listing concurrent with a
+  save takes a read's own `ENOENT` as its answer.
+- **The tool constants.** Every pikuri tool declares a sharing posture in its yardoc.
+  `CALCULATOR` is `P_stateless`; `FETCH` and `SCRAPE` are `P_shared_benign`, sharing a
+  process-wide URL cache whose race that doc argues is harmless; `web_search` is built per agent
+  for its keys, but is `P_shared_locked` on class-level per-provider limiters.
 
-**Context.** A turn blocks on the LLM for minutes, so it cannot run on a
-Sinatra request thread (`D_worker_thread_agent_loop`). Once conversations
-own their own agents, "how many turns at once" stops being implied by
-"how many agents".
+**Rejected: a bounded pool sized to the server.** This shell ran turns on a fixed pool of
+`turns * 2` threads first, a `--turns` flag beside it. A turn holds its thread for the whole
+`run_loop` but a server slot only per HTTP request, so **any** number tied to the server's
+capacity strands conversations behind turns that are off in a tool using no slot — doubling it
+only moved the threshold. A bounded pool also deadlocks the day a tool spawns a sub-agent that
+waits on the same pool, and holds a thread through waits that are not load at all (a human
+confirming a tool call). The bound that matters is not a number: turns in flight cannot exceed
+the conversations opened.
 
-**Decision.** One process-wide executor shared by every runner. Its queue
-*is* the admission gate: submitting always succeeds, and a turn waiting for
-a free slot reports `:queued` rather than being rejected. Cancelling a
-queued turn needs nothing from pikuri — the job checks a flag on entry and
-returns without starting.
+**Rejected: an unbounded pool of our own (`concurrent-ruby`'s `CachedThreadPool`).** What this
+shell ran between the fixed pool and the gem. It was right about the size and wrong about the
+owner: a pool here meant a turn state machine here too — `:queued`, claim-running, the restart
+after a late injection, the cancel reset — rebuilt in every pikuri host. pikuri-conversations
+owns that once, and a thread per task names itself (`turn <id>`) and needs no shutdown protocol.
 
-**The pool size caps concurrent turns, and nothing else depends on it.**
-It exists so turns do not outnumber the inference server's parallel slots
-— match it to llama.cpp's `--parallel`. It is an operator setting about
-load, with no correctness claim resting on it.
-
-**Rejected: pinning the pool at 1 as a correctness precondition.** The
-position this decision was first taken with, and the one to expect back —
-it is what the abstraction invites. The argument was that an `Executor`'s
-contract is `submit(block) → result`, a job runner that holds no state by
-design, so single-writer safety at pool 1 is a property of *that number*
-rather than of the abstraction, and would evaporate silently when someone
-raised it. The premise is correct and worth keeping: **never rest a
-correctness claim on a pool size.** The conclusion was not, because the
-executor was not carrying single-writer safety in the first place. Raising
-the pool was said to put two agents in two places at once — the
-conversations folder, and pikuri's shared tool constants. Both were audited
-when `--turns` was added, and neither holds.
-
-- **The folder.** Two turn-ends write two *disjoint subdirectories*.
-  {Conversations::Store#save} touches only that one conversation's directory —
-  `history.json` and `meta.json` both, each through a sibling temp file and
-  a rename inside it; the shared root is created in the constructor and
-  otherwise only enumerated.
-  A listing concurrent with a save was already correct by design — `#row`
-  takes a read's own `ENOENT` as the answer rather than checking first. And
-  one directory can never have two writers, because a conversation admits
-  one turn at a time.
-- **The tool constants.** pikuri answers this itself now: every tool
-  declares a sharing posture in its yardoc (its `DECISIONS.md`, "Every tool
-  declares one of four postures"). `CALCULATOR` is `P_stateless`, and says
-  outright to hand it to every agent in the VM; `FETCH` and `WEB_SCRAPE`
-  are `P_shared_benign`, sharing a process-wide URL cache whose race that
-  doc argues is harmless. `WebSearch` is built per wiring for its API keys,
-  but is `P_shared_locked` on class-level per-provider limiters, so a
-  per-agent instance would throttle no differently.
-
-Single-writer safety was never located in the pool size. It comes from the
-*partition*: per-conversation agents (`D_conversation_owns_agent`) plus a
-conversation admitting one turn at a time ({Agents::Runner#submit} injects
-rather than starting a second). Two turns are two agents, two histories,
-two transcripts, two listeners and two disjoint folders. That property is
-independent of how many turns run at once, which is why `--turns` needed no
-owner thread to go with it (`D_no_event_queue`).
-
-**Rejected: deriving the pool size by probing the server's slot count.**
-llama.cpp reports `--parallel` on `/props`, so this is possible and would
-remove a way to misconfigure the pair. Not done: the probe would have to
-happen at boot, before any conversation exists, and would make an
-unreachable server fatal to *starting* rather than to the first turn.
-A flag the operator sets alongside the one they already set on the server
-is the cheaper half of that trade. Reopen if `--turns` is routinely wrong.
-
-**Rejected: hand-rolling the pool on stdlib `Queue`.** Ruby ships no
-executor, so the alternative is writing a pool, a shutdown protocol and a
-backpressure policy by hand. `concurrent-ruby` is a new direct dependency
-(the first `Concurrent::` in the pikuri family — pikuri itself is stdlib
-`Mutex` throughout) and earns its Gemfile paragraph on exactly that.
-
-**Rejected: treating the executor as the event queue.** They share a
-mechanism and have opposite contracts — this one exists *to* block, an
-owner thread must never block. See `D_no_event_queue`.
+**Rejected: deriving a bound by probing the server's slot count.** llama.cpp reports
+`--parallel` on `/props`, and the gem does read it — to size the `Throttle` per request, which is
+where a slot count means something.
 
 **Consequences.**
 
-- Shutdown drops whatever is running: saves land at turn end, and
-  `turn_executor.shutdown` from the `:state, :stop` hook deliberately does
-  not wait (waiting there would re-create the parked-thread bug
-  `D_shutdown_on_state_stop` exists to prevent). Accepted — single user,
-  rare restarts.
-- Specs inject `ImmediateExecutor` to run turns inline, which deleted one
-  hand-rolled spin-waiter. The examples that are *about* the busy state
-  keep a real thread.
-- **Nothing enforces the pool size, and nothing should need to.** The
-  `executor:` parameter is typed `Concurrent::ExecutorService`, which any
-  pool satisfies; what carries the intent is the boot script's paragraph
-  saying the number is a load cap. A future reader who finds a correctness
-  argument resting on it should distrust the argument, not tighten the
-  type.
-- **`--turns > 1` buys overlapping inference, not overlapping search.**
-  pikuri's search rate limiter holds its mutex across the HTTP call and is
-  scoped to the egress IP, so two agents searching at once serialize
-  anyway, and one tripping a provider's circuit breaker cools down the
-  other. Documented at the tool wiring; it is upstream's design
-  (`P_shared_locked`), not something to work around here.
-- **The accumulate-don't-render idea for detached conversations becomes
-  reachable**, since more than one conversation can now render at once —
-  see `D_conversation_owns_agent`'s consequences, which parked it at pool 1.
+- Shutdown drops whatever is running: saves land at turn end, and `Pikuri::Conversations#shutdown`
+  from the `:state, :stop` hook cancels without waiting (waiting there would re-create the
+  parked-thread bug `D_shutdown_on_state_stop` exists to prevent). Accepted — single user, rare
+  restarts.
+- Specs run turns on the gem's real threads and wait for them to settle (`settle` in
+  `spec_helper.rb`), since there is no executor to swap for an inline one.
+- **Concurrent turns buy overlapping inference, not overlapping search.** pikuri's search rate
+  limiter holds its mutex across the HTTP call, so two agents searching at once serialize, and
+  one tripping a provider's circuit breaker cools down the other — upstream's design
+  (`P_shared_locked`), documented at the tool wiring.
 
 ## D_delete_no_undo — Why is deleting a conversation irreversible, with no undo and no trash?
 
-**Context.** `Conversations::Store` grew every verb but this one, so
+**Context.** The conversation store grew every verb but this one, so
 conversations accumulated until the user ran `rm -r`, which is what
 `README.md` told them to do. Three things needed settling before a ✕
 could go on a sidebar row: what confirmation looks like, what happens
@@ -2160,11 +1998,10 @@ is recoverable.
 `app.js` and the only option needing no CSS at all, where a modal
 component is exactly the kind of thing that starts arguing for a build
 step (`D_no_js_build_step`) — then a real removal: `FileUtils.rm_r` over the whole folder, `meta.json` unlinked
-first. Deleting the live conversation is `#new_conversation` *without the
-save* — the agent is cleared (its `Event::Reset` empties the transcript
-in every tab, the same path a fresh conversation takes) and a fresh id
-minted, then the folder goes. Both cases are refused while a turn is in
-flight (409), like selecting and starting a conversation.
+first. The conversation's runner is retired first ({Agents::Runner#discard!}): its live
+conversation is closed, after which pikuri-conversations never saves it again, and a tab still
+reading it moves to the newest one. Refused while a turn is in flight (409); an agent still
+booting is cancelled instead, having saved nothing.
 
 The conversation folder is ours end to end — nothing but pikuri and this
 shell writes there — so a delete removes the directory wholesale. That is
@@ -2234,21 +2071,16 @@ deleting.
 - Nothing new serializes the folder. What keeps a delete from racing the
   turn-end save is the runner refusing while busy — see the bullet below
   for why that refusal had to become a *claim* rather than a read.
-- **Amended: dropping the runner is not enough; it has to be retired.**
-  `POST /messages` resolves a runner and submits to it in separate steps,
-  so a delete landing in between removed the folder while
-  a request thread still held a live runner — the next turn's save
-  recreated the directory, and the conversation the user confirmed away
-  came back in the sidebar one turn later, openable, holding its old
-  history plus the new turn. `busy?` could not close it: once the runner
-  is out of {Conversations::Registry}'s map, the registry can never see it
-  busy again. The fix is {Agents::Runner#discard!} — one atomic
-  busy-check-and-claim on the *runner's* mutex, called inside the
-  registry's monitor, with the runner dropped only if it succeeds. Either
-  `#submit` claims the turn first and the delete is refused, or the
-  discard wins and `#submit` answers `:discarded` (404 from the route);
-  there is no interleaving where both proceed, so `#persist` needs no
-  check of its own. This is the *in-process* twin of the cross-process
+- **Dropping the runner is not enough; it has to be retired.** A request
+  thread can hold a runner resolved in an earlier task, so a delete that only
+  dropped it from {Conversations::Registry}'s map once let the next turn's save
+  recreate the directory — the conversation the user confirmed away came back
+  in the sidebar one turn later. The fix is {Agents::Runner#discard!}: the
+  live conversation's `close`, which refuses while a turn runs and otherwise
+  closes for good in one critical section of the gem's. Either a submit starts
+  the turn first and the delete is refused, or the close wins and every later
+  submit answers `:discarded` (404 from the route); and once closing, the gem
+  never calls `on_turn_end`, so no save can follow. This is the *in-process* twin of the cross-process
   resurrection two bullets up, and unlike that one it was reachable by a
   single user with two tabs — which is why it is fixed rather than
   accepted.
@@ -2261,8 +2093,8 @@ deleting.
   next turn end. Fixed by {Conversations::Registry#open_id}: resolve and open
   are one step under the monitor `#delete` already holds, so either the
   delete finds a runner to refuse or retire, or the open finds nothing to
-  resolve. `#runner_for(conversation)` itself is unguarded still, and is now only
-  reached by `#create`, holding a conversation it just minted. Found by
+  resolve. `#runner_for(entry)` is private, reached only by `#open_id` and by
+  `#create`, holding a conversation it just minted. Found by
   reading during the `D_no_event_queue` seam audit, not by a report.
 - Deleting is the whole answer to retention: still no cap and no
   auto-prune. `rm -r` on the state folder remains a complete reset.
@@ -2325,18 +2157,16 @@ unanswered, and in practice it means testing on whatever is open.
 
 **Context.** A saved conversation has two layers: the *model* half
 (messages, tool calls, results, thinking, attachments — `history.json`,
-written by `Pikuri::Agent::History#save`, whose contents we do not get a
+written by pikuri-conversations' `HistoryFile`, whose contents we do not get a
 vote on) and the *render* half ({Web::Transcript} blocks: kinds, ids, HTML).
 Loading a conversation back means producing the second from something on
 disk.
 
 **Decision.** Store nothing beyond `history.json` and our `meta.json`,
 and rebuild the blocks by turning each message back into the
-`Agent::Event`s that produced it, fed through the real {Web::SseListener}. The
-transcript is *rebuilt, not swapped*: `Agent#load_history!` emits
-`Event::Reset`, whose existing arm empties the transcript and every open
-tab, and the replay refills it — so there is still exactly one
-transcript, one renderer, and one event→kind mapping.
+`Agent::Event`s that produced it, fed through the real {Web::SseListener} into the
+conversation's fresh transcript before its agent is opened on the same history — so there is
+exactly one transcript, one renderer, and one event→kind mapping.
 
 **Rejected: store the rendered blocks** (`blocks.json` beside
 `history.json`). Exact reload, zero replay logic — and HTML strings on
@@ -2550,7 +2380,7 @@ shells, and stable.
 `bin/pikuri-webui-chat` derives a single `state_root` local and composes
 every path from it, so the next thing worth persisting lands beside
 `conversations/` rather than in a second place. The root is created by
-{Conversations::Store} at construction — the folder exists from boot, not
+the store at construction — the folder exists from boot, not
 from whichever later event happens to save first.
 
 **Rejected: a shared `conversations/` for cross-shell resume.** The
@@ -2704,17 +2534,17 @@ every new block kind and every theme change then has to carry.
 "show me what went wrong in the browser" want is a new decision, not a
 resurrection of `LogIO`.
 
-## D_worker_thread_agent_loop — Why does the agent loop run as a job on the executor rather than on a request thread?
+## D_worker_thread_agent_loop — Why does the agent loop run on pikuri-conversations' threads rather than on a request thread?
 
 **Context.** The agent loop blocks on the LLM for the length of a turn.
 Sinatra hands each request a pooled Puma thread.
 
-**Decision.** {Agents::Runner} owns one worker thread and the loop runs
-there, never on a request thread. The listener writes into thread-safe
-sinks ({Web::Transcript}, {Web::Broadcaster}); each `GET /events` connection parks
-*its* serving thread draining one subscribed queue. There is no UI thread
-and no marshaling — thread-safety is a property of the sinks, not an
-obligation on their callers.
+**Decision.** pikuri-conversations runs each turn on a thread of its own, never on a request
+thread; a request only calls `Conversation#submit`, which returns at once. The listener writes
+into thread-safe sinks ({Web::Transcript}, {Web::Broadcaster}, each entered through a
+{BigAppLock} task); each `GET /events` connection parks *its* serving thread draining one
+subscribed queue. There is no UI thread and no marshaling — thread-safety is a property of the
+sinks, not an obligation on their callers.
 
 **Rejected: running the loop on the request thread that started it.** It
 holds a pooled thread for the whole turn, dies with the client that
@@ -2737,12 +2567,11 @@ must be thread-safe on its own, because no caller synchronizes.
 want sharper: the input field is right there while the agent is working,
 and a disabled field is a worse answer in a browser than in a terminal.
 
-**Decision.** {Agents::Runner#submit} starts a turn when idle and **injects**
-when busy; the injection renders through the normal listener path as
-`UserTurn(mid_loop: true)`, so nothing about the display is special-cased.
-The input stays enabled while busy and the status bar shows the queued
-count, which is pushed by `Interloper#on_change` — so the agent's *own*
-mid-loop drain updates the browser too.
+**Decision.** pikuri-conversations' `Conversation#submit` starts a turn when idle and
+**injects** into the agent's `Interloper` when busy; the injection renders through the normal
+listener path as `UserTurn(mid_loop: true)`, so nothing about the display is special-cased. The
+input stays enabled while busy and the status bar shows the pending count, which the gem reports
+as `PendingChanged` — the agent's *own* mid-loop drain included.
 
 **Rejected: disabling the input while the agent works.** It is the
 honest-looking option and it is the one that loses work: the user types
@@ -2753,50 +2582,27 @@ That is client-only conversation state, which
 `D_server_authoritative_transcript` forbids — a reload would silently eat
 the queue.
 
-**Decision: a turn that ends holding a queue starts another one.** Only
-`run_loop` drains the Interloper, so an injection accepted in the window
-between the loop's last completion and {Agents::Runner}'s state
-reset — where `#submit` correctly still reads `:running` — had nothing
-left to deliver it. It sat until the user happened to send again, with
-the status bar promising "1 queued" over a conversation doing nothing.
-{Agents::Runner#finish_turn} claims the restart in the same critical section
-that goes idle, so no `#submit` and no `#discard!` ever observes the gap,
-and the restart is a *bare* turn: `run_loop(user_message: nil)` drains
-before its first completion, which is the entire job.
+**A turn that ends holding a queue starts another one** — the gem's rule, and the one this
+shell built first. Only `run_loop` drains the Interloper, so an injection accepted between the
+loop's last completion and going idle has nothing left to deliver it; the gem restarts a *bare*
+turn in the same critical section that would go idle, and `run_loop` drains before its first
+completion. **Only after a turn that completed:** restarting after a cancel would make the stop
+button look broken, and after a transport failure would turn an unreachable server into a spin.
 
-**Restricted to a turn that returned normally.** A cancelled or failed
-turn leaves what is queued for the next `#submit`. Restarting after a
-cancel would make the stop button look broken — the user asks for quiet
-and gets a fresh round-trip — and restarting after a transport failure
-turns an unreachable server into a spin. Termination rests on `run_loop`
-draining what it was restarted for; against an agent that does not, the
-restart would post turns forever, which is why the fake agent in the spec
-drains too.
-
-**Rejected: draining the queue on `#cancel`.** It kills the same
-stranding for the cancel path and makes "cancel" mean "stop everything",
-badge back to zero. But it silently discards user-typed text that was
-never rendered anywhere, and it widens a bug fix into a semantic change
-to cancellation. Left as it was: the messages survive and the next
-`#submit` delivers them.
+**Rejected: draining the queue on cancel.** It makes "cancel" mean "stop everything", badge back
+to zero — but silently discards user-typed text that was never rendered anywhere. The messages
+survive, and the next send delivers them with it.
 
 **Consequences.** Interloper's delivery boundary is the caveat that
 leaks: injections arrive at turn start and once each tool batch
 completes, so one placed mid-response waits for that boundary. The
-visible queued count exists to make that wait legible rather than to hide
-it. The boundary itself is pikuri's decision, not ours — as of 0.0.7 it
-moved off `after_tool_result` to tool-batch completion, and AGENTS.md's
-documented caveat had to be corrected to match.
+visible pending count exists to make that wait legible rather than to hide
+it. The boundary itself is pikuri's decision, not ours.
 
 ## D_pikuri_free_core — Why may no `Pikuri::*` type reach what the browser sees?
 
-Restated as a boundary rather than a list of classes, when {Conversations::Store#save} took
-over writing `history.json` and therefore took a `Pikuri::Agent::History`. The count was never
-the invariant — "translation happens at named boundaries, and nowhere else" is — and the list
-of names had begun to read as the rule.
-
-**Context.** This project tracks pikuri closely
-(`D_git_dep_on_pikuri_master`), and pikuri is pre-1.0, so its surface
+**Context.** This project tracks pikuri and pikuri-workshop closely
+(`D_git_dep_on_pikuri_master`), and both are pre-1.0, so their surface
 moves under this shell by design. What that costs depends
 entirely on *where* the types are: a pikuri type in the rendering path
 prices an upgrade at a sweep of every file the browser's state flows
@@ -2804,23 +2610,24 @@ through, while one in a disk utility prices it at that utility.
 
 **Decision.** The line is the browser, not a file count. **Nothing that
 reaches what the browser sees speaks a pikuri type:** {Web::Transcript},
-{Web::Broadcaster}, {Web::StreamingMessage}, {Util::MarkdownRenderer},
-{Conversations::Registry}, {Config} and {Web::App} deal in ids, kinds, HTML
-strings, paths and queues. **Server-side of that line, pikuri types are
-used freely** — `bin/pikuri-webui-chat` (boot/wiring), {Web::SseListener},
-{Agents::Runner}, {Conversations::HistoryReplay}, and {Conversations::Store#save}.
+{Web::Broadcaster}, {Web::StreamingMessage}, {Util::MarkdownRenderer} and {Config} deal in ids,
+kinds, HTML strings, paths and queues. **Server-side of that line, pikuri types are used
+freely** — `bin/pikuri-webui-chat` (boot/wiring), {Web::SseListener}, {Agents::Runner} and
+{Conversations::HistoryReplay}.
 
-**Rejected: keeping {Conversations::Store} on the Pikuri-free side by taking
-a block** — `store.save(conversation) { |dir| history.save(dir) }`, the
-store yielding a `Pathname` and never holding a `History`. Built first,
-then reverted: it preserved the letter of the old list at the cost of an
-indirection that explained nothing, and the seam it was defending is not
-one the store sits on. What settles it is that the refactor *relocates* a
-pikuri call rather than adding one — `History#save` had exactly one call
-site before ({Agents::Runner#persist}) and has exactly one after (the
-store), so the upgrade cost the seam exists to bound did not move at all.
-A utility method that owns a directory is the right owner of what goes
-into it.
+**The saved-conversation envelope is the one value that crosses.** {Conversations::Registry}
+and {Web::App} hold pikuri-conversations' `Store::Entry` — the conversation's id, title, start
+time, folder and saved connection — and read it by field, never naming the constant; App turns
+it into sidebar hashes before anything renders. The alternative was a webui-side copy of the
+entry, translated at the registry: a second type for one frozen value, kept in step with the
+gem by hand. The upgrade cost the seam bounds is the few fields read, which a copy would pay
+too.
+
+**Rejected: keeping the store on the Pikuri-free side by taking a block** —
+`store.save(conversation) { |dir| history.save(dir) }`, the store yielding a `Pathname` and never
+holding a `History`. Built once, then reverted: it preserved the letter of an older list of
+classes at the cost of an indirection that explained nothing. A utility that owns a directory is
+the right owner of what goes into it — the reasoning the gem's `Store` now embodies.
 
 **Rejected: letting Pikuri types spread to whatever needs them.** Passing
 a `Pikuri::Agent::Event` into {Web::Transcript} is the shortest path and it
@@ -2838,7 +2645,7 @@ they help, it does not require them.
 
 ## D_stream_blocks_once — Why send a streamed reply's finished blocks once, and only re-send its tail?
 
-**Context.** A streamed reply arrives at 15 fps (pikuri's `Listener::RateLimited`). The
+**Context.** A streamed reply arrives at 15 fps ({Web::RateLimitedListener}). The
 obvious web shape is to re-render the whole accumulated Markdown per delta and replace the
 block's div, since a browser, unlike a terminal, can replace a node. Measured, that costs
 ~6 ms of kramdown per frame at 5 KB and ~32 ms at 48 KB (half a core for one long reply),
@@ -2876,8 +2683,8 @@ It fixes the CPU and neither of the things a reader notices.
 element — a footnote list, raw HTML, a math block — so an index drifts; a comment is
 invisible to CSS (`p + p` skips it) and to layout.
 
-**Rejected: coalescing deltas here.** That lives in pikuri as `Listener::RateLimited`
-(15 fps); a second limiter makes the frame rate a function of both.
+**Rejected: coalescing deltas here.** That is {Web::RateLimitedListener}'s, one listener
+ahead (15 fps); a second limiter makes the frame rate a function of both.
 
 **Consequences.** While streaming, a reference or footnote a block from its definition
 shows literal, and footnote numbers restart per block; the bookend fixes both, at the cost
@@ -3002,7 +2809,7 @@ and claiming nothing about who is asking. The shared inbox stays shared.
 **Context.** Ruby has no `jstack`: when this server wedges — a `/events`
 drain loop parked on a queue nobody pushes, a turn stuck in `run_loop`
 against an inference server that stopped answering, a save blocked on a
-full disk inside `finish_turn` — there was nothing to look *at*. The
+full disk inside a turn-end save — there was nothing to look *at*. The
 `D_no_event_queue` reopening priced dumpability as the compensation for
 the coming serialization domain's blast radius: a race consumes its
 evidence, but a stall holds still for a dump. The plan was a
@@ -3061,9 +2868,9 @@ system is only ever observed *between* tasks, never inside one. The
 reachable state space shrinks from arbitrary interleavings of statements
 to orderings of tasks. It does **not** buy determinism — whether a submit
 lands before or after a turn ends is genuine external concurrency, and
-both orders must stay correct — and it does not replace the executor:
-`D_serial_turn_executor`'s pool stays the admission gate, two
-conversations still stream concurrently, interleaving at task granularity.
+both orders must stay correct — and it does not serialize turns: each
+still runs on its own thread (`D_serial_turn_executor`), and two
+conversations stream concurrently, interleaving at task granularity.
 
 The task inventory:
 
@@ -3071,15 +2878,15 @@ The task inventory:
   page snapshot is an untorn read (blocks + status + rows from one
   instant), resolve + act is one step, and `/events`' subscribe +
   catch-up share a task.
-- **The turn job's bookkeeping brackets are tasks** (claim, take-pending,
-  finish including the save); `run_loop` itself — LLM round-trips, tool
-  execution — runs off-domain.
+- **What pikuri-conversations reports from its threads becomes a task in the runner**: the
+  turn-end save ({Agents::Runner#persist}), a landed title, every status change. `run_loop`
+  itself — LLM round-trips, tool execution — and the gem's own state machine run off-domain.
 - **{Web::SseListener} renders off-domain** (kramdown, escaping, the
   {Web::StreamingMessage} accumulation — the domain owns *mutation*, not
   rendering) **and enters a task per finished block**: store + broadcast
   as one unit, ~15 tiny tasks/s per streaming conversation.
-- **The Interloper's `on_change` opens a task** from whichever thread
-  caused the change; fired from inside a task it just re-enters.
+- **A conversation event fired by a call made inside a task** — a submit's pending count —
+  is emitted on that same thread after the gem drops its lock, and its task just re-enters.
 
 Guarded classes — {Agents::Runner}, {Conversations::Registry}, {Web::Transcript} —
 lost their own locks and gained a *caller obligation*: every public
@@ -3114,14 +2921,13 @@ The rules a change must keep:
   opener waits on the promise on its own thread, outside the domain.
 - **No post-and-wait.** A task never blocks on a Future or a worker's
   result; results return as the worker's own follow-up task —
-  `monitor.run` from its thread, no API needed. The code already lives in
-  this continuation style (`claim_running` / `finish_turn` are the
-  worker's re-entry brackets).
-- **The domain is the outermost lock.** A task may call into pikuri
-  (`Interloper#pending?`, `Cancellable#cancel!`); pikuri never holds its
-  own lock when calling back (`on_change` fires outside the Interloper's).
-  Consistent order, no ABBA — re-enumerate when a new pikuri callback
-  appears.
+  `monitor.run` from its thread, no API needed. The runner's event handling
+  is exactly this continuation style.
+- **The domain is the outermost lock.** A task may call into
+  pikuri-conversations (`Conversation#submit`, `#status`, `#close`), whose lock is taken
+  inside ours; the gem never calls out — no listener, no `on_turn_end` — under its own lock,
+  and documents the order host → gem → `Interloper`. Consistent order, no ABBA —
+  re-enumerate when a new upstream callback appears.
 
 **Rejected: costume B, the event loop** (the Active Object pattern — a
 `Concurrent::SingleThreadExecutor` owner thread draining a mailbox;
@@ -3129,10 +2935,9 @@ precedents Swing's EDT, Node, Tuile). Same atomicity, same enforcement
 (thread identity instead of `mon_owned?`), same dumpability — but every
 reading route needs `ask` + timeout + a 503 arm where a monitor task
 composes the response inline; a task that posts-and-waits on a task
-self-deadlocks, so the `on_change` knot (fires synchronously from inside
+self-deadlocks, so the pending-count knot (fires synchronously from inside
 submit's inject and re-enters the status broadcast) needs restructuring
-where a re-entrant monitor dissolves it, and `ImmediateExecutor` specs
-deadlock. Its one real advantage — FIFO across threads — solves a problem
+where a re-entrant monitor dissolves it. Its one real advantage — FIFO across threads — solves a problem
 we don't have: per-source order comes from each source being one thread,
 and cross-source order is the genuine concurrency neither costume
 removes. On deadlock the costumes differ in *shape*, not exposure: B
@@ -3157,10 +2962,8 @@ reaches, though the server-side half now also sits in one task), and
 **Consequences.**
 
 - Seam 2 closed structurally: composing a status frame and pushing it
-  share a task, so composed order *is* push order. The audit's PROBE 6
-  flipped into `agent_runner_spec` as the acceptance test that the tear
-  can no longer be produced; the monotonic-sequence-number fallback died
-  unimplemented.
+  share a task, so composed order *is* push order; the monotonic-sequence-number
+  fallback died unimplemented.
 - Blast radius, priced: a stall inside a task pauses every conversation
   and every request, not one. Compensations: the rapid-fire rule, and
   `D_puma_thread_dump` — the SIGPWR dump shows the stalled task *with its
@@ -3169,12 +2972,12 @@ reaches, though the server-side half now also sits in one task), and
   has no timed `enter`). Accepted: Puma's pool absorbs, the dump
   diagnoses; a bounded wait is the thing to add if this ever hurts.
 - The stop hook's independence is an invariant: `broadcaster.close` +
-  `turn_executor.shutdown` and nothing else — nothing in it may enter the
+  `Pikuri::Conversations#shutdown` (no wait) and nothing else — nothing in it may enter the
   domain.
 - New shared state joins the domain (guarded + `assert!`) or states the
   reason for its own lock the way {Web::Broadcaster}'s header does.
 - The registry's `#open` footgun (audit PROBE 7; the method is `#runner_for` now) was untouched by the
-  mechanism — the stale `Conversation` is held *across* tasks — and was
+  mechanism — the stale entry is held *across* tasks — and was
   closed right after it by structure instead: it is private, so every
   caller goes through `#open_id` (re-resolves in its own task) or
   `#create` (opens what it just minted), and PROBE 7's premise is gone.

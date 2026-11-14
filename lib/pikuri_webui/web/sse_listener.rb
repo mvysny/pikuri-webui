@@ -2,6 +2,7 @@
 
 require 'erb'
 require 'pikuri-core'
+require 'pikuri-conversations'
 
 module PikuriWebUI
   module Web
@@ -27,11 +28,11 @@ module PikuriWebUI
     # and its SSE stream can never disagree about a block. The streaming
     # handles (+@assistant+ / +@thinking+) stay off-domain and unguarded:
     # this class is confined to one event producer at a time — the minting
-    # task during {Agents::Runner#restore!}'s replay, the turn worker
-    # thereafter, which never overlap because the registry publishes the
-    # runner only after the replay and a conversation admits one turn at a
-    # time. Per-browser event order comes from each connection's one FIFO
-    # queue.
+    # task during {Agents::Runner#open}'s replay, then the agent's boot and
+    # turn threads, which never overlap: the replay finishes before the
+    # agent is opened, and a conversation runs one turn at a time. Only
+    # agent events reach it; the conversation's own stay with the runner.
+    # Per-browser event order comes from each connection's one FIFO queue.
     #
     # Variant coverage mirrors TuileListener:
     #
@@ -52,14 +53,11 @@ module PikuriWebUI
     # - +SystemInjected+ (reference text the host injected — a loaded skill,
     #   recalled memory) collapses to a one-line +notice+; see
     #   {#render_system_injection}.
-    # - +Reset+ empties the transcript and pushes one +reset+ SSE event, so
-    #   every open tab drops its blocks without a page reload (and without
-    #   losing a half-typed message). Loading a saved conversation rides the
-    #   same arm: +Agent#load_history!+ resets first, and {Conversations::HistoryReplay}
-    #   then refills the transcript through this listener — which is why
-    #   there is no second transcript to swap in.
-    # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
-    #   status bar reads +TokenLog#status_line+ via Agents::Runner).
+    # - A saved conversation is filled in by {Conversations::HistoryReplay}
+    #   replaying through this same listener before its agent boots, so there
+    #   is no second renderer for a restored transcript.
+    # - +Tokens+ stays silent (TokenLog consumes it; the status bar reads
+    #   +TokenLog#status_line+ via Agents::Runner).
     # - +ModelSwitched+ stays silent too, and that is a decision rather than
     #   an omission: the status bar carries the model, read off the agent's
     #   own transport. A transcript block for it would need a second producer
@@ -139,15 +137,13 @@ module PikuriWebUI
           flush_assistant(:preserve)
           release_thinking
           add_block(:error, Util::MarkdownRenderer.escape('! cancelled'))
-        in Pikuri::Agent::Event::Reset
-          reset_transcript
         in Pikuri::Agent::Event::HistoryLoaded
-          # Silent on purpose. The {Conversations::HistoryReplay} that follows renders the
-          # restored conversation itself, and a "restored N messages" line would
-          # be the only block in the transcript that never came from the agent.
+          # Silent on purpose. The {Conversations::HistoryReplay} that preceded it
+          # rendered the restored conversation, and a "restored N messages" line
+          # would be the only block in the transcript that never came from the agent.
         else
-          # Tokens / ContextCap / ModelSwitched: silent here — see the class
-          # header for why the last of those draws nothing.
+          # Tokens / ModelSwitched: silent here — see the class header for why
+          # the last of those draws nothing.
         end
       end
 
@@ -199,30 +195,13 @@ module PikuriWebUI
 
         links = attachments.map do |attachment|
           url = Util::MarkdownRenderer.escape(
-            "/c/#{ERB::Util.url_encode(@conversation)}/attachments/#{ERB::Util.url_encode(attachment.stored_name)}"
+            "/c/#{ERB::Util.url_encode(@conversation)}/attachments/#{ERB::Util.url_encode(Pikuri::Conversations::HistoryFile.stored_name(attachment))}"
           )
           name = Util::MarkdownRenderer.escape(Pikuri::Sanitizer.sanitize(attachment.filename.to_s).text)
           %(<a href="#{url}" target="_blank" rel="noopener" title="#{name}">) +
             %(<img src="#{url}" alt="#{name}" loading="lazy" decoding="async"></a>)
         end
         %(<div class="attachments">#{links.join}</div>)
-      end
-
-      # Empty the transcript and tell every browser to do the same.
-      #
-      # Streaming handles are dropped rather than flushed: the blocks they point
-      # at go with everything else a line later, so +flush_assistant+ would
-      # broadcast a +remove+ for an id every tab is about to forget anyway.
-      #
-      # @return [void]
-      def reset_transcript
-        @assistant = nil
-        @thinking = nil
-        @thinking_streamed = false
-        @lock.run do
-          @transcript.clear
-          @broadcaster.broadcast(event: :reset, data: {}, conversation: @conversation)
-        end
       end
 
       # Append one finished block: store it and announce it.

@@ -168,7 +168,7 @@
          pending span holds a bare name and CSS draws the arrow, which is what
          lets /model read the intended name straight back out of it. -->
     <footer id="status-bar">
-      <span id="status-state"><%= status[:state] == :queued ? 'waiting for a free slot' : status[:state] %></span>
+      <span id="status-state"><%= status[:state] %></span>
       <span id="status-pending"><%= status[:pending].positive? ? "#{status[:pending]} queued" : '' %></span>
       <!-- `data-missing` is the connection this conversation had saved before
            it left the config file. It rides the model span rather than a

@@ -8,7 +8,8 @@
 #   bin/probe-titler --attacks    # and six attempts to talk it out of titling
 #
 # Reads ~/.config/pikuri/config.toml like the shell does, and drives
-# PikuriWebUI::Agents::Titler itself rather than a private copy of it — so what
+# pikuri-conversations' Pikuri::Conversations::Titler — the one the shell
+# titles with — rather than a private copy of it, so what
 # this reports is the shipped path, caps and </think> strip included, and it cannot
 # drift the way a standalone benchmark script does. What a reader is judging:
 #
@@ -29,6 +30,7 @@
 # to avoid. The reasoning canary answers the only question they settled.
 
 require 'bundler/setup'
+require 'pikuri-conversations'
 require_relative '../lib/pikuri_webui'
 
 # Unbuffered, so a slow row appears while it is being waited for rather than
@@ -121,7 +123,7 @@ puts "probing #{llm.name.inspect} — #{choice.model} @ #{choice.server}"
 puts "params: #{llm.params.empty? ? 'none declared' : llm.params.inspect}"
 puts
 
-titler = PikuriWebUI::Agents::Titler.new(transport: choice.transport, params_declared: !llm.params.empty?)
+titler = Pikuri::Conversations::Titler.new(transport: choice.transport, params_declared: !llm.params.empty?)
 
 begin
   puts 'openers'

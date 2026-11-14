@@ -23,25 +23,30 @@ gem 'rackup', '~> 2.2'
 # its path without per-file require_relative ceremony.
 gem 'zeitwerk', '~> 2.7'
 
-# The pikuri-core gem — Agent, Tool, prompts, listeners. Same wiring as
-# pikuri-tui's chat shell: bin/pikuri-webui-chat binds Pikuri::Agent +
-# Pikuri::Tool::* into the Sinatra app via the SseListener adapter.
+# The pikuri gems come from two repos, both on their git master rather than a
+# release, because this shell tracks unreleased surface — one agent per
+# conversation, `ChatTransport#params` (`D_llm_params_passthrough`), the tool
+# display strings the transcript's tool lines render. Gemfile.lock pins one
+# commit per repo; `bundle update pikuri-core pikuri-pdf pikuri-web
+# pikuri-conversations` moves both (`D_git_dep_on_pikuri_master`). The
+# workshop pins its own pikuri by commit: keep ours at or past it, or a
+# workshop gem may call into a pikuri that lacks what it needs.
 #
-# A git dependency on pikuri master, not a released version: this shell
-# needs unreleased surface — Agent::ServerPermits, the per-server LLM
-# request throttle that replaced this project's own Faraday adapter
-# (`D_upstream_request_throttle`); ChatTransport's `params`, which
-# replaced the second one (`D_llm_params_passthrough`); and the tool
-# display strings the transcript's tool lines now render. Gemfile.lock
-# pins the commit; `bundle update pikuri-core pikuri-pdf` moves it
-# (`D_git_dep_on_pikuri_master`).
-# pikuri-pdf rides the same checkout because its gemspec pins
-# `pikuri-core = <exact version>` in lockstep — a released pikuri-pdf
-# would refuse the moment master bumps core's version.
+# pikuri itself: pikuri-core (Agent, Tool, prompts, listeners), pikuri-pdf
+# (PDF text for fetch) and pikuri-web (web_search, web_scrape, fetch, and the
+# HTML extractor that renders a fetched page as Markdown). One checkout, since
+# the sibling gemspecs pin `pikuri-core = <exact version>` in lockstep.
 git 'https://codeberg.org/mvysny/pikuri.git', branch: 'master' do
   gem 'pikuri-core'
   gem 'pikuri-pdf'
+  gem 'pikuri-web'
 end
+
+# pikuri-workshop's pikuri-conversations: the live conversations (an agent
+# each, turns on threads of their own, mid-turn messages, cancel, the model
+# switch), the per-server request throttle and /props probe, the titler, and
+# the folder of saved conversations. What this shell used to build itself.
+gem 'pikuri-conversations', git: 'https://github.com/mvysny/pikuri-workshop.git', branch: 'master'
 
 # Server-side Markdown → HTML for assistant/thinking content. The web
 # analogue of the TUI's TTY::Markdown: rendering happens on the server
@@ -78,26 +83,6 @@ gem 'tomlrb', '~> 3.0'
 # 0.2 s of `require` at boot).
 gem 'rbs', '~> 4.2'
 gem 'typemap', '~> 0.1'
-
-# Thread pool for agent turns. A turn blocks on the LLM for minutes, so it
-# runs as a job on an executor rather than on a Sinatra request thread —
-# and the executor's queue is also the admission gate that keeps concurrent
-# turns from outnumbering the inference server's slots.
-#
-# A genuinely new direct dependency (not previously in the bundle, not even
-# transitively), and the first `Concurrent::` reference in the pikuri
-# family: pikuri itself is stdlib `Mutex` throughout. It earns that because
-# Ruby ships no executor at all, so the alternative is hand-rolling a
-# thread pool, a shutdown protocol and a backpressure policy — exactly the
-# primitives a well-tested library should own. Concretely we take
-# FixedThreadPool (production, sized by --turns), ImmediateExecutor (specs
-# run turns inline, which deletes a spin-wait helper), and the
-# shutdown/kill protocol. Tuile already depends on it in this family, for
-# the same reason one layer down.
-#
-# MIT, zero runtime dependencies of its own, and a de-facto Ruby standard
-# (ActiveSupport depends on it).
-gem 'concurrent-ruby', '~> 1.3'
 
 # ERB engine Tilt picks over stdlib ERB. Needed for Sinatra's
 # +erb, escape_html: true+ auto-escaping and the +<%==+ raw-output tag

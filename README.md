@@ -54,11 +54,13 @@ cd pikuri-webui
 bundle install
 ```
 
-pikuri itself is a **git dependency on its master branch**, not a
-released gem — this shell uses `Agent::ServerPermits`, which no pikuri
-release carries yet. `bundle install` fetches it at the commit
-`Gemfile.lock` pins; `bundle update pikuri-core pikuri-pdf` moves to
-master's tip, and `bundle exec rake check` tells you whether it still fits.
+pikuri itself, and pikuri-workshop's `pikuri-conversations`, are **git
+dependencies on their master branches**, not released gems — this shell
+uses one-agent-per-conversation surface no release carries yet.
+`bundle install` fetches both at the commits `Gemfile.lock` pins;
+`bundle update pikuri-core pikuri-pdf pikuri-web pikuri-conversations`
+moves to master's tip, and `bundle exec rake check` tells you whether it
+still fits.
 
 Hacking on pikuri at the same time? Point Bundler at your own checkout
 (it must be on `master`):
@@ -66,6 +68,8 @@ Hacking on pikuri at the same time? Point Bundler at your own checkout
 ```sh
 bundle config set local.pikuri-core ../pikuri
 bundle config set local.pikuri-pdf ../pikuri
+bundle config set local.pikuri-web ../pikuri
+bundle config set local.pikuri-conversations ../pikuri-workshop
 ```
 
 ## Run
@@ -416,24 +420,27 @@ so at boot if the model reasons anyway.
 Point `[titler]` at a *second* `[[llm]]` even when it names the same model on
 the same server, as above — it is `params` that differs. Keep both on one
 `[[server]]` so titles queue behind your own requests instead of racing them,
-and set `context_window` so the titler skips a round trip on every title.
+and set `context_window` so the titler states its window rather than asking
+the server for it.
 
 The titler entry appears in `/model` like any other connection. Picking it
 gives you a conversation that does not think, which is a legitimate thing to
 want; it lasts as long as you stay in that conversation, because reopening
 resolves to the *first* entry naming that model on that server.
 
-Conversations from before you configured a titler get named too — each one
-the first time you open it, off the history it loads anyway. So the sidebar
-fills in as you revisit things rather than all at once, and a folder full of
-old conversations costs you nothing until you go looking. Nothing touches a
+A new conversation is named once its first answer is in, so the title never
+competes with that answer for the server. Conversations from before you
+configured a titler get named too — each one after the next turn you have in
+it, off the history it loads anyway. So the sidebar fills in as you pick old
+conversations back up rather than all at once, and a folder full of them costs
+you nothing; one you only reread keeps its stamp. Nothing touches a
 conversation that already has a name, and there is no way to rename one by
 hand yet.
 
 Titling is best-effort and cannot break anything. No `[titler]`, a model that
 answers nothing usable, a server that is down — the conversation keeps its
 stamp, your turn is untouched, and nothing appears in the transcript. A title
-lost that way is retried the next time the conversation is opened in a fresh
+lost that way is retried at a turn after the conversation is opened in a fresh
 process.
 
 If your model cannot be talked out of thinking at all, `llama-server` can do it

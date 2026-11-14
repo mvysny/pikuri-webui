@@ -10,7 +10,7 @@ RSpec.describe PikuriWebUI::Web::App do
   # Builds the store's row type without touching a disk.
   module ConversationRows
     def self.row(id, title, created_at: Time.now, supported: true)
-      PikuriWebUI::Conversations::Store::Conversation.new(
+      Pikuri::Conversations::Store::Entry.new(
         id: id, dir: Pathname("/nonexistent/#{id}"), title: title,
         created_at: created_at, supported: supported
       )
@@ -50,15 +50,10 @@ RSpec.describe PikuriWebUI::Web::App do
     def busy? = @busy
 
     def status_data
-      { state: @busy ? :running : :idle, busy: @busy, pending: 0,
+      { state: @busy ? 'running' : 'idle', busy: @busy, pending: 0,
         tokens: 'ctx 12.3k/32k (38%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
         model: 'local', model_pending: nil, model_missing: nil }
     end
-
-    # Unrendered, the way the real runner hands it over: the route runs it
-    # through TrifectaView, so this stands in for Pikuri::Agent::Trifecta and
-    # only #render is ever reached.
-    def trifecta = Data.define(:render).new(render: 'Trifecta: 2 of 3 legs')
   end
 
   # Stands in for Conversations::Registry: a canned set of conversations, each
@@ -166,6 +161,7 @@ RSpec.describe PikuriWebUI::Web::App do
     described_class.set :registry, registry
     described_class.set :store, store
     described_class.set :models, models
+    described_class.set :trifecta, 'Trifecta: 2 of 3 legs'
     # Class-level and therefore sticky across examples: set every time, or an
     # example that overrides it leaks into the next.
     described_class.set :show_thinking, show_thinking
@@ -702,7 +698,7 @@ RSpec.describe PikuriWebUI::Web::App do
   context 'images' do
     around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) and example.run } }
 
-    let(:store) { PikuriWebUI::Conversations::Store.new(root: @root, shell: 'pikuri-webui-chat') }
+    let(:store) { Pikuri::Conversations::Store.new(root: @root, shell: 'pikuri-webui-chat') }
     let(:pictured) { store.create }
     let(:registry) { FakeRegistry.new([pictured], lock: lock) }
     let(:runner) { registry.runner_for(pictured) }
@@ -761,6 +757,15 @@ RSpec.describe PikuriWebUI::Web::App do
         assert_equal 422, last_response.status
       end
 
+      it 'refuses images a model is known not to see with 422' do
+        runner.submit_outcome = :refused
+
+        post '/messages', prompt: 'hi', conversation: pictured.id, attachments: [image]
+
+        assert_equal 422, last_response.status
+        assert_includes last_response.body, 'no image input'
+      end
+
       # A delete landing between the stash and the submit: the stash put the
       # folder back, and the route takes it away again.
       it 'removes what it wrote when the conversation was deleted in between' do
@@ -774,7 +779,7 @@ RSpec.describe PikuriWebUI::Web::App do
     end
 
     context 'GET /c/:id/attachments/:name' do
-      before { store.stash(pictured, [PikuriWebUI::Conversations::Upload.from(filename: 'shot.png', bytes: png)]) }
+      before { store.stash(pictured, [PikuriWebUI::Conversations::Upload.from(filename: 'shot.png', bytes: png).to_attachment]) }
 
       it 'serves the image, typed, unsniffable and cacheable for good' do
         get "/c/#{pictured.id}/attachments/#{stored_name}"

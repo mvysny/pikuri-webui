@@ -2,24 +2,22 @@
 
 require 'tmpdir'
 
-# Exercises residency and deletion against a real Conversations::Store over a temp
+# Exercises residency and deletion against a real Pikuri::Conversations::Store over a temp
 # directory, with a stub runner in place of the agent stack — what this class
 # owns is the map, not what is in it.
 RSpec.describe PikuriWebUI::Conversations::Registry do
-  # Stands in for Agents::Runner: records that it was restored, and reports
-  # whatever busy state the example wants.
+  # Stands in for an opened Agents::Runner, reporting whatever busy state the
+  # example wants.
   class StubRunner
-    attr_reader :conversation, :restores
+    attr_reader :conversation
     attr_accessor :busy
 
     def initialize(conversation)
       @conversation = conversation
-      @restores = 0
       @busy = false
       @discarded = false
     end
 
-    def restore! = @restores += 1
     def busy? = @busy
     # Intent, as the real one reports it: the pair a new conversation inherits.
     def model = ['qwen3.6', 'http://localhost:8080/v1']
@@ -36,22 +34,21 @@ RSpec.describe PikuriWebUI::Conversations::Registry do
   around { |example| Dir.mktmpdir { |dir| @root = Pathname(dir) / 'conversations' and example.run } }
 
   let(:store) do
-    PikuriWebUI::Conversations::Store.new(root: @root, shell: 'pikuri-webui-chat')
+    Pikuri::Conversations::Store.new(root: @root, shell: 'pikuri-webui-chat')
   end
   let(:built) { [] }
   let(:factory) { ->(c) { StubRunner.new(c).tap { |r| built << r } } }
   let(:lock) { PikuriWebUI::BigAppLock.new }
   let(:registry) { guard(described_class.new(store: store, factory: factory, lock: lock), lock) }
 
-  # #runner_for is private (a caller-held Conversation can be stale — see its
+  # #runner_for is private (a caller-held entry can be stale — see its
   # doc), so minting is exercised through the two public doors: #create for a
   # brand-new conversation, #open_id for one that is resident or saved.
   context 'minting' do
-    it 'mints a runner and restores it once' do
+    it 'mints a runner through the factory' do
       runner = registry.create
 
-      assert_equal 1, built.size
-      assert_equal 1, runner.restores
+      assert_equal [runner], built
     end
 
     it 'mints on first open of a saved conversation' do
@@ -62,7 +59,7 @@ RSpec.describe PikuriWebUI::Conversations::Registry do
       runner = registry.open_id(conversation.id)
 
       assert_equal conversation.id, runner.conversation.id
-      assert_equal 1, runner.restores
+      assert_equal 1, built.size
     end
 
     it 'hands back the same runner on every later open' do
@@ -70,7 +67,6 @@ RSpec.describe PikuriWebUI::Conversations::Registry do
 
       assert_same first, registry.open_id(first.conversation.id)
       assert_equal 1, built.size
-      assert_equal 1, first.restores
     end
 
     # The property that makes a turn survive being navigated away from: two
@@ -175,13 +171,13 @@ RSpec.describe PikuriWebUI::Conversations::Registry do
 
       minted = registry.create(from: viewed.id).conversation
 
-      assert_equal 'qwen3.6', minted.model_at_mint
-      assert_equal 'http://localhost:8080/v1', minted.server_at_mint
+      assert_equal 'qwen3.6', minted.model
+      assert_equal 'http://localhost:8080/v1', minted.server
     end
 
     it 'starts on the catalog default when nothing is being read, or the id is stale' do
-      assert_nil registry.create.conversation.model_at_mint
-      assert_nil registry.create(from: 'no-such-conversation').conversation.model_at_mint
+      assert_nil registry.create.conversation.model
+      assert_nil registry.create(from: 'no-such-conversation').conversation.model
     end
   end
 

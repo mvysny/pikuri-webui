@@ -76,19 +76,6 @@ module PikuriWebUI
         nil
       end
 
-      # Drop every block.
-      #
-      # The id counter is deliberately *not* reset: a browser tab that has not
-      # yet applied the clear would otherwise see a fresh +b1+ and upsert it into
-      # the block it still has on screen.
-      #
-      # @return [void]
-      def clear
-        @lock.assert!
-        @blocks.clear
-        nil
-      end
-
       # @return [Array<Block>] snapshot, in order — a consistent one: the list is
       #   copied and the blocks in it are immutable, so the caller's task can end
       #   and the snapshot stays good while a turn streams in behind it

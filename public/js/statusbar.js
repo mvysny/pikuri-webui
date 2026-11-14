@@ -46,19 +46,16 @@ export const initStatusBar = ({ conversation }) => {
 
   return {
     /**
-     * Renders one status frame, as {Agents::Runner#status_data} shapes it.
-     *
-     * `queued` is spelled out because it means the turn was accepted and
-     * another conversation holds the executor — saying so beats showing "busy"
-     * for a turn that has not started. Nothing but ■ is gated on `busy`:
-     * sending queues rather than refusing, and a delete is refused per row by
+     * Renders one status frame, as {Agents::Runner#status_data} shapes it —
+     * `state` arrives already worded. Nothing but ■ is gated on `busy`:
+     * sending injects rather than refusing, and a delete is refused per row by
      * the server's own re-render of the sidebar.
      */
     update({
       state: stateName, busy, pending: queued, tokens, tokens_detail: detail,
       model: name, model_pending: picked, model_missing: missing,
     }) {
-      state.textContent = stateName === 'queued' ? 'waiting for a free slot' : stateName;
+      state.textContent = stateName;
       pending.textContent = queued > 0 ? `${queued} queued` : '';
       model.textContent = name;
       model.dataset.missing = missing ?? '';

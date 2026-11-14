@@ -31,7 +31,7 @@
  * @returns {{upsert: (block: {id: string, kind: string, html: string}) => void,
  *   stream: (frame: {id: string, append: string, tail: string}) => void,
  *   apply: (blocks: {id: string, kind: string, html: string}[]) => void,
- *   remove: (id: string) => void, reset: () => void,
+ *   remove: (id: string) => void,
  *   setThinkingDefault: (open: boolean) => void, follow: () => void}}
  */
 export const initTranscript = () => {
@@ -145,7 +145,7 @@ export const initTranscript = () => {
      * opens with (D_subscribe_then_snapshot).
      *
      * It has to be one call, and it must not empty the pane first: the browser
-     * paints between event dispatches, so a `reset` plus a `block` each blinks
+     * paints between event dispatches, so emptying it and a `block` each blinks
      * the tail of an already-rendered conversation out and back. The usual case
      * here is a snapshot the page already agrees with — the cursor walk below
      * leaves such a pane structurally untouched, and refilling a block in place
@@ -204,15 +204,6 @@ export const initTranscript = () => {
     /** Drops one block; a block the page never rendered is not an error. */
     remove(id) {
       document.getElementById(id)?.remove();
-    },
-
-    /**
-     * Empties the pane, for a history load replaying into this conversation.
-     * In place rather than a reload, which would cost the tab a half-typed
-     * message.
-     */
-    reset() {
-      transcript.replaceChildren();
     },
   };
 };

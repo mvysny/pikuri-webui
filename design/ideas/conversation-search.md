@@ -116,9 +116,9 @@ Settled: **(b)**, parse the JSON and walk known fields. The three options and wh
 - **(b) Parse the JSON, walk known fields.** Lean. The parser un-escapes for free, and the field list
   is short (below). Costs knowledge of pikuri's *format* — but no `Pikuri::*` constant, and
   `history.json` carries a top-level `version` (confirmed: `Pikuri::Agent::History::CURRENT_VERSION`
-  is 1, and `History.load` raises on anything higher) so the walker can degrade on a version it does
+  is 1, and `HistoryFile.load` raises on anything higher) so the walker can degrade on a version it does
   not know — skip the bodies, match titles only — rather than guess.
-- **(c) `Pikuri::Agent::History.load`, from a fourth adapter.** Correct and in-seam, and the *worst*
+- **(c) `Pikuri::Conversations::HistoryFile.load`, from a fourth adapter.** Correct and in-seam, and the *worst*
   performer by a distance: `History` holds attachment bytes **eagerly** (its own rdoc says so, and
   says why), so loading one to grep its text pulls every image the model was ever shown into memory.
   Searching hundreds of conversations that way is absurd. This is the option that looks principled

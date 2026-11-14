@@ -12,7 +12,7 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
 
 - `Pikuri::Attachment.new(mime:, filename:, bytes:)` — the only attachment type; the upload's
   bytes go straight in (never hand ruby_llm a path or URL). `#digest` (SHA-256) and
-  `#stored_name` (digest prefix + stem) are what `History#save` names the file under.
+  `HistoryFile.stored_name` (digest prefix + stem) are what `HistoryFile.save` (pikuri-conversations) names the file under.
 - `agent.run_loop(user_message:, attachments: [...])` — an attachment-only turn is fine.
 - `interloper.inject_user_message(text, attachments: [...])` — the same mid-turn.
 - `Event::UserTurn#attachments` — what was actually sent (mid-loop, minus any the model can't
@@ -23,7 +23,7 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
 - `ChatTransport#with_detected_modalities` — reads a router's `/v1/models` (or a bare
   `/props`) *without loading the model*; `self` when already stated or nothing reported.
   Network, so off-domain. `Agent#modalities` follows a model switch at once.
-- `History#save` writes attachments content-addressed under `attachments/`, never deletes and
+- `HistoryFile.save` (pikuri-conversations) writes attachments content-addressed under `attachments/`, never deletes and
   never enumerates the folder; `History::Message#attachments` carries them back on load.
 - **Breaking:** `Extension#on_user_message(ctx, content, attachments)` grew a third argument,
   and now fires on an attachment-only turn with `""` — check any override here.
@@ -71,7 +71,7 @@ Bump the pikuri pin to get them (`bundle update pikuri-core pikuri-pdf`):
   is usually big enough to survive.
 - **Bytes on disk at submit (option b).** The `POST` handler writes each image to
   `<conversation dir>/attachments/<stored_name>` *before* the domain task, off-domain, then
-  submits. `History#save` writing the same content-addressed name later is harmless. The
+  submits. `HistoryFile.save` (pikuri-conversations) writing the same content-addressed name later is harmless. The
   cost — an orphan file if the process dies mid-turn — is accepted. This keeps one serving
   path (disk) for resident and saved conversations alike.
   - Amends the invariant "a saved conversation is `history.json` plus `meta.json`, and

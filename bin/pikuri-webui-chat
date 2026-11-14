@@ -18,7 +18,6 @@
 ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __dir__)
 
 require 'bundler/setup'
-require 'concurrent'
 require 'ipaddr'
 require 'optparse'
 
@@ -32,7 +31,9 @@ require 'puma/events'
 $LOAD_PATH.unshift File.expand_path('../lib', __dir__)
 
 require 'pikuri-core'
+require 'pikuri-conversations'
 require 'pikuri-pdf'
+require 'pikuri-web'
 require 'pikuri_webui'
 
 # Every flag here is one this shell alone owns and the config file has no
@@ -74,10 +75,10 @@ end
 # is a plain warn + exit rather than a server that serves a broken agent.
 begin
   config = PikuriWebUI::Config.load
-  # Asked here rather than left to WebSearch.build below, so an unusable
+  # Asked here rather than left to Search.build below, so an unusable
   # [search] selection exits like any other config error instead of a
   # backtrace out of the agent wiring.
-  Pikuri::Tool::Search::Engines.resolve(**config.search.to_h)
+  Pikuri::Web::Search::Engines.resolve(**config.search.to_h)
 rescue PikuriWebUI::Config::Error, ArgumentError => e
   warn "config error: #{e.message}"
   exit 2
@@ -102,19 +103,18 @@ titler =
       "titler: #{titler_llm.name.inspect} — #{choice.model} @ #{choice.server}" \
       "#{titler_llm.params.empty? ? ' (no params; expect slow titles from a thinking model)' : ''}"
     )
-    PikuriWebUI::Agents::Titler.new(transport: choice.transport, params_declared: !titler_llm.params.empty?)
+    Pikuri::Conversations::Titler.new(transport: choice.transport, params_declared: !titler_llm.params.empty?)
   end
 
-# A [[server]] naming no ceiling is left alone, so pikuri's /props probe sizes
-# it from the box's own total_slots (`D_max_concurrent_requests`). `.limit`
-# wins by decision rather than by ordering: ServerPermits marks an explicit
-# size and refuses to let a probe's `.default` overwrite it, so this may run
-# before or after the agent is built.
+# A [[server]] naming no ceiling is left alone, so the gem's /props probe sizes
+# it from the box's own total_slots at its first turn (`D_max_concurrent_requests`).
+# `.limit` wins by decision rather than by ordering: the Throttle refuses to let
+# a probe's default overwrite an explicit size.
 config.servers.each do |server|
   permits = server.max_concurrent_requests
   next if permits.nil?
 
-  Pikuri::Agent::ServerPermits.limit(server.url, permits)
+  Pikuri::Conversations::Throttle.limit(server.url, permits)
   PikuriWebUI.logger.info("permits: #{server.id} at most #{permits} concurrent request(s) → #{server.url}")
 end
 
@@ -134,152 +134,103 @@ broadcaster = PikuriWebUI::Web::Broadcaster.new
 state_root = Pikuri::Paths.state / 'pikuri-web-chat'
 
 # Saved conversations fill the sidebar; opening one mints its agent.
-conversations = PikuriWebUI::Conversations::Store.new(
-  root: state_root / 'conversations',
-  shell: 'pikuri-webui-chat'
-)
+store = Pikuri::Conversations::Store.new(root: state_root / 'conversations', shell: 'pikuri-webui-chat')
 
 # Diagnostics go to stderr — pikuri's per-subsystem loggers and
 # PikuriWebUI's own logger both default there. The browser shows the
 # conversation transcript only (see AGENTS.md).
 
-# — the agent (same wiring as bin/pikuri-tui-chat, plus the Interloper) —
+# — the agent (same wiring as bin/pikuri-tui-chat) —
 
 system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
 system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
-# Turns run here rather than on a Sinatra request thread, and every
-# conversation shares this one executor.
+# Every agent's tools. One wiring for every agent this process runs, which is
+# what keeps the boot-time trifecta report below true of all of them — a
+# second wiring with an extra tool would silently invalidate it.
 #
-# Unbounded (grows on demand, reaps after 60s idle), and deliberately not
-# derived from the server's slot count. A turn holds a thread here across its
-# whole run_loop, tool execution included, but holds a server permit only for
-# each HTTP request (`D_upstream_request_throttle`) — so any size tied to the
-# server's capacity strands conversations behind turns that are off in a
-# web_search using no slot. A bounded pool would also deadlock the day a tool
-# spawns a sub-agent posting back here; a chat shell has no such tool
-# (`D_chat_only_entry_point`), a sibling OS or code shell would.
-#
-# The real bound is the resident runners: a conversation admits one turn at a
-# time (Agents::Runner#submit injects rather than starting a second), so turns in
-# flight cannot exceed the conversations opened. Single-writer safety holds at
-# any size regardless, because the partition is per conversation — two turns
-# are two transcripts, two listeners, two agents, two disjoint folders. What
-# does scale with concurrency is the process-wide search limiter noted at the
-# tool wiring.
-turn_executor = Concurrent::CachedThreadPool.new
+# Tool instances are shared process-wide (CALCULATOR / SCRAPE / FETCH are
+# pikuri constants), which is safe by upstream contract: pikuri declares a
+# sharing posture per tool. CALCULATOR is +P_stateless+; FETCH and SCRAPE are
+# +P_shared_benign+, sharing a process-wide URL cache whose race that doc argues
+# is harmless. web_search is built per agent for its keys, but is
+# +P_shared_locked+ and paces on class-level per-provider limiters, so two
+# conversations searching at once serialize, and one tripping a provider's
+# circuit breaker cools down the other. No server permit gates that: a tool
+# call holds none.
+tools = lambda do |c|
+  c.add_tool Pikuri::Web::Search.build(**config.search.to_h)
+  c.add_tool Pikuri::Tool::CALCULATOR
+  c.add_tool Pikuri::Web::SCRAPE
+  c.add_tool Pikuri::Web::FETCH
+end
 
-# The serialization domain (`D_global_monitor`): route bodies and the turn
-# job's bookkeeping brackets run as tasks on this one lock. Minted here and
-# handed to everything guarded, the same way the broadcaster travels.
+# The live conversations: an agent each, built and run on threads of the gem's
+# own — never on a Sinatra request thread — one thread per turn, unbounded.
+# Load is rationed per *request* by the gem's Throttle, never per turn
+# (`D_serial_turn_executor`). A conversation's listener is its Agents::Runner,
+# which saves the turn before the gem lets it go idle.
+live = Pikuri::Conversations.new(
+  system_prompt: system_prompt,
+  configure: ->(c, _conversation) { tools.call(c) },
+  on_turn_end: ->(conversation, history) { conversation.listener.persist(history) },
+  titler: titler
+)
+
+# The serialization domain (`D_global_monitor`): route bodies and the runners'
+# bookkeeping run as tasks on this one lock. Minted here and handed to
+# everything guarded, the same way the broadcaster travels.
 big_app_lock = PikuriWebUI::BigAppLock.new
 
-# One conversation's whole stack. Every agent this process runs comes from
-# here, which is what keeps the boot-time trifecta report below true of all of
-# them — a second wiring with an extra tool would silently invalidate it.
-conversation_factory = lambda do |conversation|
+# One conversation's whole stack, opened.
+conversation_factory = lambda do |entry|
   # The connection this conversation saved, or inherited from the one the tab
-  # was reading. Resolving it *here* rather than parking it as a pending switch
-  # puts the agent on the right connection from the start: the status bar reads
-  # the model and the stated cap off the agent's own transport, so minting on
-  # the wrong one would show both wrong until the first turn applied the switch.
-  choice = catalog.resolve(model: conversation.model_at_mint, server: conversation.server_at_mint)
+  # was reading. Resolved *here* so the agent boots on the right connection
+  # rather than on the primary with a switch pending.
+  choice = catalog.resolve(model: entry.model, server: entry.server)
   # A connection edited out of config.toml since this conversation last spoke.
   # The pair is all there is to name it by — its [[llm]] name went with it.
-  saved = conversation.model_at_mint && "#{conversation.model_at_mint} @ #{conversation.server_at_mint}"
-  missing = saved unless choice
+  missing = "#{entry.model} @ #{entry.server}" if entry.model && choice.nil?
   choice ||= catalog.primary
-
-  cancel_flag = Pikuri::Agent::Control::Cancellable.new
-  interloper = Pikuri::Agent::Control::Interloper.new
-  # Constructed up front so the Agent's ListenerList and the Agents::Runner (for
-  # the status bar's token readout) see the same TokenLog instance.
-  token_log = Pikuri::Agent::Listener::TokenLog.new
 
   transcript = PikuriWebUI::Web::Transcript.new(lock: big_app_lock)
   sse_listener = PikuriWebUI::Web::SseListener.new(
-    transcript: transcript, broadcaster: broadcaster, conversation: conversation.id,
-    lock: big_app_lock
+    transcript: transcript, broadcaster: broadcaster, conversation: entry.id, lock: big_app_lock
   )
-
-  # Coalesce streaming delta chunks at 15 fps before they reach the
-  # kramdown-rendering SseListener: a fast llama.cpp can emit dozens of
-  # deltas per second and re-rendering + broadcasting every one is wasted
-  # work the user can't perceive. flush_pending_on_non_delta: false because
-  # the Assistant / Thinking bookend events re-render the authoritative
-  # final content (see StreamingMessage#finalize), so emitting the trailing
-  # 0–66 ms of buffered deltas right before that is pure waste.
-  rate_limited_listener = Pikuri::Agent::Listener::RateLimited.new(
-    sse_listener,
-    fps: 15,
-    flush_pending_on_non_delta: false
-  )
-
-  # One transport per *connection*, shared by every agent on it rather than
-  # rebuilt per conversation: a ChatTransport is a frozen Data, and pikuri
-  # reads its fields to build a RubyLLM::Context per chat (Agent#build_context)
-  # rather than holding the object open.
-  agent = Pikuri::Agent.new(
-    transport: choice.transport,
-    system_prompt: system_prompt,
-    cancellable: cancel_flag,
-    interloper: interloper,
-    streaming: true
-  ) do |c|
-    c.add_listener rate_limited_listener
-    c.add_listener token_log
-    # Tool instances are shared process-wide (CALCULATOR / WEB_SCRAPE / FETCH
-    # are pikuri constants), which is safe by upstream contract rather than by
-    # our pool size: pikuri declares a sharing posture per tool (its
-    # DECISIONS.md, "Every tool declares one of four postures"). CALCULATOR is
-    # +P_stateless+; FETCH and WEB_SCRAPE are +P_shared_benign+, sharing a
-    # process-wide URL cache whose race that doc argues is harmless. WebSearch
-    # is built per wiring for its keys, but is +P_shared_locked+ and paces on
-    # class-level per-provider limiters, so a per-agent instance would throttle
-    # no differently.
-    #
-    # The consequence of two conversations running at once is latency, not
-    # corruption: the search limiter holds its mutex across the HTTP call, so
-    # two agents searching at once serialize, and one tripping a provider's
-    # circuit breaker cools down the other. Note this is not gated by
-    # max_concurrent_requests — a tool call holds no server permit, so any two
-    # open conversations can be in a search together however small the
-    # server's slot count.
-    c.add_tool Pikuri::Tool::WebSearch.build(**config.search.to_h)
-    c.add_tool Pikuri::Tool::CALCULATOR
-    c.add_tool Pikuri::Tool::WEB_SCRAPE
-    c.add_tool Pikuri::Tool::FETCH
-  end
+  token_log = Pikuri::Agent::Listener::TokenLog.new
 
   PikuriWebUI::Agents::Runner.new(
-    conversation: conversation,
-    agent: agent,
-    interloper: interloper,
-    cancellable: cancel_flag,
+    conversation: entry,
+    store: store,
+    catalog: catalog,
     broadcaster: broadcaster,
-    conversations: conversations,
     transcript: transcript,
     listener: sse_listener,
-    executor: turn_executor,
-    catalog: catalog,
+    # Streaming deltas coalesced at 15 fps before the kramdown-rendering
+    # SseListener: a fast llama.cpp emits dozens a second, and re-rendering and
+    # broadcasting every one is work nobody can perceive.
+    agent_listeners: [PikuriWebUI::Web::RateLimitedListener.new(sse_listener, fps: 15), token_log],
     token_log: token_log,
-    titler: titler,
     missing_connection: missing,
     lock: big_app_lock
-  )
+  ).open(live, transport: choice.transport)
 end
 
-registry = PikuriWebUI::Conversations::Registry.new(store: conversations, factory: conversation_factory,
-                                                    lock: big_app_lock)
+registry = PikuriWebUI::Conversations::Registry.new(store: store, factory: conversation_factory, lock: big_app_lock)
 
 # The advisory lethal-trifecta map, printed once at boot: which of private
-# data / untrusted content / egress this tool set actually holds, and
-# which tool contributes each leg. Never blocks — this shell wires
-# web_search + web_scrape + fetch, so it is expected to report egress.
-#
-# Read off the conversation a fresh visitor would land on, which also warms it:
-# one factory means this report describes every agent, not just this one.
-puts big_app_lock.run { registry.open_id(registry.default.id) }.trifecta.render
+# data / untrusted content / egress this tool set actually holds, and which
+# tool contributes each leg. Never blocks — this shell wires web_search +
+# web_scrape + fetch, so it is expected to report egress. Read off a throwaway
+# agent with the one tool wiring, so it describes every conversation's agent
+# without waiting for one to boot.
+trifecta = begin
+  agent = Pikuri::Agent.new(transport: catalog.primary.transport, system_prompt: system_prompt, &tools)
+  agent.trifecta
+ensure
+  agent&.close
+end
+puts trifecta.render
 
 # SSE heartbeat: a comment frame every 15 s. A write attempt is the only
 # way to notice a silently vanished browser, whose /events drain loop
@@ -297,7 +248,10 @@ PikuriWebUI::Web::App.set :broadcaster, broadcaster
 PikuriWebUI::Web::App.set :registry, registry
 # Messages' images are written into a conversation's folder ahead of its turn,
 # and served back out of it, without a task around the disk.
-PikuriWebUI::Web::App.set :store, conversations
+PikuriWebUI::Web::App.set :store, store
+# Static for the life of the process — one tool wiring — so the /trifecta
+# dialog ships in every page rather than costing a route of its own.
+PikuriWebUI::Web::App.set :trifecta, PikuriWebUI::Web::TrifectaView.render(trifecta)
 # Names, model ids and window sizes — no transport crosses this line. Also what
 # gates /model out of the palette when there is only one connection.
 PikuriWebUI::Web::App.set :models, catalog.rows
@@ -308,8 +262,8 @@ PikuriWebUI::Web::App.set :show_thinking, config.show_thinking
 PikuriWebUI::Web::App.set :tool_lines, config.tool_lines
 # Development mode buys template reloading (views/*.erb re-read per
 # request) and in-browser exception pages. Ruby under lib/ is reloaded in
-# neither mode: the agent, its listener stack and the runner's worker
-# thread are long-lived instances wired above, so a class change needs a
+# neither mode: the agents and their listener stacks are long-lived
+# instances wired above, so a class change needs a
 # fresh process — see README, "Develop".
 PikuriWebUI::Web::App.set :environment, dev ? :development : :production
 PikuriWebUI::Web::App.set :show_exceptions, dev
@@ -361,13 +315,13 @@ puma_events.register(:state) do |state|
   next unless %i[stop restart].include?(state)
 
   broadcaster.close
-  # #shutdown, never #wait_for_termination: waiting for an in-flight turn here
-  # would park this hook in front of Puma's graceful wait — the same bug the
-  # broadcaster close above exists to prevent. An unfinished turn is lost, which
-  # is the accepted trade (saves land at turn end; see Agents::Runner). Nothing in
-  # this hook may enter the BigAppLock either — a wedged domain must not block
-  # the exit.
-  turn_executor.shutdown
+  # Cancels every turn and returns at once, never waiting: waiting for an
+  # in-flight turn here would park this hook in front of Puma's graceful wait —
+  # the same bug the broadcaster close above exists to prevent. An unfinished
+  # turn is lost, which is the accepted trade (saves land at turn end). Nothing
+  # in this hook may enter the BigAppLock either — a wedged domain must not
+  # block the exit.
+  live.shutdown
 end
 
 PikuriWebUI::Web::App.set :server_settings, {

@@ -33,7 +33,7 @@ RSpec.describe 'namespace dependency direction' do
 
   it 'finds the service files it is supposed to be guarding' do
     # Without this the suite would pass vacuously if the tree were rearranged.
-    assert_operator service_files.size, :>=, 6
+    assert_operator service_files.size, :>=, 5
   end
 
   it 'never names a Web constant from Agents or Conversations' do

@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 module PikuriWebUI
-  # Running an LLM turn: a conversation's agent and its lifecycle ({Runner}),
-  # the connections it can run on ({ModelCatalog}), and the throwaway agent
-  # that names a conversation ({Titler}).
+  # Running an LLM turn: this shell's side of one live conversation
+  # ({Runner}, over pikuri-conversations' +Conversation+), and the connections
+  # it can run on ({ModelCatalog}).
   #
   # Nothing here knows a conversation is a folder on disk — that is
   # {Conversations} — and nothing here may name anything under {Web}; see that

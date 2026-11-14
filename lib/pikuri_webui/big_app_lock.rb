@@ -17,8 +17,9 @@ module PikuriWebUI
   # Guarded classes ({Agents::Runner}, {Conversations::Registry}, {Transcript}) open
   # their public methods with {#assert!}, so a call from outside a task raises
   # instead of racing. Who enters the domain: every route body ({Web::App}), and
-  # the turn worker's bookkeeping brackets (+Agents::Runner#run_turn+) — the
-  # agent loop itself, and all rendering, stay outside.
+  # the runners' handling of what pikuri-conversations reports from its own
+  # threads — a turn's save, a title, a status change. The agent loop itself,
+  # and all rendering, stay outside.
   #
   # A task must be **rapid-fire**: never a network wait, never a wait on
   # another thread, never anything unbounded. Bounded disk work is allowed
@@ -39,8 +40,8 @@ module PikuriWebUI
 
     # Run one task: the block executes inline on the calling thread, alone in
     # the domain. Re-entrant — a task may open another task, so a guarded
-    # method calling back into the domain (the Interloper's +on_change+) just
-    # works.
+    # method whose call fires a listener that enters the domain (a submit's
+    # pending-count event) just works.
     #
     # @return [Object] the block's value
     def run(&) = @monitor.synchronize(&)

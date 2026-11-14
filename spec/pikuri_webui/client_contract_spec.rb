@@ -99,7 +99,6 @@ RSpec.describe 'the client/server contract' do
   # the first time a frame lands — the page contradicts itself mid-turn.
   it 'agrees with index.erb on the labels both of them write' do
     [
-      'waiting for a free slot',  # the queued state, status-state
       ' queued',                  # the pending count, status-pending
       '☀ light',                  # the theme toggle, both directions
       '☾ dark'

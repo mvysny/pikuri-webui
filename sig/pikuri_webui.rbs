@@ -45,6 +45,7 @@ module PikuriWebUI
     #   PikuriWebUI::Web::App.set :broadcaster, broadcaster
     #   PikuriWebUI::Web::App.set :store,       store          # where images are written and served from
     #   PikuriWebUI::Web::App.set :models,      catalog.rows   # what /model lists
+    #   PikuriWebUI::Web::App.set :trifecta,    html           # the /trifecta dialog's body
     # 
     # Every route body that touches server state is one {BigAppLock} task, so
     # what a route reads or mutates together cannot tear — the page snapshot is
@@ -52,13 +53,13 @@ module PikuriWebUI
     # and the SSE drain loop stay outside the domain.
     # 
     # Every route names the conversation it acts on, and none of them refuse
-    # because *another* conversation is working: each has its own agent, and the
-    # shared executor queues a turn rather than rejecting it. Delete is the one
-    # exception, and it refuses only for the conversation actually in flight.
+    # because *another* conversation is working: each has its own agent and its
+    # own turns. Delete is the one exception, and it refuses only for the
+    # conversation actually in flight.
     # 
-    # Pikuri-free by design (the seam rule): routes speak only ids, kinds,
-    # HTML strings and status hashes. Everything Pikuri-shaped sits behind
-    # Agents::Runner / SseListener.
+    # Pikuri-free by design (the seam rule): routes speak ids, kinds, HTML
+    # strings, status hashes and the store's saved-conversation envelope, read
+    # by field. Everything agent-shaped sits behind Agents::Runner / SseListener.
     # 
     # Threading: +GET /events+ parks the serving thread in a queue-drain
     # loop for the lifetime of the EventSource connection — one server
@@ -116,14 +117,14 @@ module PikuriWebUI
       # _@param_ `uploads`
       # 
       # _@return_ — the one written to
-      def stash_uploads: (String? id, ::Array[Conversations::Upload] uploads) -> Conversations::Store::Conversation
+      def stash_uploads: (String? id, ::Array[Conversations::Upload] uploads) -> Pikuri::Conversations::Store::Entry
 
       # Remove what {#stash_uploads} wrote for a conversation that was deleted
       # before its message could land. Safe because the submit answered that it
       # no longer exists: nothing else will ever write that folder.
       # 
       # _@param_ `conversation`
-      def discard_stash: (Conversations::Store::Conversation conversation) -> void
+      def discard_stash: (Pikuri::Conversations::Store::Entry conversation) -> void
 
       # Resolve an id and open it, 404ing on anything not listed — which is what
       # keeps user input from ever becoming a path.
@@ -177,8 +178,7 @@ module PikuriWebUI
       # The sidebar's model.
       # 
       # +current+ is the row this tab has open (per tab, from the URL); +busy+ is
-      # whether that conversation has a turn in flight (server-wide, and true of
-      # as many rows as +--turns+ allows). They are independent: a turn running in
+      # whether that conversation has a turn in flight (server-wide). They are independent: a turn running in
       # a row you are not looking at is the point of the feature.
       # 
       # _@param_ `viewing` — id of the conversation this tab has open
@@ -499,13 +499,6 @@ module PikuriWebUI
       # _@param_ `id`
       def remove: (String id) -> void
 
-      # Drop every block.
-      # 
-      # The id counter is deliberately *not* reset: a browser tab that has not
-      # yet applied the clear would otherwise see a fresh +b1+ and upsert it into
-      # the block it still has on screen.
-      def clear: () -> void
-
       # _@return_ — snapshot, in order — a consistent one: the list is
       # copied and the blocks in it are immutable, so the caller's task can end
       # and the snapshot stays good while a turn streams in behind it
@@ -657,11 +650,11 @@ module PikuriWebUI
     # and its SSE stream can never disagree about a block. The streaming
     # handles (+@assistant+ / +@thinking+) stay off-domain and unguarded:
     # this class is confined to one event producer at a time — the minting
-    # task during {Agents::Runner#restore!}'s replay, the turn worker
-    # thereafter, which never overlap because the registry publishes the
-    # runner only after the replay and a conversation admits one turn at a
-    # time. Per-browser event order comes from each connection's one FIFO
-    # queue.
+    # task during {Agents::Runner#open}'s replay, then the agent's boot and
+    # turn threads, which never overlap: the replay finishes before the
+    # agent is opened, and a conversation runs one turn at a time. Only
+    # agent events reach it; the conversation's own stay with the runner.
+    # Per-browser event order comes from each connection's one FIFO queue.
     # 
     # Variant coverage mirrors TuileListener:
     # 
@@ -682,14 +675,11 @@ module PikuriWebUI
     # - +SystemInjected+ (reference text the host injected — a loaded skill,
     #   recalled memory) collapses to a one-line +notice+; see
     #   {#render_system_injection}.
-    # - +Reset+ empties the transcript and pushes one +reset+ SSE event, so
-    #   every open tab drops its blocks without a page reload (and without
-    #   losing a half-typed message). Loading a saved conversation rides the
-    #   same arm: +Agent#load_history!+ resets first, and {Conversations::HistoryReplay}
-    #   then refills the transcript through this listener — which is why
-    #   there is no second transcript to swap in.
-    # - +Tokens+ / +ContextCap+ stay silent (TokenLog consumes them; the
-    #   status bar reads +TokenLog#status_line+ via Agents::Runner).
+    # - A saved conversation is filled in by {Conversations::HistoryReplay}
+    #   replaying through this same listener before its agent boots, so there
+    #   is no second renderer for a restored transcript.
+    # - +Tokens+ stays silent (TokenLog consumes it; the status bar reads
+    #   +TokenLog#status_line+ via Agents::Runner).
     # - +ModelSwitched+ stays silent too, and that is a decision rather than
     #   an omission: the status bar carries the model, read off the agent's
     #   own transport. A transcript block for it would need a second producer
@@ -753,13 +743,6 @@ module PikuriWebUI
       # 
       # _@return_ — the strip's HTML; empty when there is nothing to show
       def images_html: (::Array[Pikuri::Attachment] attachments) -> String
-
-      # Empty the transcript and tell every browser to do the same.
-      # 
-      # Streaming handles are dropped rather than flushed: the blocks they point
-      # at go with everything else a line later, so +flush_assistant+ would
-      # broadcast a +remove+ for an id every tab is about to forget anyway.
-      def reset_transcript: () -> void
 
       # Append one finished block: store it and announce it.
       # 
@@ -995,6 +978,51 @@ module PikuriWebUI
         attr_reader tail: String?
       end
     end
+
+    # Coalesces streaming deltas into at most +fps+ events a second before they
+    # reach +inner+; every other event flows straight through.
+    # 
+    #   listener = RateLimitedListener.new(sse_listener, fps: 15)
+    #   # 60 deltas/s from a fast llama.cpp → 15 Markdown re-renders/s
+    # 
+    # A buffered delta is dropped when its own bookend (+Assistant+ /
+    # +Thinking+) arrives, since the bookend carries the whole text and
+    # {SseListener} re-renders from it (+StreamingMessage#finalize+); any other
+    # event — a tool call, a cancel — first flushes what is buffered, so the
+    # stream reaches the transcript whole and in order.
+    # 
+    # == Implementation details
+    # 
+    # The tick schedule is anchored at construction, not at the first delta, so
+    # stream-startup latency doesn't leak into the cadence; after a flush it
+    # advances by whole periods, so a long-idle stream doesn't backlog ticks.
+    # Assistant and thinking deltas buffer independently.
+    # 
+    # No lock, unlike pikuri-tui's copy: only agent events come through here
+    # ({Agents::Runner} keeps the conversation's own events to itself), and an
+    # agent emits from one thread at a time — the boot thread, then each turn's.
+    # A lock here would also sit outside {BigAppLock}, the domain {SseListener}
+    # enters, which the domain-is-outermost rule forbids.
+    class RateLimitedListener < Pikuri::Agent::Listener::Base
+      # _@param_ `inner` — where the coalesced stream goes
+      # 
+      # _@param_ `fps` — the cap on delta events a second; positive
+      # 
+      # _@param_ `clock` — zero-arg → monotonic seconds; a spec's seam
+      def initialize: (Pikuri::Agent::Listener::Base inner, fps: (Integer | Float), ?clock: Proc) -> void
+
+      # _@param_ `event` — an agent event
+      def on_event: (Data event) -> void
+
+      # _@return_ — e.g. +"RateLimited(15fps, SseListener)"+
+      def to_s: () -> String
+
+      def tick: () -> void
+
+      def flush_assistant: () -> void
+
+      def flush_thinking: () -> void
+    end
   end
 
   # Generic helpers — the Ruby side of what public/js/dom.js is to the scripts.
@@ -1185,9 +1213,9 @@ module PikuriWebUI
     end
   end
 
-  # Running an LLM turn: a conversation's agent and its lifecycle ({Runner}),
-  # the connections it can run on ({ModelCatalog}), and the throwaway agent
-  # that names a conversation ({Titler}).
+  # Running an LLM turn: this shell's side of one live conversation
+  # ({Runner}, over pikuri-conversations' +Conversation+), and the connections
+  # it can run on ({ModelCatalog}).
   # 
   # Nothing here knows a conversation is a folder on disk — that is
   # {Conversations} — and nothing here may name anything under {Web}; see that
@@ -1196,494 +1224,240 @@ module PikuriWebUI
   # Plural on purpose: a singular +Agent+ sitting beside +Pikuri::Agent+ would
   # shadow it for every file in this tree.
   module Agents
-    # One conversation's agent, transcript and turn lifecycle. A runner *is* a
-    # conversation — the one it was built for, for as long as it exists — so
-    # there is no switching here, and no "live" conversation to switch away
-    # from. {Conversations::Registry} holds one per conversation anyone has opened.
+    # This shell's side of one live conversation: the gem's
+    # +Pikuri::Conversations::Conversation+ runs the agent and its turns, and
+    # the runner is what it reports to — the envelope on disk, the transcript,
+    # the status bar. {Conversations::Registry} holds one per conversation
+    # anyone has opened.
     # 
-    #   runner.restore!               # replay what is on disk, once, at mint time
-    #   runner.submit('hello')        # => :started (queued on the executor) or :injected
-    #   runner.submit('', uploads: [upload])   # an image-only message
-    #   runner.select_model('Remote') # => :selected — applied at the top of the next turn
-    #   runner.state                  # => :idle | :queued | :running
-    #   runner.cancel                 # dequeue if queued, stop at a tool boundary if running
-    #   runner.discard!               # the conversation was deleted; retire this runner
+    #   runner = Runner.new(conversation: entry, store:, ...).open(live, transport:)
+    #   runner.submit('hello')          # => :started, or :injected while a turn runs
+    #   runner.select_model('Remote')   # => :selected — the next turn's model
+    #   runner.cancel
+    #   runner.discard!                 # deleted: retire it, or false while a turn runs
     # 
-    # {#submit} is the single entry point for user text, and it never refuses
-    # while the conversation exists:
-    # 
-    # - Idle → post a job running +Pikuri::Agent#run_loop(user_message:)+ on the
-    #   shared executor. The listener stack renders everything the loop emits;
-    #   nothing here touches the transcript.
-    # - Busy → +Pikuri::Agent::Control::Interloper#inject_user_message+. The
-    #   agent drains the queue at turn start and once each tool batch completes,
-    #   emitting +UserTurn(mid_loop: true)+, so the injection renders through the
-    #   same listener path as a normal turn. An injection placed while the model
-    #   is mid-response still waits for that boundary, which is why the input
-    #   stays enabled while busy and the status bar carries the queued count.
-    # 
-    # A submit landing between the loop's last completion and the state reset
-    # injects into a turn that is over, and no drain is coming for it. The turn
-    # job answers that on its way out: a queue left non-empty by a turn that
-    # returned normally claims the next turn on the spot, a bare +run_loop+ whose
-    # entry drain is the delivery.
-    # 
-    # == Idle, queued, running
-    # 
-    # +:queued+ is the gap between +#submit+ posting the job and the job taking a
-    # thread — instant under an unbounded executor, real under a bounded one, so
-    # the state stays modelled either way.
-    # 
-    # It is *not* where a turn waits for the server. That wait is pikuri's
-    # per-server permit, taken inside +run_loop+ for the length of one HTTP
-    # request (+D_upstream_request_throttle+), and a turn parked on one reads
-    # +:running+ here — so "thinking" can mean "queued behind another
-    # conversation's completion", and nothing in this class can tell the
-    # difference.
-    # 
-    # Cancelling a +:queued+ turn needs nothing from pikuri: the job checks on
-    # entry whether it was cancelled while waiting and returns without starting.
-    # Cancelling a +:running+ one is +Cancellable+'s next-tool-boundary stop — a
-    # turn parked on a permit included, because that wait polls it too.
-    # 
-    # == Which model, and when
-    # 
-    # {#select_model} parks a transport; +run_loop+ applies it at the top of the
-    # next turn and nothing else can — pikuri confines the switch there because
-    # the chat is single-thread-confined, and only this state machine knows
-    # nothing is in flight. So a pick while busy is naturally "next turn", the
-    # same wait the Interloper's queued count already makes legible.
-    # 
-    # Three questions, three answers, and they must not collapse into one:
-    # 
-    #   conversation.model_at_mint   # what disk said when this runner was minted
-    #   runner.model                 # intent — the pair the next turn will use
-    #   status_data[:model]          # reality — read off the agent's transport
-    # 
-    # Reality is free: +apply_transport!+ assigns the agent's transport only
-    # after the switch succeeds, so the status bar can never advertise a model
-    # the switch did not reach and nothing here subscribes to +ModelSwitched+.
-    # The pending slot is drained where it is handed to +run_loop+ rather than
-    # when the switch lands, which is what keeps that true of a failed switch
-    # too — at the cost of losing the pick when a turn dies before its top.
+    # The runner is the conversation's one listener: the gem's own events
+    # (+Pikuri::Conversations::Event+) land here and move the status bar, the
+    # title and the sidebar's busy dot; the agent's pass through to
+    # +agent_listeners+, the transcript's renderer among them.
     # 
     # == Persistence
     # 
-    # Saves happen at *turn end*, from the turn job's ensure, so a history is
-    # never exported mid-+complete+ and {#busy?} staying true until the save
-    # lands makes "idle" mean "saved". The cost is that a process killed mid-turn
-    # loses that turn — accepted (single user, rare restarts) — and saving per
-    # *message* instead would not fix it: there is no event to hang that on,
-    # because +Event::ToolResult+ fires before ruby_llm appends the tool message
-    # and nothing fires when it lands.
+    # {#persist} is the gem's +on_turn_end+, run on the turn's thread before the
+    # conversation goes idle — so "idle" means "saved". A process killed
+    # mid-turn loses that turn; accepted (single user, rare restarts).
     # 
     # == The title
     # 
-    # A conversation is named from its opening message, wherever that message
-    # turns up: {#submit} posts a {Titler} job *beside* the turn — never inside
-    # it — for a fresh one, and {#restore!} posts the same job for a stored one
-    # that is still stamp-titled, so a conversation older than the feature is
-    # named the first time anyone opens it. Either way the answer lands through
-    # a task that rewrites the envelope and {#conversation} together.
-    # 
-    # No +[titler]+ configured, a model that answers nothing usable, or a raise
-    # anywhere in that job all leave the start stamp, and none of them can reach
-    # the turn.
+    # A conversation still carrying its start stamp is opened +untitled: true+,
+    # and the gem's titler names it once its first turn here has ended —
+    # a stored one included, so one only read is never titled. The title lands
+    # through the store's +retitle+ and the envelope this runner
+    # holds, together.
     # 
     # Server-side of the pikuri seam, so it names pikuri types freely
-    # (`D_pikuri_free_core`).
+    # (+D_pikuri_free_core+).
     # 
     # == Threading
     # 
-    # Guarded by {BigAppLock}: every public method must run inside a task. Who
-    # enters — route tasks ({Web::App}), the turn job's bookkeeping brackets
-    # (+run_turn+ opens its own tasks around +run_loop+, which itself runs
-    # off-domain), and pikuri's two callbacks — the Interloper's +on_change+ and
-    # TokenLog's +on_status_line+ — which open a task from whichever thread fired
-    # them, the loop thread included. Composing a status payload and
-    # publishing it happen inside one task, so a frame can never overtake a
-    # newer one.
+    # Guarded by {BigAppLock}: every public method but {#on_event} and
+    # {#persist} must run inside a task. Those two are called by the gem from
+    # its own threads — the turn's, the title's, or the request thread whose
+    # task made the call that fired them — and open a task themselves when they
+    # touch shared state.
     # 
-    # One ordering rule must survive any edit: the domain is the *outermost*
-    # lock. A task may call into pikuri (+Interloper#pending?+,
-    # +Cancellable#cancel!+), and pikuri never holds its own lock when calling
-    # back — +on_change+ fires outside the Interloper's, and TokenLog holds no
-    # lock at all. Consistent order, so no ABBA deadlock.
-    class Runner
-      # _@param_ `conversation` — the one this runner is for, fixed for its lifetime
+    # The domain is the *outermost* lock: a task may call into the gem
+    # (+Conversation#status+ takes the gem's lock), and the gem never calls out
+    # under its own.
+    class Runner < Pikuri::Agent::Listener::Base
+      CONVERSATION_EVENTS: ::Array[Class]
+      STATE_NAMES: ::Hash[Symbol, String]
+
+      # _@param_ `conversation` — the one this runner is for
       # 
-      # _@param_ `agent` — fully wired agent (listeners, tools, interloper:, cancellable: — built by the factory in bin/pikuri-webui-chat)
+      # _@param_ `store` — where turns are saved and titles land
       # 
-      # _@param_ `interloper` — the same instance passed to the agent's +interloper:+ kwarg
-      # 
-      # _@param_ `cancellable` — the same instance passed to the agent's +cancellable:+ kwarg
+      # _@param_ `catalog` — the connections {#select_model} picks from, and what names a transport
       # 
       # _@param_ `broadcaster` — SSE fan-out for +status+ events
       # 
-      # _@param_ `conversations` — where turns get saved
+      # _@param_ `transcript` — this conversation's blocks
       # 
-      # _@param_ `transcript` — this conversation's blocks, which +GET /c/:id+ renders as its snapshot
+      # _@param_ `listener` — the transcript's renderer, fed directly by {#open}'s replay
       # 
-      # _@param_ `listener` — the transcript's renderer, fed directly by {#restore!}'s replay — the agent's own listener stack wraps it in a delta rate-limiter that a replay has nothing to say to
+      # _@param_ `agent_listeners` — where the agent's events go: +listener+ behind a delta rate-limiter, and +token_log+
       # 
-      # _@param_ `executor` — shared by every runner: the admission gate that keeps concurrent turns from outnumbering the inference server's slots (+--turns+). Its pool size is that cap and nothing else — this runner is single-writer over its own conversation at any size, because {#submit} injects rather than starting a second turn
+      # _@param_ `token_log` — the status bar's context readout; the constructor claims its +on_status_line+ slot
       # 
-      # _@param_ `token_log` — when present, its +status_line+ rides along in every status event and a freshly measured one pushes an event of its own — the constructor claims the log's +on_status_line+ slot
+      # _@param_ `lock`
       # 
-      # _@param_ `catalog` — the connections {#select_model} may pick from, and what turns the agent's transport into a display name
-      # 
-      # _@param_ `titler` — names this conversation from its opening message, on its own executor job; +nil+ — no +[titler]+ configured — leaves every conversation on its start stamp
-      # 
-      # _@param_ `missing_connection` — +"model @ server"+ when this conversation was minted on {ModelCatalog#primary} because the connection it had saved has left the config file. Reported until a save or a pick makes it untrue, after which it describes nothing
-      # 
-      # _@param_ `lock` — the domain every call must be inside
+      # _@param_ `missing_connection` — +"model @ server"+ when the connection this conversation saved has left the config file and it was opened on {ModelCatalog#primary} instead. Reported until a save or a pick makes it untrue
       def initialize: (
-                        conversation: Conversations::Store::Conversation,
-                        agent: Pikuri::Agent,
-                        interloper: Pikuri::Agent::Control::Interloper,
-                        cancellable: Pikuri::Agent::Control::Cancellable,
+                        conversation: Pikuri::Conversations::Store::Entry,
+                        store: Pikuri::Conversations::Store,
+                        catalog: ModelCatalog,
                         broadcaster: Web::Broadcaster,
-                        conversations: Conversations::Store,
                         transcript: Web::Transcript,
                         listener: Web::SseListener,
-                        executor: Concurrent::ExecutorService,
-                        catalog: ModelCatalog,
+                        agent_listeners: ::Array[Pikuri::Agent::Listener::Base],
+                        token_log: Pikuri::Agent::Listener::TokenLog,
                         lock: BigAppLock,
-                        ?token_log: Pikuri::Agent::Listener::TokenLog?,
-                        ?titler: Titler?,
                         ?missing_connection: String?
                       ) -> void
 
-      # Replay what is stored for this conversation into the agent and the
-      # transcript. Called once, when the registry mints this runner.
+      # Replay what is stored into the transcript, then open the live
+      # conversation on +transport+, resuming that history. The agent boots on a
+      # thread of the gem's own.
       # 
-      # A conversation with nothing on disk (brand new, or never saved because it
-      # holds no messages) restores to empty, which is already correct.
+      # A stored history that cannot be read is logged and opened empty; the
+      # next turn's save then replaces it.
       # 
-      # Also where a conversation older than the titling feature gets a name: its
-      # opener is in the history already in hand, so the retro-title costs no
-      # second read and reaches exactly the conversations someone actually opens.
+      # _@param_ `conversations` — the process's live list
       # 
-      # _@return_ — whether a stored history was found and loaded
-      def restore!: () -> bool
+      # _@param_ `transport` — the connection to start on
+      def open: (Pikuri::Conversations conversations, transport: Pikuri::Agent::ChatTransport) -> self
 
-      # Route one user message: start a turn or inject into the running one.
+      # Route one user message: start a turn, or inject into the running one.
+      # Never refused for being busy.
       # 
-      # Never refuses for being busy: a turn submitted while the executor's slots
-      # are all taken is queued, not rejected — the wait is what {#state}
-      # reports. +:discarded+ is not a refusal either, but the answer that this
-      # conversation no longer exists ({#discard!}).
+      # Images ride along as pikuri attachments, already on disk (the store's
+      # +stash+) so the block that shows them can link to them.
       # 
-      # Images ride along as pikuri attachments, already on disk
-      # ({Conversations::Store#stash}) so the block that shows them can link to
-      # them. A model known to be blind refuses them inside +run_loop+, which
-      # this logs like any other failed turn; mid-loop, pikuri withholds them
-      # with a note instead.
-      # 
-      # _@param_ `message` — user text — blank only when +uploads+ is not empty (Web::App rejects the rest before calling; Interloper/run_loop double-check)
+      # _@param_ `message` — blank only when +uploads+ is not
       # 
       # _@param_ `uploads` — the message's images
+      # 
+      # _@return_ — +:started+, +:injected+, +:refused+ (the next turn's
+      # model is known to take no images) or +:discarded+ (deleted)
       def submit: (String message, ?uploads: ::Array[Conversations::Upload]) -> Symbol
 
-      # Put this conversation on another connection, from the top of its next
-      # turn.
-      # 
-      #   runner.select_model('Remote Qwen')   # => :selected
-      # 
-      # Never applied on the spot: see the class header. Picking the connection
-      # the agent is already on clears any pending selection rather than parking
-      # a switch that would no-op, so the status bar's arrow means "not yet",
-      # never "no change".
+      # Put this conversation on another connection from its next turn. Picking
+      # the one it is on undoes a pick.
       # 
       # _@param_ `name` — a {ModelCatalog} connection name
       # 
-      # _@return_ — +:unknown+ for a name this
-      # config does not have; +:discarded+ once the conversation is deleted
+      # _@return_ — +:selected+, +:unknown+ for a name this config lacks,
+      # or +:discarded+ once deleted
       def select_model: (String name) -> Symbol
 
-      # The connection this conversation will talk to *next* — the pick if one
-      # is parked, what the agent is on otherwise.
+      # The connection the *next* turn talks to — intent rather than reality, so
+      # "pick a model, then start a fresh chat" hands the new one the pick.
       # 
-      #   runner.model   # => ['qwen3.6', 'http://localhost:8080/v1']
-      # 
-      # Intent rather than reality on purpose: a pick made on a busy conversation
-      # and immediately followed by "new conversation" should hand the new one
-      # what the user asked for, not what the old one is still finishing on.
-      # 
-      # _@return_ — the +[model, server]+ pair, in the form
-      # {Conversations::Store} stores and {ModelCatalog#resolve} matches
+      # _@return_ — the +[model, server]+ pair, as the store
+      # records it and {ModelCatalog#resolve} matches it
       def model: () -> [String, String]
 
-      # Retire this runner for good: it will start no turn, inject nothing, take
-      # no model and write no folder again. One-way, and refused while a turn is
-      # in flight — so a deleter asks for the folder and the turn in one move:
+      # Retire this runner for good, and close its agent. Refused while a turn
+      # runs, so a deleter asks for the folder and the turn in one move:
       # 
       #   return :busy if runner && !runner.discard!   # then remove the folder
       # 
-      # Deliberately a *claim*, not a {#busy?} read followed by a caller-side
-      # flag: the busy check and the retirement are one method, so they share a
-      # task — either {#submit} claims the turn first and this refuses, or this
-      # wins and {#submit} answers +:discarded+. No interleaving lets both
-      # proceed — which is why {#persist} carries no check of its own.
+      # A boot under way is cancelled instead: it has saved nothing, and once
+      # closing the gem never saves again. A turn starting in the instant
+      # between the state read and that forced close is cancelled the same way,
+      # unsaved.
       # 
-      # Not +@abandon+, which drops one *queued turn* and is reset by the next
-      # {#submit}. This is about the conversation, and permanent.
-      # 
-      # _@return_ — false when a turn is queued or running, and the caller
-      # must refuse the delete; true once nothing will ever run here again
+      # _@return_ — false when a turn is in flight
       def discard!: () -> bool
 
-      # _@return_ — whether a delete has retired this runner
-      def discarded?: () -> bool
-
-      # Stop this conversation's turn: drop it before it starts if it is still
-      # waiting for the executor, or ask the agent to stop at the next tool
-      # boundary if it is already running. No-op when idle.
+      # Stop this conversation's turn, or its boot. Undelivered injections stay
+      # pending for the next send.
       def cancel: () -> void
 
-      # _@return_ — +:queued+ means the job is posted but
-      # the executor's slots are all taken by other conversations
-      def state: () -> Symbol
-
-      # _@return_ — whether a turn is posted and not yet finished
+      # _@return_ — whether a turn is in flight — running, or a boot with
+      # a message waiting for it
       def busy?: () -> bool
 
       # Status payload shared by SSE +status+ events and the initial page render.
       # 
-      #   { state: :running, busy: true, pending: 2,
+      #   { state: 'running', busy: true, pending: 2,
       #     tokens: 'ctx 7.4k/64k (12%)', tokens_detail: 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k',
       #     model: 'Local Qwen 3.6', model_pending: 'Remote Qwen', model_missing: nil }
       # 
-      # _@return_ — +pending+ is the count of queued mid-loop injections;
-      # +tokens+ and +tokens_detail+ are the two halves of the context-window
-      # readout, the status bar's headline and its muted tail (both '' when
-      # nothing is measured yet); +model+ is what the agent is on *now*;
-      # +model_pending+ and +model_missing+ are nil in the ordinary case (see
-      # {#select_model} and the +missing_connection:+ constructor argument)
+      # _@return_ — +pending+ counts the injections not yet delivered;
+      # +tokens+ / +tokens_detail+ are the context readout's headline and
+      # muted tail ('' until measured); +model+ is what the agent is on now
       def status_data: () -> ::Hash[untyped, untyped]
 
-      # The advisory tool-exposure map, handed out unrendered — callers render
-      # it. A +#trifecta_html+ convenience here would point {Agents} at {Web},
-      # the one direction that stays closed.
-      def trifecta: () -> Pikuri::Trifecta::Report
+      # The gem's events update the page; the agent's go to +agent_listeners+.
+      # 
+      # _@param_ `event` — an agent or conversation event
+      def on_event: (Data event) -> void
 
-      # The executor job's body: one turn, then the save. The bookkeeping
-      # brackets are tasks; +run_loop+ itself — the LLM round-trips, the tools —
-      # runs off-domain.
+      # Save the conversation as a turn left it — the gem's +on_turn_end+, on the
+      # turn's thread. A history with no messages gets no folder.
       # 
-      # A StandardError out of +run_loop+ (transport hiccup, tool bug) is logged
-      # rather than re-raised — an executor swallows a job's exception into a
-      # future nobody here holds, so the UI would just look stuck. The ensure
-      # broadcasts idle so the browser's input re-enables even on the error path.
+      # Logged, not raised: a full disk must not take the conversation down.
       # 
-      # _@param_ `message` — +nil+ on a restart, where the turn exists for the Interloper drain +run_loop+ does before its first completion
-      # 
-      # _@param_ `attachments` — the message's images; empty on a restart
-      def run_turn: (String? message, ?::Array[Pikuri::Attachment] attachments) -> void
+      # _@param_ `history`
+      def persist: (Pikuri::Agent::History history) -> void
 
-      # Save, go idle, and — when the Interloper still holds something — claim
-      # the next turn before anyone can observe the gap.
-      # 
-      # Injections are delivered by +run_loop+'s drain and by nothing else, so a
-      # message that arrived while this turn was ending would otherwise sit until
-      # the user sent another one, with the status bar's queued count stuck above
-      # zero over an idle conversation.
-      # 
-      # Only after a turn that returned normally: a cancelled or failed one
-      # leaves what is queued for the next {#submit} rather than turning a stop
-      # into a fresh round-trip or an unreachable transport into a spin. The
-      # queue emptying is likewise +run_loop+'s job — a restart against an agent
-      # that does not drain would post turns forever.
-      # 
-      # _@param_ `restart` — whether the turn ran to completion
-      def finish_turn: (restart: bool?) -> void
+      def to_s: () -> String
 
-      # Move from queued to running, unless {#cancel} got here first — which is
-      # how a queued turn is dropped without the executor needing to support
-      # dequeuing.
-      # 
-      # Both paths broadcast. Nothing else reports the start of a turn that
-      # really did wait for a slot: {#submit}'s frame says +:running+ only when
-      # the executor happens to get here before it.
-      def claim_running: () -> Symbol
+      # _@param_ `event` — a +Pikuri::Conversations::Event+
+      def conversation_event: (Data event) -> void
 
-      # _@return_ — the parked selection, taken;
-      # nil — +run_loop+'s "keep the current model" — when there is none
-      def take_pending: () -> Pikuri::Agent::ChatTransport?
+      # _@param_ `status`
+      def busy_status?: (Pikuri::Conversations::Status? status) -> bool
 
-      # Post a titling job for this conversation's opening message, if it wants
-      # one. Called from both places an opener can turn up: {#restore!} with the
-      # one on disk, {#submit} with the one starting a fresh conversation.
+      # _@param_ `one`
       # 
-      # At most once per runner, so a restored conversation is never asked twice
-      # and a failure leaves the stamp rather than retrying. Across a restart it
-      # does retry, which is what makes a title lost to a server being down
-      # recoverable by opening the conversation again.
+      # _@param_ `other`
       # 
-      # _@param_ `opener` — the opening message; +nil+ when there is none to read, which titles nothing
-      def maybe_title: (String? opener) -> void
+      # _@return_ — by +[model, api_base]+, since what the probe learnt
+      # may differ between the two
+      def same_connection?: (Pikuri::Agent::ChatTransport one, Pikuri::Agent::ChatTransport other) -> bool
 
-      # _@param_ `history` — a restored conversation
+      # Both halves of a rename in one task — the envelope on disk *and* the one
+      # held here, which the next {#persist} writes the title from.
       # 
-      # _@return_ — its opening message, or +nil+ for a history that
-      # holds no user text at all
-      def first_user_message: (Pikuri::Agent::History history) -> String?
-
-      # The titling job's body: ask off-domain, land the answer in a task.
-      # 
-      # Every failure ends here, which is what makes the class header's promise
-      # true — so this rescue may never narrow to a specific error class.
-      # 
-      # _@param_ `opener`
-      def run_titling: (String opener) -> void
-
-      # Store a landed title and tell every tab the list changed.
-      # 
-      # Both halves of the rename happen here, in one task: the envelope on disk
-      # *and* the {#conversation} this runner holds. Writing only disk would be
-      # reverted by the next turn-end {#persist}, which writes the title off this
-      # object.
-      # 
-      # _@param_ `title` — capped and sanitized by {Titler}
+      # _@param_ `title` — capped and sanitized by the gem's titler
       def land_title: (String title) -> void
 
-      # _@return_ — nil when this conversation has
-      # nothing stored, or when what is stored cannot be read — a file someone
-      # edited or a half-written save is the library's to report and ours to
-      # survive, unlike a raise from the load itself
+      # _@return_ — nil when nothing is stored, or what
+      # is stored cannot be read — a file someone edited, a half-written save
       def stored_history: () -> Pikuri::Agent::History?
 
-      # Write this conversation to disk. The store owns the how; the only
-      # judgement here is that a history with no messages does not deserve a
-      # folder.
-      # 
-      # Filesystem failures are logged, not raised — a full disk must not take
-      # the conversation down with it, and this runs inside the turn job's
-      # ensure, where a raise would escape.
-      def persist: () -> void
-
+      # Nothing to say before {#open} has the live conversation: the gem's
+      # +Booting+ arrives while +Conversations#open+ is still returning.
       def broadcast_status: () -> void
 
       # Tell *every* tab the sidebar changed when this conversation starts or
-      # stops working.
-      # 
-      # The status frame above only reaches tabs reading this conversation, and
-      # they are precisely the ones that can already see the turn. The per-row
-      # dot is the only sign a conversation you are *not* looking at is working,
-      # and it is server-rendered, so somebody has to ask for a fresh list.
-      # 
-      # Only on the transition: a status frame fires per streamed injection
-      # count, and re-fetching the sidebar for each would be silly.
+      # stops working: the per-row dot is the only sign a conversation you are
+      # not looking at is busy, and it is server-rendered. Only on the
+      # transition — a status frame fires per injection count.
       def announce_busy_change: () -> void
 
-      # The status bar's context-window headline, off TokenLog's own numbers
-      # rather than its formatted line — the percentage is ours, no pikuri shell
-      # shows one.
+      # The status bar's context headline, off TokenLog's own number and the cap
+      # the conversation knows — stated in config.toml, or learnt by the gem's
+      # probe.
       # 
       #   'ctx 7.4k/64k (12%)'   # cap known
-      #   'ctx 7.4k'             # no cap reached us
+      #   'ctx 7.4k'             # no cap
       #   ''                     # nothing measured yet
-      def token_headline: () -> String
+      # 
+      # _@param_ `cap`
+      def token_headline: (Integer? cap) -> String
 
-      # TokenLog's line with its own +ctx=+ segment lifted out, leaving the
-      # per-turn tail that sits muted beside {#token_headline}:
+      # TokenLog's line with its +ctx=+ segment lifted out, leaving the per-turn
+      # tail that sits muted beside {#token_headline}:
       # 
-      #   'msg #2: ctx=8.4k/32.0k  Δ+1.6k  ↑1.0k  ↓0.6k' -> 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k'
-      #   'restored: ctx=8.2k/32.0k'                     -> 'restored'
-      # 
-      # Should that segment ever leave pikuri's format, the whole line survives
-      # as the tail — doubled against the headline, never lost.
+      #   'msg #2: ctx=8.4k  Δ+1.6k  ↑1.0k  ↓0.6k' -> 'msg #2  Δ+1.6k  ↑1.0k  ↓0.6k'
+      #   'restored: ctx=8.2k'                     -> 'restored'
       def token_detail: () -> String
 
-      # 1024-scaled with a +k+ suffix, as pikuri sizes tokens, minus the trailing
-      # +.0+ a round number would carry (+64.0k+ reads as a precision the cap
-      # does not have).
+      # 1024-scaled with a +k+ suffix, as pikuri sizes tokens, minus a trailing
+      # +.0+ (+64.0k+ reads as a precision the cap does not have).
       # 
       # _@param_ `count`
       def format_k: (Integer count) -> String
 
-      # _@return_ — replaced, not mutated, when a
-      # title lands — so a reader always sees one consistent frozen envelope,
-      # at worst the pre-title one. The +conversations+ SSE event that follows
-      # the landing is what makes every tab re-fetch.
-      attr_reader conversation: Conversations::Store::Conversation
+      # _@return_ — replaced, not mutated, when
+      # a title lands
+      attr_reader conversation: Pikuri::Conversations::Store::Entry
 
       # _@return_ — this conversation's rendered blocks
       attr_reader transcript: Web::Transcript
-    end
-
-    # Names a conversation from its opening message, on the connection
-    # +[titler] llm+ picked:
-    # 
-    #   titler = Titler.new(transport: choice.transport, params_declared: true)
-    #   titler.title_for('Compare Sinatra and Roda for an SSE-heavy app')
-    #   # => "Sinatra Versus Roda For SSE"
-    # 
-    # +nil+ comes back when the model said nothing usable, and the caller keeps
-    # the title the conversation already has.
-    # 
-    # Thread-safe: {#title_for} keeps its state local and builds its own agent —
-    # which is also what lets any number of executor threads drive one instance,
-    # a +Pikuri::Agent+'s chat being single-thread-confined.
-    # 
-    # == Implementation details
-    # 
-    # A *system* agent: no tools, so the loop cannot iterate, and no listener
-    # reaching a browser, so a title draws no transcript block. +Agent.new+ does
-    # no I/O at all when its transport carries an explicit +context_window+,
-    # which is what makes one agent per title free.
-    class Titler
-      MAX_WORDS: Integer
-      MAX_CHARS: Integer
-      MAX_OPENER_CHARS: Integer
-      SYSTEM_PROMPT: String
-
-      # _@param_ `transport` — the +[titler] llm+ connection, +params+ adapter and all.
-      # 
-      # _@param_ `params_declared` — whether that +[[llm]]+ declared a +params+ table — i.e. whether the operator asked for anything. Decides only the canary's severity: a stated intent that did not apply is a config bug (warn), a connection nobody steered is doing what it was told (info).
-      def initialize: (transport: Pikuri::Agent::ChatTransport, params_declared: bool) -> void
-
-      # Title one conversation from its opening message.
-      # 
-      # _@param_ `opener` — the first user message; only its first {MAX_OPENER_CHARS} characters are sent.
-      # 
-      # _@return_ — a single line of at most {MAX_WORDS} words and
-      # {MAX_CHARS} characters, sanitized; +nil+ when the model returned
-      # nothing usable.
-      def title_for: (String opener) -> String?
-
-      # Model output down to one storable line, or +nil+.
-      # 
-      # _@param_ `raw` — {Pikuri::Agent#last_assistant_content}.
-      def clean: (String? raw) -> String?
-
-      # Say once, on stderr, that this connection's model reasoned — the exact
-      # signal that a thinking-off parameter is not in force.
-      # 
-      # Diagnostic only: a slow title is still a title, and an operator who
-      # cannot turn thinking off on their model is entitled to accept the cost
-      # rather than be nagged per title.
-      # 
-      # _@param_ `tally` — this title's token counts.
-      # 
-      # _@param_ `seconds` — wall clock for the whole call.
-      def report_reasoning: (Tally tally, Float seconds) -> void
-
-      # Counts one title's tokens off the event stream, which is the only place
-      # the reasoning figure is exposed.
-      class Tally < Pikuri::Agent::Listener::Base
-        def initialize: () -> void
-
-        # _@param_ `event` — anything the loop emits; only the token event is counted.
-        def on_event: ((Pikuri::Agent::Event::Tokens | Pikuri::Agent::Event::Assistant) event) -> void
-
-        # _@return_ — reasoning tokens the model billed for this title;
-        # +0+ is the whole point — anything else means it thought.
-        attr_reader thinking: Integer
-
-        # _@return_ — completion tokens, the canary's secondary number.
-        attr_reader output: Integer
-      end
     end
 
     # The connections a conversation can be on — the +[[llm]]+ list turned into
@@ -1721,7 +1495,7 @@ module PikuriWebUI
       # involved and two conversations on two servers coexist.
       # 
       # Nothing here rations the server: how many requests may fly at one
-      # +api_base+ is +Pikuri::Agent::ServerPermits+' business, a registry keyed
+      # +api_base+ is +Pikuri::Conversations::Throttle+'s business, a registry keyed
       # on the server rather than on anything a transport carries
       # (+D_upstream_request_throttle+).
       # 
@@ -1797,7 +1571,7 @@ module PikuriWebUI
         # form +meta.json+ stores and {ModelCatalog#resolve} matches on
         def server: () -> String
 
-        # _@return_ — explicit cap, or nil where pikuri's +/props+
+        # _@return_ — explicit cap, or nil where pikuri-conversations' +/props+
         # probe decides
         def context_window: () -> Integer?
 
@@ -1957,7 +1731,7 @@ module PikuriWebUI
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
   # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
-  # match +Tool::WebSearch.build+'s and {McpServer}'s match
+  # match +Pikuri::Web::Search.build+'s and {McpServer}'s match
   # +Mcp::Registry+'s entries, which keeps the bin's translation a
   # pass-through.
   # 
@@ -2187,8 +1961,8 @@ module PikuriWebUI
     #     runs.
     # @!attribute [r] max_concurrent_requests
     #   @return [Integer, nil] ceiling on requests in flight against this
-    #     server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
-    #     let pikuri's +/props+ probe size it from the box's own
+    #     server, becoming a +Pikuri::Conversations::Throttle+ limit, or +nil+ to
+    #     let pikuri-conversations' +/props+ probe size it from the box's own
     #     +total_slots+. 1 is the recommended value and the probe's answer is
     #     usually not — see +D_max_concurrent_requests+.
     class Server < Data
@@ -2234,8 +2008,8 @@ module PikuriWebUI
       attr_reader api_key: String?
 
       # _@return_ — ceiling on requests in flight against this
-      # server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
-      # let pikuri's +/props+ probe size it from the box's own
+      # server, becoming a +Pikuri::Conversations::Throttle+ limit, or +nil+ to
+      # let pikuri-conversations' +/props+ probe size it from the box's own
       # +total_slots+. 1 is the recommended value and the probe's answer is
       # usually not — see +D_max_concurrent_requests+.
       attr_reader max_concurrent_requests: Integer?
@@ -2259,7 +2033,7 @@ module PikuriWebUI
     #     +"not-needed"+, fine for a local llama.cpp).
     # @!attribute [r] context_window
     #   @return [Integer, nil] explicit context-window cap for this
-    #     connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
+    #     connection, or +nil+ to let pikuri-conversations learn it (its llama.cpp
     #     +/props+ probe, which yields +nil+ for a non-llama server). Set
     #     it for a cloud model the probe can't reach so the status bar
     #     shows a real +used/cap+. Rides the connection's
@@ -2292,7 +2066,7 @@ module PikuriWebUI
       attr_reader api_key: String?
 
       # _@return_ — explicit context-window cap for this
-      # connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
+      # connection, or +nil+ to let pikuri-conversations learn it (its llama.cpp
       # +/props+ probe, which yields +nil+ for a non-llama server). Set
       # it for a cloud model the probe can't reach so the status bar
       # shows a real +used/cap+. Rides the connection's
@@ -2744,8 +2518,9 @@ module PikuriWebUI
   # Guarded classes ({Agents::Runner}, {Conversations::Registry}, {Transcript}) open
   # their public methods with {#assert!}, so a call from outside a task raises
   # instead of racing. Who enters the domain: every route body ({Web::App}), and
-  # the turn worker's bookkeeping brackets (+Agents::Runner#run_turn+) — the
-  # agent loop itself, and all rendering, stay outside.
+  # the runners' handling of what pikuri-conversations reports from its own
+  # threads — a turn's save, a title, a status change. The agent loop itself,
+  # and all rendering, stay outside.
   # 
   # A task must be **rapid-fire**: never a network wait, never a wait on
   # another thread, never anything unbounded. Bounded disk work is allowed
@@ -2759,8 +2534,8 @@ module PikuriWebUI
 
     # Run one task: the block executes inline on the calling thread, alone in
     # the domain. Re-entrant — a task may open another task, so a guarded
-    # method calling back into the domain (the Interloper's +on_change+) just
-    # works.
+    # method whose call fires a listener that enters the domain (a submit's
+    # pending-count event) just works.
     # 
     # _@return_ — the block's value
     def run: () -> Object
@@ -2780,407 +2555,21 @@ module PikuriWebUI
     end
   end
 
-  # The conversation set seen three ways: what is saved ({Store}), what is
-  # resident as a running agent ({Registry}), and a saved one turned back into
-  # the events that produced it ({HistoryReplay}).
+  # The conversation set seen two ways: what is resident as a live agent
+  # ({Registry}), and a saved one turned back into the events that produced it
+  # ({HistoryReplay}). The folder itself is pikuri-conversations'
+  # +Pikuri::Conversations::Store+, used as it comes.
   # 
   # {HistoryReplay} sits here rather than in {Agents} because it is the read
-  # half of what {Store} writes — +history.json+ back into
+  # half of what the store writes — +history.json+ back into
   # +Pikuri::Agent::Event+s — and it renders nothing itself.
+  # 
+  # Mind the name: this module is +PikuriWebUI::Conversations+, the gem's live
+  # list is +Pikuri::Conversations+, and code here always spells the gem's out.
   # 
   # Nothing here may name anything under {Web}; see that namespace's one-way
   # rule.
   module Conversations
-    # The on-disk home of saved conversations: one directory per conversation
-    # under a single root. Minting an id and committing are separate steps — a
-    # folder per click would litter the root — but a commit is *one* call, and
-    # it writes both halves:
-    # 
-    #   store = Store.new(root: dir, shell: 'pikuri-webui-chat')
-    #   conversation = store.create                            # mints an id; no folder yet
-    #   store.save(conversation, history, model: m, server: s) # the whole commit
-    #   store.list                                             # everything committed, newest first
-    # 
-    # {#save} calls +History#save+ itself rather than leaving each caller to
-    # write +history.json+ beside the envelope, which is what makes this class
-    # the single writer of a conversation's directory — the mode, the order and
-    # the commit point are decided once. It is also the only method here that
-    # touches a pikuri type, and that is the shape of the seam rather than a
-    # leak in it (`D_pikuri_free_core`); {#list}, {#find} and {#delete} deal in
-    # paths and plain hashes.
-    # 
-    # The root exists from construction; a conversation's own directory appears
-    # with its first save.
-    # 
-    # Both halves land in the one directory, and each format has exactly one
-    # writer:
-    # 
-    #   2026-08-27T12-03-51Z-3f9a/
-    #       history.json   pikuri's — Pikuri::Agent::History#save
-    #       attachments/   pikuri's — content-addressed, only if there are any;
-    #                      {#stash} writes a message's images here ahead of its turn
-    #       meta.json      ours — title, timestamps, shell and connection
-    # 
-    # == The connection a conversation is on
-    # 
-    # +meta.json+ records the +[model, server]+ *pair*, not a +[[llm]]+ name: a
-    # name is a config file away from being renamed, and a model id alone cannot
-    # tell two servers running one model apart. +server+ is the transport's
-    # normalized +api_base+, so the pair is exactly what {Agents::ModelCatalog#resolve}
-    # matches on. An envelope missing either half reads as a conversation with no
-    # saved connection — a key can be added here without a {SCHEMA} bump, because
-    # {#load_meta} checks the version and ignores what it does not read.
-    # 
-    # {#save} takes the pair per call rather than the store holding one, because
-    # what gets written is the *agent's own* transport at turn end; a store-wide
-    # field could only ever record the connection this process booted on.
-    # {Conversation}'s +_at_mint+ pair runs the other way — what disk said when
-    # the runner was minted — and a save deliberately does not refresh it.
-    # 
-    # == Implementation details
-    # 
-    # Co-tenancy in one directory is safe by upstream contract rather than by
-    # luck: +History#save+ never deletes and never enumerates the folder it
-    # writes into (pikuri's own decisions register, under history
-    # attachments).
-    # 
-    # Directories are created 0700: a conversation holds everything the user
-    # typed plus whatever the tools fetched, unencrypted. That covers
-    # +attachments/+, which pikuri creates with the default mode — an unreadable
-    # parent is what actually blocks traversal. Hence {#save}'s first step:
-    # tightening the directory *after* writing into it leaves the contents
-    # world-readable for as long as the write takes.
-    # 
-    # == Thread-safety
-    # 
-    # Thread-safe, in the narrow sense that is all this object can promise: it
-    # holds no mutable state past its constructor arguments, so concurrent calls
-    # need no lock *here*. The consistency of the *folder* rests elsewhere —
-    # 
-    # - one conversation's directory has one writer at a time, which comes from
-    #   the per-conversation partition (`D_conversation_owns_agent`), not from
-    #   anything in this class;
-    # - both files are written temp-file-and-rename, which is the whole of what
-    #   a reader in another process gets (`D_no_multi_process_lock`);
-    # - {#list} needs no coordination with a concurrent save or delete, because
-    #   +#row+ takes a read's own +ENOENT+ as the answer.
-    # 
-    # Cross-call sequences are *not* atomic: {#find} then {#delete} has a gap,
-    # and a caller must tolerate the conversation having vanished inside it.
-    class Store
-      META_FILE: String
-      ATTACHMENTS_DIR: String
-      SCHEMA: Integer
-      ID_TIME: String
-      ID: Regexp
-
-      # Creates +root+ if it is not there — so the folder exists from boot,
-      # rather than appearing on whichever later event happens to save first.
-      # 
-      # _@param_ `root` — directory holding one subdirectory per conversation, e.g. +~/.local/state/pikuri/pikuri-web-chat/conversations+
-      # 
-      # _@param_ `shell` — which binary is writing these, recorded in +meta.json+ so a later picker can say "saved by a different harness"
-      def initialize: (root: (String | Pathname), shell: String) -> void
-
-      # Mint a new conversation. No directory yet — a folder per click would
-      # litter the root with conversations nothing was ever said in, so one
-      # appears when there is something to put in it.
-      # 
-      #   store.create.id     # => "2026-08-27T12-03-51Z-3f9a"
-      #   store.create.title  # => "2026-08-27 14:03"
-      # 
-      # The id sorts lexically and greps by date, so +ls+ is already a
-      # newest-last listing; the random suffix keeps two processes minting in the
-      # same second apart. UTC in the id, local time in the title.
-      # 
-      # _@param_ `at` — the conversation's start time
-      # 
-      # _@param_ `model` — connection to start on, inherited from the conversation the tab was reading; nil starts on the catalog's first
-      # 
-      # _@param_ `server` — the +server+ half of the same pair
-      def create: (?at: Time, ?model: String?, ?server: String?) -> Conversation
-
-      # Every conversation committed to disk, newest first.
-      # 
-      #   store.list.map { [_1.title, _1.supported] }
-      #   # => [["2026-08-27 14:03", true], ["2026-08-26 09:14", false]]
-      # 
-      # Newest-first is a lexical sort on the id, which *is* the start stamp: a
-      # conversation holds its place in the list however long it goes on being
-      # written to, and ordering never opens a file.
-      # 
-      # A directory without +meta.json+ is not listed — that file is {#save}'s
-      # commit point, so such a directory is a save interrupted between the
-      # history and the envelope. One whose +meta.json+ is unreadable, or
-      # stamped by a schema this version doesn't know, comes back
-      # +supported: false+ rather than being dropped: a conversation the user
-      # can see and not open beats one that silently isn't there.
-      # 
-      # No index file fronts the per-conversation +meta.json+ reads: an index is
-      # a cache of the directory, and it drifts from it. They are fine into the
-      # hundreds — measure a slow sidebar before trading that away.
-      def list: () -> ::Array[Conversation]
-
-      # One listed conversation by id, or nil.
-      # 
-      #   store.find(params['id'])   # => Conversation, or nil for anything else
-      # 
-      # Resolution goes *through the listing* rather than by building a path, so
-      # an id arriving from a URL can only ever name a conversation that is
-      # already there — no caller has to think about traversal.
-      # 
-      # _@param_ `id`
-      def find: (String id) -> Conversation?
-
-      # Remove a conversation from disk — folder, +history.json+,
-      # +attachments/+.
-      # 
-      #   store.delete(store.find(params['id']))   # => true
-      # 
-      # +meta.json+ is unlinked *before* the folder, inverting {#save}'s
-      # commit point: a removal that dies half-way then leaves a conversation
-      # unlisted, rather than one that lists and cannot be opened.
-      # 
-      # Takes a +Conversation+ rather than an id, like {#find}, so no caller
-      # turns user input into a path. Nothing is refcounted — attachments are
-      # never shared between conversations.
-      # 
-      # _@param_ `conversation` — from {#list} or {#find}
-      # 
-      # _@return_ — true when a folder was removed; false when there was
-      # nothing on disk — a conversation minted but never saved
-      def delete: (Conversation conversation) -> bool
-
-      # Commit a conversation to disk — the directory, the history, the envelope.
-      # 
-      #   store.save(conversation, agent.export_history,
-      #              model: transport.model, server: transport.api_base)   # => the directory
-      # 
-      # +meta.json+ goes last because it is the commit point: {#list} skips a
-      # directory without one, so a save that dies half-way leaves an *unlisted*
-      # conversation rather than a listed one that cannot be opened. {#delete}
-      # inverts the order for the same reason.
-      # 
-      # An empty history still commits — whether a conversation with no messages
-      # deserves a folder is the caller's call, not the folder's.
-      # 
-      # _@param_ `conversation` — from {#create}, {#list} or {#find}
-      # 
-      # _@param_ `history` — anything answering +#save(Pathname)+ does, which is what makes this testable without an agent
-      # 
-      # _@param_ `model` — what the agent is *on* — read off its transport, never off a selection, so this and +history.json+'s last +model_id+ agree by construction
-      # 
-      # _@param_ `server` — the transport's +api_base+
-      # 
-      # _@param_ `updated_at` — last-activity stamp; the sidebar's sort key
-      # 
-      # _@return_ — the conversation's directory
-      def save: (
-                  Conversation conversation,
-                  Pikuri::Agent::History history,
-                  model: String,
-                  server: String,
-                  ?updated_at: Time
-                ) -> Pathname
-
-      # Write a message's images into the conversation's +attachments/+ *before*
-      # its turn, so a picture is on disk by the time any tab asks for it.
-      # 
-      #   store.stash(conversation, [upload])   # => dir/attachments/3f9a1c8e2b-shot.png
-      # 
-      # The names are the ones pikuri's +History#save+ uses ({Upload#stored_name}),
-      # and that save skips a name that already exists — so this does not write
-      # twice, it moves the write out of the turn-end save, which runs inside
-      # the domain, to the request thread, which does not. The folder appears
-      # here rather than at the first save when a conversation's opening
-      # message carries an image; it stays unlisted until +meta.json+ lands.
-      # 
-      # A process killed mid-turn leaves the images with nothing referencing
-      # them — the orphan +History#save+ itself accepts. A delete racing the
-      # message is the caller's to clean up, by deleting again.
-      # 
-      # _@param_ `conversation`
-      # 
-      # _@param_ `uploads`
-      def stash: (Conversation conversation, ::Array[Upload] uploads) -> void
-
-      # One stored image, by the name {#stash} or +History#save+ gave it.
-      # 
-      #   store.attachment(conversation, params['name'])   # => Pathname, or nil
-      # 
-      # Resolved through the folder's listing, like {#find}, so a name arriving
-      # from a URL can only ever pick a file that is already there.
-      # 
-      # _@param_ `conversation`
-      # 
-      # _@param_ `name`
-      # 
-      # _@return_ — nil for a name that is not in the folder
-      def attachment: (Conversation conversation, String name) -> Pathname?
-
-      # Whether this conversation still carries the start stamp it was minted
-      # with — i.e. nothing has named it yet.
-      # 
-      # The test is the stamp's *shape*, because +meta.json+'s +title+ always
-      # holds something and +#row+ falls back to the stamp when it does not. A
-      # model-written title colliding with +"%Y-%m-%d %H:%M"+ is not a real case.
-      # 
-      # _@param_ `conversation`
-      def stamp_titled?: (Conversation conversation) -> bool
-
-      # Rename a conversation: in memory always, on disk when there is an
-      # envelope to rewrite.
-      # 
-      #   conversation = store.retitle(conversation, 'Sinatra Versus Roda For SSE')
-      # 
-      # The renamed {Conversation} is the return value because it is frozen and
-      # {#save} writes +conversation.title+ — a caller that kept the old value
-      # would revert the rename at its next save.
-      # 
-      # No envelope yet (minted, first turn not saved), or one this reader cannot
-      # stand behind, is renamed in memory alone: the next {#save} writes
-      # +meta.json+ whole and carries the title anyway. The directory is
-      # untouched in every case — a title never appears in a path.
-      # 
-      # _@param_ `conversation`
-      # 
-      # _@param_ `title` — stored as given — capping and sanitizing belong to whoever produced it.
-      # 
-      # _@return_ — the same conversation, retitled.
-      def retitle: (Conversation conversation, String title) -> Conversation
-
-      # Write +meta.json+, into a directory {#save} has already created 0700.
-      # 
-      # _@param_ `conversation`
-      # 
-      # _@param_ `model`
-      # 
-      # _@param_ `server`
-      # 
-      # _@param_ `updated_at`
-      # 
-      # _@return_ — the file written
-      def write_meta: (
-                        Conversation conversation,
-                        model: String,
-                        server: String,
-                        updated_at: Time
-                      ) -> Pathname
-
-      # One listing row, or nil for a directory that is not a committed
-      # conversation.
-      # 
-      # _@param_ `dir`
-      def row: (Pathname dir) -> Conversation?
-
-      # The envelope; nil when this reader can't stand behind it — corrupt, or
-      # written by a schema it doesn't know — and +:absent+ when there is no
-      # envelope at all, which is a save interrupted between pikuri's half and
-      # ours rather than a conversation to list.
-      # 
-      # _@param_ `path`
-      def load_meta: (Pathname path) -> (::Hash[untyped, untyped] | Symbol)?
-
-      # _@param_ `basename`
-      # 
-      # _@return_ — nil when the name is not one of our ids
-      def id_time: (String basename) -> Time?
-
-      # _@param_ `at`
-      # 
-      # _@return_ — the local-time start stamp a conversation is titled by
-      # until something better replaces it
-      def stamp_title: (Time at) -> String
-
-      # The pair is one value: half of it is none of it, and a half-written or
-      # hand-edited one reads as no connection at all rather than travelling on
-      # to the conversation factory.
-      # 
-      # An envelope carrying a +model+ and no +server+ is the case that matters:
-      # that +model+ named the connection its *writer* was booted on, not the
-      # conversation's, so matching on it alone is the very conflation the pair
-      # exists to prevent.
-      # 
-      # _@param_ `meta`
-      def saved_connection: (::Hash[untyped, untyped]? meta) -> ([String, String] | [NilClass, NilClass])
-
-      # 0700 explicitly rather than through +mkdir_p+'s +mode:+, which a umask
-      # can widen.
-      # 
-      # _@param_ `dir` — the directory to create, parents included
-      def mkdir_private: (Pathname dir) -> void
-
-      # Sibling temp file plus rename, so a reader never sees a half-written
-      # +meta.json+.
-      # 
-      # _@param_ `path` — the file to replace
-      # 
-      # _@param_ `content` — its new content
-      def atomic_write: (Pathname path, String content) -> void
-
-      # _@return_ — the conversations root
-      attr_reader root: Pathname
-
-      # One conversation's identity and where it lives; no history of its own —
-      # that is +history.json+ under +dir+.
-      # 
-      # @!attribute [r] id
-      #   @return [String] the directory basename, e.g. +"2026-08-27T12-03-51Z-3f9a"+
-      # @!attribute [r] dir
-      #   @return [Pathname] the conversation's directory; may not exist yet
-      # @!attribute [r] title
-      #   @return [String] display title — the local-time start stamp
-      # @!attribute [r] created_at
-      #   @return [Time]
-      # @!attribute [r] supported
-      #   @return [Boolean] false for a conversation {#list} could not read —
-      #     +title+ is then the stamp derived from the id, and nothing else on
-      #     disk should be trusted
-      # @!attribute [r] model_at_mint
-      #   @return [String, nil] the model +meta.json+ held when this value object
-      #     was built, or what {#create} inherited; nil for a conversation with
-      #     no saved connection. Read once, when a runner is minted on it —
-      #     the next save moves +meta.json+ on and this never follows, which is
-      #     what the suffix is there to say at the call site
-      # @!attribute [r] server_at_mint
-      #   @return [String, nil] the +server+ half of the same pair
-      class Conversation < Data
-        # Defaulted because "no saved connection" is a real and ordinary state —
-        # every conversation is in it until its first turn lands.
-        # 
-        # _@param_ `model_at_mint` — see {#model_at_mint}
-        # 
-        # _@param_ `server_at_mint` — see {#server_at_mint}
-        def initialize: (?model_at_mint: String?, ?server_at_mint: String?) -> void
-
-        # _@return_ — the directory basename, e.g. +"2026-08-27T12-03-51Z-3f9a"+
-        attr_reader id: String
-
-        # _@return_ — the conversation's directory; may not exist yet
-        attr_reader dir: Pathname
-
-        # _@return_ — display title — the local-time start stamp
-        attr_reader title: String
-
-        attr_reader created_at: Time
-
-        # _@return_ — false for a conversation {#list} could not read —
-        # +title+ is then the stamp derived from the id, and nothing else on
-        # disk should be trusted
-        attr_reader supported: bool
-
-        # _@return_ — the model +meta.json+ held when this value object
-        # was built, or what {#create} inherited; nil for a conversation with
-        # no saved connection. Read once, when a runner is minted on it —
-        # the next save moves +meta.json+ on and this never follows, which is
-        # what the suffix is there to say at the call site
-        attr_reader model_at_mint: String?
-
-        # _@return_ — the +server+ half of the same pair
-        attr_reader server_at_mint: String?
-      end
-    end
-
     # One image the user attached to a message, checked and renamed, on its way
     # to the conversation's +attachments/+ folder and to the model:
     # 
@@ -3222,8 +2611,8 @@ module PikuriWebUI
       # _@return_ — a {TYPES} key, or nil for anything else
       def self.sniff: (String bytes) -> String?
 
-      # The name pikuri's +History#save+ will store this image under, so a file
-      # {Store#stash} wrote ahead of the turn is the one the save then skips.
+      # The name the store files this image under, ahead of the turn and at its
+      # save alike, so the stashed file is the one the save then skips.
       # 
       # _@return_ — a bare basename: ten hex digits, a dash, {#filename}
       def stored_name: () -> String
@@ -3243,46 +2632,39 @@ module PikuriWebUI
       attr_reader bytes: String
     end
 
-    # The conversations resident in memory: one {Agents::Runner} — and therefore one
-    # agent, one history, one transcript — per conversation anyone has opened
-    # this run.
+    # The conversations resident in memory: one {Agents::Runner} — and so one
+    # live agent and one transcript — per conversation anyone has opened this
+    # run.
     # 
-    #   runner = registry.open_id(id)           # mint or return the resident one
+    #   runner = registry.open_id(id)          # mint or return the resident one
     #   registry.create(from: viewed_id)       # a brand-new conversation, minted and open
-    #   registry.delete(conversation)          # => :deleted | :busy
+    #   registry.delete(entry)                 # => :deleted | :busy | :failed
     #   registry.rows                          # what the sidebar lists
     # 
     # A runner is minted on first *view*, not on first send, so that a tab
     # reading a conversation is subscribed to something real and picks up a turn
     # someone starts there from another tab. Nothing is ever reaped: a single
     # user opens a handful of conversations in a session, and a resident history
-    # is small. Reaping is the thing to add if that stops being true, not a
-    # cleverer minting rule.
+    # is small.
     # 
-    # Pikuri-free: the agent-shaped work lives entirely behind +factory+, so this
-    # class only ever holds and hands out {Agents::Runner}s.
+    # Speaks the saved-conversation envelope, +Pikuri::Conversations::Store::Entry+,
+    # as a value it reads by field and never names; everything agent-shaped lives
+    # behind +factory+ (+D_pikuri_free_core+).
     # 
     # == Threading
     # 
-    # Guarded by {BigAppLock}: every call must run inside a task. Per-conversation
-    # state is single-writer by construction — one agent, one transcript, and a
-    # conversation that admits one turn at a time — and that holds at any
-    # +--turns+ setting; it comes from the partition, not from the executor's
-    # pool size (`D_serial_turn_executor`). {Store}'s own doc covers
-    # the folder. This class still never reaches inside a runner — hence
-    # {Agents::Runner#discard!} for the one place that must.
-    # 
-    # A mint's task runs the factory *and* the whole restore replay (which is
-    # what keeps a second open of the same conversation from observing a
-    # half-restored runner), and {#find} / {#rows} / {#delete} run the store's
-    # disk I/O — the sanctioned rare-and-bounded stalls (`D_global_monitor`).
+    # Guarded by {BigAppLock}: every call must run inside a task. A mint's task
+    # runs the factory *and* the whole restore replay, which keeps a second open
+    # of the same conversation from observing a half-restored runner; {#find},
+    # {#rows} and {#delete} run the store's disk I/O — the sanctioned
+    # rare-and-bounded stalls (+D_global_monitor+).
     class Registry
-      # _@param_ `store` — the folder: mints ids, lists what is saved, removes a folder
+      # _@param_ `store` — mints ids, lists what is saved, removes a folder
       # 
-      # _@param_ `factory` — +conversation → Agents::Runner+, built once in bin/pikuri-webui-chat so that every agent gets the same tool set and the boot-time trifecta report stays true of all of them
+      # _@param_ `factory` — +entry → Agents::Runner+, opened; built once in bin/pikuri-webui-chat so every agent gets the same tool set
       # 
       # _@param_ `lock` — the domain every call must be inside
-      def initialize: (store: Store, factory: untyped, lock: BigAppLock) -> void
+      def initialize: (store: Pikuri::Conversations::Store, factory: untyped, lock: BigAppLock) -> void
 
       # _@param_ `id`
       # 
@@ -3293,14 +2675,9 @@ module PikuriWebUI
       # 
       #   runner = registry.open_id(params['conversation'])
       # 
-      # {#find} then {#runner_for} as two caller-side calls would leave a window for
-      # {#delete}: the folder goes, and the open that follows mints a live
-      # runner for it anyway — back in the sidebar as an unsaved resident, and
-      # written to disk again at its next turn end. {Agents::Runner#discard!}
-      # cannot help, because it retires the runner that is *already* resident
-      # and this one does not exist yet. One method means one task: either the
-      # delete finds a runner to refuse or retire, or this finds nothing to
-      # resolve.
+      # A resolve then an open as two caller-side calls would leave {#delete} a
+      # window: the folder goes, and the open that follows mints a live runner
+      # for it anyway, written back to disk at its next turn end.
       # 
       # _@param_ `id`
       # 
@@ -3308,86 +2685,67 @@ module PikuriWebUI
       # saved — including one deleted a moment ago
       def open_id: (String id) -> Agents::Runner?
 
-      # Mint a brand-new conversation and open it.
+      # Mint a brand-new conversation and open it, on the connection the tab
+      # was reading — so "switch model, then start a fresh chat" does the
+      # obvious thing.
       # 
       #   registry.create(from: params['viewing'])
-      # 
-      # A conversation starts on the connection the tab was reading, which is
-      # what makes "switch model, then start a fresh chat" do the obvious thing.
-      # The pair travels as two opaque strings — this class knows connections
-      # only by them.
       # 
       # _@param_ `from` — id of the conversation the tab has open; nil, or one not resident, starts on the catalog's first connection
       def create: (?from: String?) -> Agents::Runner
 
       # Forget a conversation and remove its folder. Irreversible: no undo, no
-      # tombstone (`D_delete_no_undo`).
+      # tombstone (+D_delete_no_undo+). Refused while its turn is in flight.
       # 
-      # Refused while its turn is in flight, which would otherwise save the
-      # folder back moments after it went.
+      # {Agents::Runner#discard!} rather than a busy read, because dropping the
+      # runner from the map does not reach a reference a request resolved in an
+      # *earlier* task; only the retirement travels with the runner itself.
       # 
-      # {Agents::Runner#discard!} rather than a {Agents::Runner#busy?} read, because
-      # dropping the runner from the map does not reach the copy a request
-      # resolved in an *earlier* task — a submit through that stale reference
-      # lands in a later task, after this one, and would resurrect the
-      # conversation at its next turn end; only a flag on the runner itself
-      # travels with the reference. Retire it, then remove the folder: a removal
-      # that raises leaves an inert runner rather than a live one pointing at a
-      # half-deleted conversation.
-      # 
-      # _@param_ `conversation`
-      def delete: (Store::Conversation conversation) -> Symbol
+      # _@param_ `entry`
+      def delete: (Pikuri::Conversations::Store::Entry entry) -> Symbol
 
-      # Resolve an id to a conversation — resident or saved.
-      # 
-      # Callers pass this rather than an id into {#runner_for} / {#delete}, so no
-      # caller ever turns user input into a path.
+      # Resolve an id to a conversation — resident or saved. Callers pass this,
+      # never an id, into {#delete}, so no user input becomes a path.
       # 
       # _@param_ `id`
-      def find: (String id) -> Store::Conversation?
+      def find: (String id) -> Pikuri::Conversations::Store::Entry?
 
       # The sidebar's model: everything saved, newest first, plus anything
-      # resident that has not been saved yet (a fresh conversation has no
-      # +meta.json+ until its first turn lands).
+      # resident not saved yet (a fresh conversation has no +meta.json+ until
+      # its first turn lands).
       # 
       # _@return_ — +{conversation:, busy:}+ per row
       def rows: () -> ::Array[::Hash[untyped, untyped]]
 
-      # The conversation a bare +GET /+ should land on: the newest thing there
-      # is, or a fresh one when the store is empty and nothing is resident.
-      def default: () -> Store::Conversation
+      # The conversation a bare +GET /+ lands on: the newest there is, or a
+      # fresh one when there is none.
+      def default: () -> Pikuri::Conversations::Store::Entry
 
-      # Every resident runner, for the shutdown sweep.
-      def runners: () -> ::Array[Agents::Runner]
-
-      # The resident runner for +conversation+, minting and restoring one if this
-      # is the first time it has been opened.
+      # The resident runner for +entry+, minting one on its first open.
       # 
-      # Private because a +Conversation+ held from an earlier task can be stale —
-      # deleted since it was resolved — and this would mint a live runner over
-      # the missing folder, resurrecting it at its next save
-      # (`D_delete_no_undo`). {#open_id} re-resolves in its own task and
-      # {#create} opens what it just minted, so neither can be handed a stale
-      # one; nothing else may reach this.
+      # Private because an entry held from an earlier task can be stale —
+      # deleted since — and this would mint a live runner over the missing
+      # folder (+D_delete_no_undo+). {#open_id} re-resolves in its own task and
+      # {#create} opens what it just minted.
       # 
-      # _@param_ `conversation`
-      def runner_for: (Store::Conversation conversation) -> Agents::Runner
+      # _@param_ `entry`
+      def runner_for: (Pikuri::Conversations::Store::Entry entry) -> Agents::Runner
     end
 
     # Turns a saved conversation back into the +Pikuri::Agent::Event+ stream that
     # produced it, so a loaded conversation renders through the *same*
     # {Web::SseListener} as a live one:
     # 
-    #   history = Pikuri::Agent::History.load(dir)
-    #   agent.load_history!(history)                      # Reset empties the transcript
+    #   history = store.history(entry)
     #   HistoryReplay.events(history).each { |e| listener.on_event(e) }
+    #   conversations.open(id: entry.id, transport:, listener:, history:)
     # 
     # One renderer, one event→block-kind mapping, and old conversations get
     # today's Markdown renderer and today's CSS. A `History → blocks` builder
     # would be a second place block kinds are decided.
     # 
-    # Part of the Pikuri seam: this file, {Web::SseListener} and {Agents::Runner} are the
-    # only lib/ files that know what a +Pikuri::Agent::Event+ is.
+    # Server-side of the pikuri seam (+D_pikuri_free_core+): it builds
+    # +Pikuri::Agent::Event+s and renders nothing.
     # 
     # == What a reload cannot show
     # 
@@ -3405,8 +2763,8 @@ module PikuriWebUI
     # +before_tool_call+ / +after_tool_result+ hooks fire per call, while the
     # history stores the whole assistant turn ahead of every +tool+ message).
     # 
-    # +Tokens+ is deliberately not synthesized: +TokenLog+ is reseeded from
-    # +Event::HistoryLoaded+ by +Agent#load_history!+ itself, and a second source
+    # +Tokens+ is deliberately not synthesized: +TokenLog+ is reseeded from the
+    # +Event::HistoryLoaded+ +Agent.new(history:)+ emits, and a second source
     # would double-count. Empty thinking and empty assistant content are dropped,
     # matching the filters on pikuri's own emit path — otherwise a pure tool-call
     # turn would replay as a blank assistant block.
@@ -3419,7 +2777,7 @@ module PikuriWebUI
       #   HistoryReplay.events(history).map(&:class)
       #   # => [Event::UserTurn, Event::ToolCall, Event::ToolResult, Event::Assistant]
       # 
-      # Dangling tool calls are repaired first, exactly as +Agent#load_history!+
+      # Dangling tool calls are repaired first, exactly as +Agent.new(history:)+
       # repairs them on the way into the chat — so the transcript shows the
       # +[Tool execution was interrupted]+ observation the model is now looking at,
       # rather than a call with nothing under it.
@@ -3432,7 +2790,7 @@ module PikuriWebUI
       #   HistoryReplay.events(history).map(&:class)
       #   # => [Event::UserTurn, Event::ToolCall, Event::ToolResult, Event::Assistant]
       # 
-      # Dangling tool calls are repaired first, exactly as +Agent#load_history!+
+      # Dangling tool calls are repaired first, exactly as +Agent.new(history:)+
       # repairs them on the way into the chat — so the transcript shows the
       # +[Tool execution was interrupted]+ observation the model is now looking at,
       # rather than a call with nothing under it.

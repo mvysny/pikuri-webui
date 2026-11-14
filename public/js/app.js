@@ -29,7 +29,6 @@ es.addEventListener('stream', (e) => transcript.stream(JSON.parse(e.data)));
 es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
 es.addEventListener('remove', (e) => transcript.remove(JSON.parse(e.data).id));
 es.addEventListener('status', (e) => statusbar.update(JSON.parse(e.data)));
-es.addEventListener('reset', () => transcript.reset());
 es.addEventListener('conversations', conversations.refresh);
 // An auto-reconnect may have missed frames; reload to re-snapshot from the
 // server-authoritative transcript.

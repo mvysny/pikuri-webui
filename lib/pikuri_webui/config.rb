@@ -152,7 +152,7 @@ module PikuriWebUI
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
   # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
-  # match +Tool::WebSearch.build+'s and {McpServer}'s match
+  # match +Pikuri::Web::Search.build+'s and {McpServer}'s match
   # +Mcp::Registry+'s entries, which keeps the bin's translation a
   # pass-through.
   #
@@ -192,8 +192,8 @@ module PikuriWebUI
     #     runs.
     # @!attribute [r] max_concurrent_requests
     #   @return [Integer, nil] ceiling on requests in flight against this
-    #     server, becoming a +Pikuri::Agent::ServerPermits+ limit, or +nil+ to
-    #     let pikuri's +/props+ probe size it from the box's own
+    #     server, becoming a +Pikuri::Conversations::Throttle+ limit, or +nil+ to
+    #     let pikuri-conversations' +/props+ probe size it from the box's own
     #     +total_slots+. 1 is the recommended value and the probe's answer is
     #     usually not — see +D_max_concurrent_requests+.
     Server = Data.define(:id, :url, :api_key, :max_concurrent_requests) do
@@ -234,7 +234,7 @@ module PikuriWebUI
     #     +"not-needed"+, fine for a local llama.cpp).
     # @!attribute [r] context_window
     #   @return [Integer, nil] explicit context-window cap for this
-    #     connection, or +nil+ to let pikuri auto-detect it (its llama.cpp
+    #     connection, or +nil+ to let pikuri-conversations learn it (its llama.cpp
     #     +/props+ probe, which yields +nil+ for a non-llama server). Set
     #     it for a cloud model the probe can't reach so the status bar
     #     shows a real +used/cap+. Rides the connection's

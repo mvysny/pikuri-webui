@@ -52,7 +52,7 @@ module PikuriWebUI
         #   form +meta.json+ stores and {ModelCatalog#resolve} matches on
         def server = transport.api_base
 
-        # @return [Integer, nil] explicit cap, or nil where pikuri's +/props+
+        # @return [Integer, nil] explicit cap, or nil where pikuri-conversations' +/props+
         #   probe decides
         def context_window = transport.context_window
       end
@@ -62,7 +62,7 @@ module PikuriWebUI
       # involved and two conversations on two servers coexist.
       #
       # Nothing here rations the server: how many requests may fly at one
-      # +api_base+ is +Pikuri::Agent::ServerPermits+' business, a registry keyed
+      # +api_base+ is +Pikuri::Conversations::Throttle+'s business, a registry keyed
       # on the server rather than on anything a transport carries
       # (+D_upstream_request_throttle+).
       #

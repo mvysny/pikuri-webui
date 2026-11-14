@@ -58,7 +58,7 @@ RSpec.describe PikuriWebUI::Web::SseListener do
       listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'look', attachments: [png]))
 
       html = transcript.to_a.fetch(0).html
-      url = "/c/c-1/attachments/#{png.stored_name}"
+      url = "/c/c-1/attachments/#{Pikuri::Conversations::HistoryFile.stored_name(png)}"
       link = %(<a href="#{url}" target="_blank" rel="noopener" title="a&quot;b.png">)
       img = %(<img src="#{url}" alt="a&quot;b.png" loading="lazy" decoding="async">)
       assert_equal %(look<div class="attachments">#{link}#{img}</a></div>), html
@@ -263,31 +263,6 @@ RSpec.describe PikuriWebUI::Web::SseListener do
         Pikuri::Agent::Event::SystemInjected.new(content: '<available_skills>…</available_skills>')
       )
       assert_empty transcript.to_a
-    end
-  end
-
-  context 'Reset' do
-    it 'empties the transcript and broadcasts one reset frame' do
-      listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi', mid_loop: false))
-      listener.on_event(Pikuri::Agent::Event::Assistant.new(content: 'hello'))
-      queue # subscribe after the conversation, before the reset
-
-      listener.on_event(Pikuri::Agent::Event::Reset.new)
-
-      assert_empty transcript.to_a
-      assert_equal %w[reset], event_types(drain_frames(queue))
-    end
-
-    it 'drops an open streaming handle instead of wiping its removed block' do
-      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'partial'))
-      listener.on_event(Pikuri::Agent::Event::Reset.new)
-      queue # subscribe after the reset
-
-      # A retained handle would make this delta rewrite a block nothing has.
-      listener.on_event(Pikuri::Agent::Event::AssistantDelta.new(content: 'fresh'))
-
-      assert_equal 1, transcript.to_a.size
-      assert_equal %w[block], event_types(drain_frames(queue))
     end
   end
 

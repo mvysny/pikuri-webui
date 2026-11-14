@@ -8,16 +8,16 @@ module PikuriWebUI
     # produced it, so a loaded conversation renders through the *same*
     # {Web::SseListener} as a live one:
     #
-    #   history = Pikuri::Agent::History.load(dir)
-    #   agent.load_history!(history)                      # Reset empties the transcript
+    #   history = store.history(entry)
     #   HistoryReplay.events(history).each { |e| listener.on_event(e) }
+    #   conversations.open(id: entry.id, transport:, listener:, history:)
     #
     # One renderer, one event→block-kind mapping, and old conversations get
     # today's Markdown renderer and today's CSS. A `History → blocks` builder
     # would be a second place block kinds are decided.
     #
-    # Part of the Pikuri seam: this file, {Web::SseListener} and {Agents::Runner} are the
-    # only lib/ files that know what a +Pikuri::Agent::Event+ is.
+    # Server-side of the pikuri seam (+D_pikuri_free_core+): it builds
+    # +Pikuri::Agent::Event+s and renders nothing.
     #
     # == What a reload cannot show
     #
@@ -35,8 +35,8 @@ module PikuriWebUI
     # +before_tool_call+ / +after_tool_result+ hooks fire per call, while the
     # history stores the whole assistant turn ahead of every +tool+ message).
     #
-    # +Tokens+ is deliberately not synthesized: +TokenLog+ is reseeded from
-    # +Event::HistoryLoaded+ by +Agent#load_history!+ itself, and a second source
+    # +Tokens+ is deliberately not synthesized: +TokenLog+ is reseeded from the
+    # +Event::HistoryLoaded+ +Agent.new(history:)+ emits, and a second source
     # would double-count. Empty thinking and empty assistant content are dropped,
     # matching the filters on pikuri's own emit path — otherwise a pure tool-call
     # turn would replay as a blank assistant block.
@@ -59,7 +59,7 @@ module PikuriWebUI
       #   HistoryReplay.events(history).map(&:class)
       #   # => [Event::UserTurn, Event::ToolCall, Event::ToolResult, Event::Assistant]
       #
-      # Dangling tool calls are repaired first, exactly as +Agent#load_history!+
+      # Dangling tool calls are repaired first, exactly as +Agent.new(history:)+
       # repairs them on the way into the chat — so the transcript shows the
       # +[Tool execution was interrupted]+ observation the model is now looking at,
       # rather than a call with nothing under it.

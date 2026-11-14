@@ -14,6 +14,7 @@ module PikuriWebUI
     #   PikuriWebUI::Web::App.set :broadcaster, broadcaster
     #   PikuriWebUI::Web::App.set :store,       store          # where images are written and served from
     #   PikuriWebUI::Web::App.set :models,      catalog.rows   # what /model lists
+    #   PikuriWebUI::Web::App.set :trifecta,    html           # the /trifecta dialog's body
     #
     # Every route body that touches server state is one {BigAppLock} task, so
     # what a route reads or mutates together cannot tear — the page snapshot is
@@ -21,13 +22,13 @@ module PikuriWebUI
     # and the SSE drain loop stay outside the domain.
     #
     # Every route names the conversation it acts on, and none of them refuse
-    # because *another* conversation is working: each has its own agent, and the
-    # shared executor queues a turn rather than rejecting it. Delete is the one
-    # exception, and it refuses only for the conversation actually in flight.
+    # because *another* conversation is working: each has its own agent and its
+    # own turns. Delete is the one exception, and it refuses only for the
+    # conversation actually in flight.
     #
-    # Pikuri-free by design (the seam rule): routes speak only ids, kinds,
-    # HTML strings and status hashes. Everything Pikuri-shaped sits behind
-    # Agents::Runner / SseListener.
+    # Pikuri-free by design (the seam rule): routes speak ids, kinds, HTML
+    # strings, status hashes and the store's saved-conversation envelope, read
+    # by field. Everything agent-shaped sits behind Agents::Runner / SseListener.
     #
     # Threading: +GET /events+ parks the serving thread in a queue-drain
     # loop for the lifetime of the EventSource connection — one server
@@ -55,6 +56,10 @@ module PikuriWebUI
       # sets it, which is also what keeps +/model+ out of a palette that could
       # not run it.
       set :models, []
+
+      # The rendered trifecta map ({TrifectaView}), one for the process since
+      # every agent has the one tool wiring. Empty until the host sets it.
+      set :trifecta, ''
 
       # The two themes style.css knows about. The `theme` cookie is
       # attacker-free (app.js is its only writer) but user-editable, so an
@@ -173,10 +178,7 @@ module PikuriWebUI
             conversations: conversation_rows(viewing: runner.conversation.id),
             conversation: runner.conversation.id,
             title: runner.conversation.title,
-            # Static for the life of the process — one conversation factory, one
-            # tool set — so the /trifecta dialog ships in the page rather than
-            # costing a route of its own.
-            trifecta: TrifectaView.render(runner.trifecta)
+            trifecta: settings.trifecta
           }
         end
         erb :index, locals: snapshot.merge(
@@ -238,15 +240,13 @@ module PikuriWebUI
       end
 
       # Submit user text to the conversation named by +conversation+ (the page
-      # renders its own id into the form). Agents::Runner decides start-vs-inject
-      # (Interloper); the browser needs no answer beyond "accepted" — rendering
-      # arrives over SSE.
+      # renders its own id into the form). The conversation decides
+      # start-vs-inject; the browser needs no answer beyond "accepted" —
+      # rendering arrives over SSE.
       #
-      # Never refused for being busy. A turn submitted when the executor's slots
-      # are all taken by other conversations is queued and reported as such,
-      # rather than rejected: that wait is the whole reason the executor is the
-      # admission gate. The only 4xx past a blank prompt is a conversation that
-      # has ceased to exist.
+      # Never refused for being busy: a turn waits for the server inside its
+      # requests, not here. The 4xx past a blank prompt are images a model is
+      # known not to see, and a conversation that has ceased to exist.
       #
       # Images come as multipart +attachments[]+ parts beside +prompt+, and a
       # message may be images alone. They are written into the conversation's
@@ -264,12 +264,17 @@ module PikuriWebUI
         outcome = settings.big_app_lock.run do
           settings.registry.open_id(params['conversation'].to_s)&.submit(prompt, uploads: uploads) || :discarded
         end
-        if outcome == :discarded
+        case outcome
+        when :discarded
           # A delete won the race since the stash: it may have put the folder
           # back, and a deleted conversation's pictures do not outlive it
           # (`D_delete_no_undo`).
           discard_stash(stashed) if stashed
           halt 404, 'no such conversation'
+        when :refused
+          # The stashed pictures stay: content-addressed and unreferenced, they
+          # are the orphans the store already accepts, and a resend reuses them.
+          halt 422, 'this model takes no image input'
         end
 
         status 204
@@ -308,9 +313,9 @@ module PikuriWebUI
         status 204
       end
 
-      # Gentle cancel of one conversation's turn: dropped before it starts if it
-      # is still queued, stopped at the next tool boundary if it is running.
-      # Idempotent; no-op when idle.
+      # Gentle cancel of one conversation's turn, at its next check — a tool
+      # boundary, or a wait for the server — or of its agent's boot. Idempotent;
+      # no-op when idle.
       post '/cancel' do
         settings.big_app_lock.run { open_conversation(params['conversation']).cancel }
         status 204
@@ -417,10 +422,10 @@ module PikuriWebUI
       #
       # @param id [String, nil] the conversation the message is for
       # @param uploads [Array<Conversations::Upload>]
-      # @return [Conversations::Store::Conversation] the one written to
+      # @return [Pikuri::Conversations::Store::Entry] the one written to
       def stash_uploads(id, uploads)
         conversation = settings.big_app_lock.run { open_conversation(id).conversation }
-        settings.store.stash(conversation, uploads)
+        settings.store.stash(conversation, uploads.map(&:to_attachment))
         conversation
       rescue SystemCallError => e
         PikuriWebUI.logger.error("stashing images for #{conversation&.id} failed (#{e.class}: #{e.message})")
@@ -431,7 +436,7 @@ module PikuriWebUI
       # before its message could land. Safe because the submit answered that it
       # no longer exists: nothing else will ever write that folder.
       #
-      # @param conversation [Conversations::Store::Conversation]
+      # @param conversation [Pikuri::Conversations::Store::Entry]
       # @return [void]
       def discard_stash(conversation)
         settings.store.delete(conversation)
@@ -511,8 +516,7 @@ module PikuriWebUI
       # The sidebar's model.
       #
       # +current+ is the row this tab has open (per tab, from the URL); +busy+ is
-      # whether that conversation has a turn in flight (server-wide, and true of
-      # as many rows as +--turns+ allows). They are independent: a turn running in
+      # whether that conversation has a turn in flight (server-wide). They are independent: a turn running in
       # a row you are not looking at is the point of the feature.
       #
       # @param viewing [String] id of the conversation this tab has open

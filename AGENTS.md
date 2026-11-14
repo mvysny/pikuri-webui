@@ -36,21 +36,21 @@ Every fact lives in exactly one of these; the others link to it.
 ## Invariants
 
 - **No `Pikuri::*` type reaches what the browser sees.** Translation happens at
-  {Web::SseListener}, {Agents::Runner}, {Conversations::HistoryReplay} and
-  {Conversations::Store#save}, and it is a rule about types, never a folder. See
+  {Web::SseListener}, {Agents::Runner} and {Conversations::HistoryReplay}; the store's `Entry`
+  crosses the rest read by field, never named. A rule about types, never a folder. See
   `D_pikuri_free_core`.
 - **Nothing under `agents/` or `conversations/` may name a constant under `web/`** — a
   component reaching down into a service is the sanctioned shape, the reverse is not. Checked
   by `spec/pikuri_webui/namespaces_spec.rb`. See `D_namespaces`.
 - **The transcript is server-authoritative** — {Web::Transcript} holds the rendered blocks;
   never introduce client-only conversation state. See `D_server_authoritative_transcript`.
-- **`GET /events` subscribes *before* it snapshots, and the snapshot is one frame** — never a
-  `reset` plus a `block` each, which blinks the tail. See `D_subscribe_then_snapshot`.
+- **`GET /events` subscribes *before* it snapshots, and the snapshot is one frame** — never an
+  emptied pane plus a `block` each, which blinks the tail. See `D_subscribe_then_snapshot`.
 - **A saved conversation is `history.json` (with pikuri's `attachments/`) plus our
   `meta.json`, and nothing else**; images reach the browser by URL, never inline. Blocks
   are re-derived by replaying synthesized events, never stored, so old conversations get
   today's renderer. See `D_replay_from_history`.
-- **The agent loop runs as a job on the shared executor, never on a request thread**, and
+- **The agent loop runs on pikuri-conversations' threads, never on a request thread**, and
   everything shared is touched only inside a {BigAppLock} task. See
   `D_worker_thread_agent_loop`, `D_global_monitor`.
 - **Tasks are rapid-fire** — no network, no waiting on another thread, no post-and-wait, disk
@@ -60,18 +60,18 @@ Every fact lives in exactly one of these; the others link to it.
 - **New shared state joins the domain, or states the reason for its own lock** the way
   {Web::Broadcaster} does — and never a per-session mechanism, because there are no sessions.
   See `D_no_event_queue`.
-- **Turns run on one shared *unbounded* executor, and its size is not a correctness device.**
-  Sending never refuses for load; never re-bound the pool to cap load, and never re-add
-  `--turns`. See `D_serial_turn_executor`.
-- **The server is rationed per *request*, by pikuri; a `[[server]]`'s
-  `max_concurrent_requests` sizes it** — never a throttle of ours, never a flag. See
-  `D_max_concurrent_requests`, `D_upstream_request_throttle`.
-- **Deleting a conversation is irreversible, and it stays deleted.** A delete mid-turn
-  *retires* the runner ({Agents::Runner#discard!}) before removing the folder, so nothing can
-  save the conversation back. See `D_delete_no_undo`.
-- **{Conversations::Store} has no lock and does not need one** — one writer per directory,
-  temp-file-and-rename, `#save` owns the whole commit; don't add a `Monitor` for safety. See
-  `D_no_store_lock`.
+- **Turns are unbounded — a thread each, the gem's — and no count of them is a load cap.**
+  Sending never refuses for load; never put a pool or a cap in front of `submit`, and never
+  re-add `--turns`. See `D_serial_turn_executor`.
+- **The server is rationed per *request*, by pikuri-conversations' `Throttle`; a
+  `[[server]]`'s `max_concurrent_requests` sizes it** — never a throttle of ours, never a
+  flag. See `D_max_concurrent_requests`, `D_upstream_request_throttle`.
+- **Deleting a conversation is irreversible, and it stays deleted.** A delete *retires* the
+  runner ({Agents::Runner#discard!} closes its live conversation, refused mid-turn) before
+  removing the folder, so nothing can save the conversation back. See `D_delete_no_undo`.
+- **The gem's `Store` gets no lock of ours** — one writer per directory (one agent per
+  conversation, saving between its turns), temp-file-and-rename, `#save` owns the whole
+  commit; don't wrap it in a `Monitor` for safety. See `D_no_store_lock`.
 - **One process per state root — and nothing enforces it, ever.** Last-writer-wins is
   accepted and the README warns; no `flock` is coming. See `D_no_multi_process_lock`.
 - **All state lives under `~/.local/state/pikuri/pikuri-web-chat/`**, derived once as
@@ -103,11 +103,12 @@ Every fact lives in exactly one of these; the others link to it.
   `D_slash_command_palette`.
 - **A streamed reply sends each finished block once** — `stream` diffs insert before the
   `<!--tail-->` marker and replace only after it; the bookend re-renders whole as a `block`,
-  dead after finalize; coalescing stays in pikuri at 15 fps. Store and broadcast stay one
-  task, or a diff lands twice. See `D_stream_blocks_once`.
+  dead after finalize; {Web::RateLimitedListener} coalesces at 15 fps. Store and broadcast
+  stay one task, or a diff lands twice. See `D_stream_blocks_once`.
 - **Mid-loop input goes through `Control::Interloper`, and the input stays enabled while
-  busy.** {Agents::Runner#submit} injects when busy and never refuses for it; the one
-  non-answer is a conversation deleted under it. See `D_interloper_mid_loop_input`.
+  busy.** The gem's `Conversation#submit` injects when busy and never refuses for it; the
+  non-answers are a conversation deleted under it and images a model states it cannot see.
+  See `D_interloper_mid_loop_input`.
 - **The chat script stays chat-only; new capability means a new sibling script** with its own
   tool set and its own trifecta report. See **A chat, not an agent with hands on your
   machine**, `D_chat_only_entry_point`.
@@ -153,18 +154,19 @@ Every fact lives in exactly one of these; the others link to it.
 - **An `[[llm]]`'s `params` reaches the server verbatim** — never a `thinking = false`
   boolean, whose wire spelling differs per provider *and* per chat template. See
   `D_llm_params_passthrough`.
-- **{Agents::Titler}'s word and character caps and its `</think>` strip are load-bearing**,
-  because a server may accept a parameter and ignore it; `thinking_tokens > 0` is diagnostic
-  only and never discards a title. See `D_canary_severity`.
+- **The titler's word and character caps and its `</think>` strip are load-bearing**, because
+  a server may accept a parameter and ignore it; `thinking_tokens > 0` is diagnostic only and
+  never discards a title. They live in pikuri-conversations' `Titler` now; `bin/probe-titler`
+  re-probes it. See `D_canary_severity`.
 - **`[model, api_base]` is not unique, and the first `[[llm]]` declared owns it** — the
   catalog folds over `choices.reverse`, and a "simplification" back to `to_h` reopens every
   saved conversation on the titler's connection. See `D_shadowed_identity_pair`.
 - **A conversation's model is `[model, server]` in `meta.json`**, minted onto the agent by
   the factory and written back at turn end from the agent's own transport; three readers that
   must not collapse. See `D_per_conversation_model`.
-- **A title comes from the opening message on the connection `[titler]` names, at most once
-  per runner** — no `[titler]` means no titling, never a fallback to the primary connection.
-  See `D_titler_connection`, `D_lazy_retro_titling`.
+- **A title comes from the opening message on the connection `[titler]` names, once the first
+  turn in this process has ended** — no `[titler]` means no titling, never a fallback to the
+  primary connection. See `D_titler_connection`, `D_lazy_retro_titling`.
 - **`--dev` is Sinatra's development mode, not code reloading** — the agent and its listener
   stack are wired once at boot. See `D_dev_flag_no_reload`.
 
@@ -183,8 +185,9 @@ file carries its own admission rule.
   meant to fail things.
 - `lib/pikuri_webui/{config,big_app_lock,version}.rb` — the root: {Config} (the whole shared
   TOML schema, Pikuri-free), {BigAppLock} (the serialization domain), `VERSION`.
-- `bin/pikuri-webui-chat` — boot: config, catalog, permit sizing, the one conversation factory,
-  the turn executor, the domain, the trifecta report, the gate, Puma and its shutdown hook.
+- `bin/pikuri-webui-chat` — boot: config, catalog, permit sizing, the tool wiring, the live
+  list, the one conversation factory, the domain, the trifecta report, the gate, Puma and its
+  shutdown hook.
 - `bin/probe-titler`, `bin/regen-icons` — maintainer tools, run by hand; each holds what it
   generates (the title corpus; the icon sizes and plate colour).
 - `views/index.erb`, `views/_sidebar.erb` — the page shell (both layouts, `#slash-menu`, the
@@ -233,17 +236,19 @@ file carries its own admission rule.
 - **rack-test arrives as host `example.org`** — without `set :environment, :test` Sinatra
   403s it, so a spec asserting *absence* passes vacuously against "Host not permitted";
   confirm a new probe's no-fix failure by stashing the fix.
-- **Every thread we spawn names itself** (`Thread.current.name`), and a per-job borrow like
-  the turn executor's names the thread for the job's duration.
-- **pikuri is pre-1.0 and this shell tracks its master**, so break freely in step with it:
-  migrate on pikuri's `CHANGELOG.md` `**Breaking:**` entries, with pikuri-tui's HEAD as the
-  worked example for anything ambiguous. A bump is `bundle update pikuri-core pikuri-pdf`
-  plus `rake check`, committed with its lock. See `D_git_dep_on_pikuri_master`.
+- **Every thread we spawn names itself** (`Thread.current.name`); the gem names its own
+  (`boot <id>`, `turn <id>`, `title <id>`, `close <id>`).
+- **pikuri and pikuri-workshop are pre-1.0 and this shell tracks both masters**, so break
+  freely in step with them: migrate on their `CHANGELOG.md` `**Breaking:**` entries, with
+  pikuri-tui's HEAD as the worked example for anything ambiguous. A bump is `bundle update
+  pikuri-core pikuri-pdf pikuri-web pikuri-conversations` plus `rake check`, committed with
+  its lock. See `D_git_dep_on_pikuri_master`.
 
 ## Commands
 
-pikuri comes from its Codeberg repo at the commit `Gemfile.lock` pins; no sibling checkout
-is needed. To edit both repos together, point Bundler's per-machine local override at one.
+pikuri comes from its Codeberg repo, and pikuri-conversations from pikuri-workshop's GitHub
+repo, at the commits `Gemfile.lock` pins; no sibling checkout is needed. To edit them
+together, point Bundler's per-machine local override at a checkout.
 
 - `bundle exec rake check` — the full check (the sord signatures, the spec suite, rubocop,
   the doc tripwires), the default task, the cross-repo standard entry point, and what
