@@ -1,6 +1,6 @@
 GIT
   remote: https://codeberg.org/mvysny/pikuri.git
-  revision: f4d0a6f239dfb8e9ef204b01c006568c4e1784d7
+  revision: a08b6253288389905a3da50903cb0f4be811df4f
   branch: master
   specs:
     pikuri-core (0.1.0)
@@ -8,6 +8,11 @@ GIT
       rainbow (~> 3.1)
       ruby_llm (~> 2.2)
       zeitwerk (~> 2.7)
+    pikuri-html (0.1.0)
+      nokogiri (~> 1.19)
+      pikuri-core (= 0.1.0)
+      reverse_markdown (~> 3.0)
+      ruby-readability (~> 0.7)
     pikuri-pdf (0.1.0)
       pdf-reader (~> 2.15)
       pikuri-core (= 0.1.0)
@@ -15,16 +20,15 @@ GIT
       faraday (~> 2.9)
       nokogiri (~> 1.19)
       pikuri-core (= 0.1.0)
+      pikuri-html (= 0.1.0)
       pikuri-workspace (= 0.1.0)
-      reverse_markdown (~> 3.0)
-      ruby-readability (~> 0.7)
     pikuri-workspace (0.1.0)
       pikuri-core (= 0.1.0)
       reline (~> 0.6)
 
 GIT
   remote: https://github.com/mvysny/pikuri-workshop.git
-  revision: 42baf35dc259b0b86eb76da8c77cbf0b1c6cb571
+  revision: 5ed741d25a60da9904d0bebd137f6bb1f3c44aeb
   branch: master
   specs:
     pikuri-conversations (0.1.0)
@@ -141,7 +145,7 @@ GEM
     regexp_parser (2.13.0)
     reline (0.7.0)
       io-console (~> 0.5)
-    reverse_markdown (3.0.2)
+    reverse_markdown (3.1.0)
       nokogiri
     rexml (3.4.4)
     rspec-core (3.13.6)
@@ -165,7 +169,7 @@ GEM
     ruby-readability (0.7.3)
       guess_html_encoding (>= 0.0.4)
       nokogiri (>= 1.6.0)
-    ruby_llm (2.2.1)
+    ruby_llm (2.2.2)
       base64
       faraday (>= 1.10.0, != 2.0.0)
       faraday-multipart (>= 1)
@@ -286,6 +290,7 @@ CHECKSUMS
   pdf-reader (2.16.0) sha256=bf1b5564c085264d8279bde3cf1467778b75841494d20c0fe7da3dad475f3732
   pikuri-conversations (0.1.0)
   pikuri-core (0.1.0)
+  pikuri-html (0.1.0)
   pikuri-pdf (0.1.0)
   pikuri-web (0.1.0)
   pikuri-workspace (0.1.0)
@@ -303,7 +308,7 @@ CHECKSUMS
   redcarpet (3.6.1) sha256=d444910e6aa55480c6bcdc0cdb057626e8a32c054c29e793fa642ba2f155f445
   regexp_parser (2.13.0) sha256=d105d95d2138954e73914d2fbfb3d0a8f8605a49a3e89864c32e78b9107cb770
   reline (0.7.0) sha256=5b012d8e55dbf9d450f12bde2cf7d15ff546ae80b3f8f3b30e570d431815583d
-  reverse_markdown (3.0.2) sha256=818ebb92ce39dbb1a291690dd1ec9a6d62530d4725296b17e9c8f668f9a5b8af
+  reverse_markdown (3.1.0) sha256=7fc569f3708a90ca3d6661e419d9d1233d57eef5a5b59eb1347c24e6a6b988a4
   rexml (3.4.4) sha256=19e0a2c3425dfbf2d4fc1189747bdb2f849b6c5e74180401b15734bc97b5d142
   rspec-core (3.13.6) sha256=a8823c6411667b60a8bca135364351dda34cd55e44ff94c4be4633b37d828b2d
   rspec-support (3.13.7) sha256=0640e5570872aafefd79867901deeeeb40b0c9875a36b983d85f54fb7381c47c
@@ -311,7 +316,7 @@ CHECKSUMS
   rubocop-ast (1.50.0) sha256=b9ca88300da0803ee222ad20cdb30494c0a784eed06fdc35d254b06d662788db
   ruby-progressbar (1.13.0) sha256=80fc9c47a9b640d6834e0dc7b3c94c9df37f08cb072b7761e4a71e22cff29b33
   ruby-readability (0.7.3) sha256=bd213fab037118cc15d999e167a8ea2cc6b689dc78c033e78fb36a2a37efc241
-  ruby_llm (2.2.1) sha256=a069cd339b517755ceb5abbf23ff66110c9badaee2eb48432836b53c5b0da18f
+  ruby_llm (2.2.2) sha256=e08da09150bc11e15b294a7628b8295e0813d7f611ca97f74dcb1286ba7cdc79
   schematist (1.1.0) sha256=905d8f0286830926e77e0d631bee325ee741c4b99640bc99735593b40ba73e7b
   sinatra (4.2.1) sha256=b7aeb9b11d046b552972ade834f1f9be98b185fa8444480688e3627625377080
   sorbet-runtime (0.6.13612) sha256=a2dbdac03698445fc4d5d0d172e505645c34fe21ad8ace910cf8832a6ee775f4

@@ -707,8 +707,8 @@ module PikuriWebUI
       # _@param_ `event`
       def on_event: (Data event) -> void
 
-      # _@return_ — short label used by +Pikuri::Agent#to_s+ when this
-      # listener is in its +ListenerList+.
+      # _@return_ — short label +Pikuri::Agent::ListenerList#to_s+ prints
+      # for this listener.
       def to_s: () -> String
 
       # Render an injected reference block as a one-line +notice+, collapsing

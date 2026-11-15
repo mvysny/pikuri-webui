@@ -1244,8 +1244,8 @@ eventually, so a reload would silently rewrite the transcript. The status bar
 carries the model instead, leaving `Web::SseListener`'s `ModelSwitched` arm silent.
 
 **Rejected: a synthetic bare turn to apply a pick early** — costs a round-trip
-and raises `EmptyTurnError` against a prompt-only conversation on a
-separate-system-field provider.
+and draws the provider's own 400 against a prompt-only conversation on a
+separate-system-field provider (Anthropic, Bedrock).
 
 **No `ModelSwitched` subscription.** The gem reports the landing as `ModelPending(nil)` at the
 turn's start, and the runner's status frame follows it; the agent's own `ModelSwitched` stays
@@ -2178,8 +2178,9 @@ disagree. The longer these files live, the worse frozen HTML gets.
 and replay it. It keeps the today's-renderer property, but it prices
 persistence on pikuri's *event set*: an `Event ↔ Hash` codec must cover
 every variant {Web::SseListener} matches on and stay in step as pikuri adds
-more — and pikuri adds them steadily (`Transient` and `HistoryLoaded`
-both landed in one unreleased cycle). `History` is the opposite: written
+more — and pikuri changes them steadily (`Transient` and `HistoryLoaded`
+both landed in one unreleased cycle, and `Transient` was gone again a few
+cycles later). `History` is the opposite: written
 down, `version:`-stamped, additive-only by decision, unknown keys
 ignored. Betting the format on the stable one is not close. Nothing here
 forecloses adding `log.jsonl` later if the losses below start to matter.
