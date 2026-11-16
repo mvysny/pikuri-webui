@@ -1205,7 +1205,7 @@ pikuri-tui's `Shared::Model::Choice.key` ported into `Agents::ModelCatalog`, inc
 its fall back to the raw model id for a transport from outside the catalog.
 
 *It lives in `meta.json`, written at turn end from the agent's own transport.*
-{Agents::Runner#persist} is the gem's `on_turn_end`, run on the turn's thread before the
+{Agents::Runner#save}, the conversation's `Saver`, runs on the turn's thread before the
 conversation goes idle; it reads the pair off `Conversation#status.model`, the transport the
 agent is on, rather than off a selection — so the envelope and `history.json`'s last `model_id`
 agree by construction.
@@ -2080,7 +2080,7 @@ deleting.
   closes for good in one critical section of the gem's. Either a submit starts
   the turn first and the delete is refused, or the close wins and every later
   submit answers `:discarded` (404 from the route); and once closing, the gem
-  never calls `on_turn_end`, so no save can follow. This is the *in-process* twin of the cross-process
+  never calls the `Saver`, so no save can follow. This is the *in-process* twin of the cross-process
   resurrection two bullets up, and unlike that one it was reachable by a
   single user with two tabs — which is why it is fixed rather than
   accepted.
@@ -2880,7 +2880,7 @@ The task inventory:
   instant), resolve + act is one step, and `/events`' subscribe +
   catch-up share a task.
 - **What pikuri-conversations reports from its threads becomes a task in the runner**: the
-  turn-end save ({Agents::Runner#persist}), a landed title, every status change. `run_loop`
+  turn-end save ({Agents::Runner#save}), a landed title, every status change. `run_loop`
   itself — LLM round-trips, tool execution — and the gem's own state machine run off-domain.
 - **{Web::SseListener} renders off-domain** (kramdown, escaping, the
   {Web::StreamingMessage} accumulation — the domain owns *mutation*, not
@@ -2926,7 +2926,7 @@ The rules a change must keep:
   is exactly this continuation style.
 - **The domain is the outermost lock.** A task may call into
   pikuri-conversations (`Conversation#submit`, `#status`, `#close`), whose lock is taken
-  inside ours; the gem never calls out — no listener, no `on_turn_end` — under its own lock,
+  inside ours; the gem never calls out — no listener, no `Saver` — under its own lock,
   and documents the order host → gem → `Interloper`. Consistent order, no ABBA —
   re-enumerate when a new upstream callback appears.
 

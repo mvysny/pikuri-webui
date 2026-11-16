@@ -1169,8 +1169,9 @@ module PikuriWebUI
   end
 
   # Running an LLM turn: this shell's side of one live conversation
-  # ({Runner}, over pikuri-conversations' +Conversation+), and the connections
-  # it can run on ({ModelCatalog}).
+  # ({Runner}, over pikuri-conversations' +Conversation+), the prompt and tools
+  # its agent is built with ({AgentWiring}), and the connections it can run on
+  # ({ModelCatalog}).
   # 
   # Nothing here knows a conversation is a folder on disk — that is
   # {Conversations} — and nothing here may name anything under {Web}; see that
@@ -1185,7 +1186,7 @@ module PikuriWebUI
     # the status bar. {Conversations::Registry} holds one per conversation
     # anyone has opened.
     # 
-    #   runner = Runner.new(conversation: entry, store:, ...).open(live, transport:)
+    #   runner = Runner.new(conversation: entry, store:, ...).open(live, transport:, wiring:)
     #   runner.submit('hello')          # => :started, or :injected while a turn runs
     #   runner.select_model('Remote')   # => :selected — the next turn's model
     #   runner.cancel
@@ -1198,8 +1199,8 @@ module PikuriWebUI
     # 
     # == Persistence
     # 
-    # {#persist} is the gem's +on_turn_end+, run on the turn's thread before the
-    # conversation goes idle — so "idle" means "saved". A process killed
+    # The runner is the conversation's +Saver+ too: the gem calls {#save} on the
+    # turn's thread before the conversation goes idle — so "idle" means "saved". A process killed
     # mid-turn loses that turn; accepted (single user, rare restarts).
     # 
     # == The title
@@ -1216,7 +1217,7 @@ module PikuriWebUI
     # == Threading
     # 
     # Guarded by {BigAppLock}: every public method but {#on_event} and
-    # {#persist} must run inside a task. Those two are called by the gem from
+    # {#save} must run inside a task. Those two are called by the gem from
     # its own threads — the turn's, the title's, or the request thread whose
     # task made the call that fired them — and open a task themselves when they
     # touch shared state.
@@ -1225,6 +1226,7 @@ module PikuriWebUI
     # (+Conversation#status+ takes the gem's lock), and the gem never calls out
     # under its own.
     class Runner < Pikuri::Agent::Listener::Base
+      include Pikuri::Conversations::Saver
       STATE_NAMES: ::Hash[Symbol, String]
 
       # _@param_ `conversation` — the one this runner is for
@@ -1269,7 +1271,9 @@ module PikuriWebUI
       # _@param_ `conversations` — the process's live list
       # 
       # _@param_ `transport` — the connection to start on
-      def open: (Pikuri::Conversations conversations, transport: Pikuri::Agent::ChatTransport) -> self
+      # 
+      # _@param_ `wiring` — the agent's prompt and tools
+      def open: (Pikuri::Conversations conversations, transport: Pikuri::Agent::ChatTransport, wiring: AgentWiring) -> self
 
       # Route one user message: start a turn, or inject into the running one.
       # Never refused for being busy.
@@ -1345,13 +1349,15 @@ module PikuriWebUI
       # _@param_ `event` — an agent or conversation event
       def on_event: (Data event) -> void
 
-      # Save the conversation as a turn left it — the gem's +on_turn_end+, on the
-      # turn's thread. A history with no messages gets no folder.
+      # Save the conversation as a turn left it, on the turn's thread. A history
+      # with no messages gets no folder.
       # 
       # Logged, not raised: a full disk must not take the conversation down.
       # 
+      # _@param_ `_conversation` — the live one this runner holds
+      # 
       # _@param_ `history`
-      def persist: (Pikuri::Agent::History history) -> void
+      def save: (Pikuri::Conversations::Conversation _conversation, Pikuri::Agent::History history) -> void
 
       def to_s: () -> String
 
@@ -1370,7 +1376,7 @@ module PikuriWebUI
       def same_connection?: (Pikuri::Agent::ChatTransport one, Pikuri::Agent::ChatTransport other) -> bool
 
       # Both halves of a rename in one task — the envelope on disk *and* the one
-      # held here, which the next {#persist} writes the title from.
+      # held here, which the next {#save} writes the title from.
       # 
       # _@param_ `title` — capped and sanitized by the gem's titler
       def land_title: (String title) -> void
@@ -1419,6 +1425,36 @@ module PikuriWebUI
 
       # _@return_ — this conversation's rendered blocks
       attr_reader transcript: Web::Transcript
+    end
+
+    # The one system prompt and tool set every conversation's agent is built
+    # with — what pikuri-conversations asks a conversation for when it boots.
+    # 
+    #   wiring = AgentWiring.new(system_prompt: prompt, tools: ->(c) { c.add_tool Pikuri::Tool::CALCULATOR })
+    #   runner.open(live, transport:, wiring:)
+    # 
+    # One instance per process: the boot-time trifecta report describes every
+    # agent only while they all share it.
+    # 
+    # Immutable.
+    class AgentWiring
+      include Pikuri::Conversations::AgentInitializer
+
+      # _@param_ `system_prompt` — without the date, which {#system_prompt} appends
+      # 
+      # _@param_ `tools` — +(configurator)+ — the +Agent.new+ block
+      def initialize: (system_prompt: String, tools: Proc) -> void
+
+      # Dated per agent built, not per process: a server left running past
+      # midnight would otherwise tell every new conversation yesterday's date.
+      # 
+      # _@param_ `_conversation`
+      def system_prompt: (Pikuri::Conversations::Conversation _conversation) -> String
+
+      # _@param_ `configurator`
+      # 
+      # _@param_ `_conversation`
+      def configure: (Pikuri::Agent::Configurator configurator, Pikuri::Conversations::Conversation _conversation) -> void
     end
 
     # The connections a conversation can be on — the +[[llm]]+ list turned into

@@ -2,8 +2,9 @@
 
 module PikuriWebUI
   # Running an LLM turn: this shell's side of one live conversation
-  # ({Runner}, over pikuri-conversations' +Conversation+), and the connections
-  # it can run on ({ModelCatalog}).
+  # ({Runner}, over pikuri-conversations' +Conversation+), the prompt and tools
+  # its agent is built with ({AgentWiring}), and the connections it can run on
+  # ({ModelCatalog}).
   #
   # Nothing here knows a conversation is a folder on disk — that is
   # {Conversations} — and nothing here may name anything under {Web}; see that

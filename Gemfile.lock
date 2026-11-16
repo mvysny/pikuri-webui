@@ -1,6 +1,6 @@
 GIT
   remote: https://codeberg.org/mvysny/pikuri.git
-  revision: a08b6253288389905a3da50903cb0f4be811df4f
+  revision: a676b5fdcd1ad9e2ec2795661aa9e95336192f99
   branch: master
   specs:
     pikuri-core (0.1.0)
@@ -28,7 +28,7 @@ GIT
 
 GIT
   remote: https://github.com/mvysny/pikuri-workshop.git
-  revision: 5ed741d25a60da9904d0bebd137f6bb1f3c44aeb
+  revision: 39952641dc9886f4a3a3613d502b3bd81d793ab1
   branch: master
   specs:
     pikuri-conversations (0.1.0)
@@ -66,7 +66,7 @@ GEM
     faraday-retry (2.4.0)
       faraday (~> 2.0)
     guess_html_encoding (0.0.11)
-    hashery (2.1.2)
+    hashery (2.2.0)
     highline (3.0.1)
     io-console (0.9.5)
     json (3.1.0)
@@ -260,7 +260,7 @@ CHECKSUMS
   faraday-net_http (3.5.0) sha256=2e7094c34e38754ee048cc3df47376f8657005d9375f8473bce1c3b526a22e36
   faraday-retry (2.4.0) sha256=7b79c48fb7e56526faf247b12d94a680071ff40c9fda7cf1ec1549439ad11ebe
   guess_html_encoding (0.0.11) sha256=cab6468b945f38673fc41ad147fbbc89693b3c6c34b03b071e2ed669a603e098
-  hashery (2.1.2) sha256=d239cc2310401903f6b79d458c2bbef5bf74c46f3f974ae9c1061fb74a404862
+  hashery (2.2.0) sha256=3f3dbea3b16ef4133dba8d0fdbd8bde3316a877940d93dbe0bd709d79a218ca9
   highline (3.0.1) sha256=ca18b218fd581b1fae832f89bfeaf2b34d3a93429c44fd4411042ffce286f009
   io-console (0.9.5) sha256=83dd9bbf4c4680416629245b39cd4212eb5f4d9a4ea91804870c1f6b846414d5
   json (3.1.0) sha256=3ce7ccf8fde58960177a3a756c31f292a4c1e1dedee884547096a5b0604e3bd8
