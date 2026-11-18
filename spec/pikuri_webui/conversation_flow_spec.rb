@@ -39,14 +39,14 @@ RSpec.describe 'conversations end to end' do
 
   # A live list as the boot script builds one.
   def live_list
-    Pikuri::Conversations.new(
-      system_prompt: 'test agent',
-      configure: lambda { |c, _conversation|
-        c.add_tool Pikuri::Tool::CALCULATOR
-        extensions.each { |extension| c.add_extension extension.class.new }
-      },
-      on_turn_end: ->(conversation, history) { conversation.listener.persist(history) }
-    ).tap { |list| lists << list }
+    Pikuri::Conversations.new.tap { |list| lists << list }
+  end
+
+  let(:wiring) do
+    PikuriWebUI::Agents::AgentWiring.new(system_prompt: 'test agent', tools: lambda { |c|
+      c.add_tool Pikuri::Tool::CALCULATOR
+      extensions.each { |extension| c.add_extension extension.class.new }
+    })
   end
 
   # Everything a conversation owns, wired as bin/pikuri-webui-chat wires it,
@@ -68,7 +68,7 @@ RSpec.describe 'conversations end to end' do
         transcript: transcript, listener: listener,
         agent_listeners: [Pikuri::Conversations::RateLimitedListener.new(listener, fps: 15), token_log],
         token_log: token_log, lock: lock
-      ).open(conversations, transport: transport)
+      ).open(conversations, transport: transport, wiring: wiring)
     end
   end
 

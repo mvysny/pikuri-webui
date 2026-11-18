@@ -11,7 +11,7 @@ module PikuriWebUI
     # the status bar. {Conversations::Registry} holds one per conversation
     # anyone has opened.
     #
-    #   runner = Runner.new(conversation: entry, store:, ...).open(live, transport:)
+    #   runner = Runner.new(conversation: entry, store:, ...).open(live, transport:, wiring:)
     #   runner.submit('hello')          # => :started, or :injected while a turn runs
     #   runner.select_model('Remote')   # => :selected — the next turn's model
     #   runner.cancel
@@ -24,8 +24,8 @@ module PikuriWebUI
     #
     # == Persistence
     #
-    # {#persist} is the gem's +on_turn_end+, run on the turn's thread before the
-    # conversation goes idle — so "idle" means "saved". A process killed
+    # The runner is the conversation's +Saver+ too: the gem calls {#save} on the
+    # turn's thread before the conversation goes idle — so "idle" means "saved". A process killed
     # mid-turn loses that turn; accepted (single user, rare restarts).
     #
     # == The title
@@ -42,7 +42,7 @@ module PikuriWebUI
     # == Threading
     #
     # Guarded by {BigAppLock}: every public method but {#on_event} and
-    # {#persist} must run inside a task. Those two are called by the gem from
+    # {#save} must run inside a task. Those two are called by the gem from
     # its own threads — the turn's, the title's, or the request thread whose
     # task made the call that fired them — and open a task themselves when they
     # touch shared state.
@@ -51,6 +51,8 @@ module PikuriWebUI
     # (+Conversation#status+ takes the gem's lock), and the gem never calls out
     # under its own.
     class Runner < Pikuri::Agent::Listener::Base
+      include Pikuri::Conversations::Saver
+
       # What the status bar's state segment says for each gem state.
       #
       # @return [Hash{Symbol => String}]
@@ -116,13 +118,14 @@ module PikuriWebUI
       #
       # @param conversations [Pikuri::Conversations] the process's live list
       # @param transport [Pikuri::Agent::ChatTransport] the connection to start on
+      # @param wiring [AgentWiring] the agent's prompt and tools
       # @return [self]
-      def open(conversations, transport:)
+      def open(conversations, transport:, wiring:)
         @lock.assert!
         history = stored_history
         Conversations::HistoryReplay.events(history).each { |event| @listener.on_event(event) } if history
-        @live = conversations.open(id: @conversation.id, transport: transport, listener: self, history: history,
-                                   untitled: @store.stamp_titled?(@conversation))
+        @live = conversations.open(id: @conversation.id, transport: transport, listener: self, initializer: wiring,
+                                   saver: self, history: history, untitled: @store.stamp_titled?(@conversation))
         broadcast_status
         self
       end
@@ -261,14 +264,16 @@ module PikuriWebUI
         end
       end
 
-      # Save the conversation as a turn left it — the gem's +on_turn_end+, on the
-      # turn's thread. A history with no messages gets no folder.
+      # Save the conversation as a turn left it, on the turn's thread. A history
+      # with no messages gets no folder.
       #
       # Logged, not raised: a full disk must not take the conversation down.
       #
+      # @param _conversation [Pikuri::Conversations::Conversation] the live one
+      #   this runner holds
       # @param history [Pikuri::Agent::History]
       # @return [void]
-      def persist(history)
+      def save(_conversation, history)
         @lock.run do
           next if @discarded || history.messages.empty?
 
@@ -323,7 +328,7 @@ module PikuriWebUI
       end
 
       # Both halves of a rename in one task — the envelope on disk *and* the one
-      # held here, which the next {#persist} writes the title from.
+      # held here, which the next {#save} writes the title from.
       #
       # @param title [String] capped and sanitized by the gem's titler
       # @return [void]

@@ -43,9 +43,9 @@ RSpec.describe PikuriWebUI::Agents::Runner do
 
   let(:titler) { nil }
   let(:live) do
-    Pikuri::Conversations.new(system_prompt: 'test agent', titler: titler,
-                              on_turn_end: ->(conversation, history) { conversation.listener.persist(history) })
+    Pikuri::Conversations.new(titler: titler)
   end
+  let(:wiring) { PikuriWebUI::Agents::AgentWiring.new(system_prompt: 'test agent', tools: ->(_c) {}) }
   after do
     gate.release!
     live.shutdown(timeout: 5)
@@ -61,7 +61,7 @@ RSpec.describe PikuriWebUI::Agents::Runner do
       described_class.new(conversation: entry, store: store, catalog: catalog, broadcaster: broadcaster,
                           transcript: transcript, listener: listener, agent_listeners: [listener, token_log],
                           token_log: token_log, missing_connection: missing, lock: lock)
-                     .open(live, transport: local)
+                     .open(live, transport: local, wiring: wiring)
     end
   end
   let(:runner) { guard(raw_runner, lock) }
@@ -163,7 +163,7 @@ RSpec.describe PikuriWebUI::Agents::Runner do
           described_class.new(conversation: entry, store: store, catalog: catalog, broadcaster: broadcaster,
                               transcript: transcript, listener: listener, agent_listeners: [limiter, token_log],
                               token_log: token_log, lock: lock)
-                         .open(live, transport: local)
+                         .open(live, transport: local, wiring: wiring)
         end
       end
 
@@ -304,10 +304,10 @@ RSpec.describe PikuriWebUI::Agents::Runner do
     end
   end
 
-  context '#persist' do
+  context '#save' do
     it 'gives a history with no messages no folder' do
       settle(runner, lock)
-      raw_runner.persist(Pikuri::Agent::History.new(messages: []))
+      raw_runner.save(nil, Pikuri::Agent::History.new(messages: []))
 
       refute entry.dir.exist?
     end

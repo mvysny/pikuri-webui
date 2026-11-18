@@ -61,11 +61,8 @@ gem 'kramdown-parser-gfm', '~> 1.1'
 # Web::StreamingMessage, so each is rendered and sent once and only the open
 # tail re-renders per delta (D_stream_blocks_once) — the library pikuri-tui's
 # streaming buffer runs on. Its options and Repair (em-dash table separators)
-# also run in Util::MarkdownRenderer, so both shells render a reply alike. Git
-# rather than a release: pre-1.0 and not on RubyGems, so Gemfile.lock pins the
-# commit and `bundle update streaming-markdown-parser` moves it.
-gem 'streaming-markdown-parser', git: 'https://github.com/mvysny/streaming-markdown-parser.git',
-                                 branch: 'master'
+# also run in Util::MarkdownRenderer, so both shells render a reply alike.
+gem 'streaming-markdown-parser', '~> 0.1'
 
 # TOML parser for the layered config file (PikuriWebUI::Config), which
 # shares its schema and its `~/.config/pikuri/config.toml` location with

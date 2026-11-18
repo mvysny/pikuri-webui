@@ -147,8 +147,8 @@ module PikuriWebUI
         end
       end
 
-      # @return [String] short label used by +Pikuri::Agent#to_s+ when this
-      #   listener is in its +ListenerList+.
+      # @return [String] short label +Pikuri::Agent::ListenerList#to_s+ prints
+      #   for this listener.
       def to_s = 'SseListener'
 
       private

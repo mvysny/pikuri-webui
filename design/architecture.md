@@ -12,9 +12,10 @@ content has crept in.
 
 - **`bin/pikuri-webui-chat` constructs everything once**, and hands it in: no globals, no
   service locator, nothing reloaded (`D_dev_flag_no_reload`).
-- **One tool wiring builds every agent** — the `configure` lambda the live list is given, the
-  same one the boot-time trifecta report is read off — so that report is true of every agent
-  in the process (**A chat, not an agent with hands on your machine**).
+- **One tool wiring builds every agent** — the {Agents::AgentWiring} every runner opens its
+  conversation with, whose `tools` lambda the boot-time trifecta report is read off too — so
+  that report is true of every agent in the process (**A chat, not an agent with hands on
+  your machine**).
 - **pikuri-conversations owns the agents and their threads**: `Pikuri::Conversations` (the
   live list) builds each agent, runs its turns on threads of its own, injects a mid-turn
   message, applies a model pick between turns, throttles requests per server and titles a
@@ -54,7 +55,7 @@ content has crept in.
    broadcasts a status frame from a task.
 4. `Web::SseListener` renders each agent event off-domain (kramdown, sanitizing) and enters a
    task per finished block: store in the {Web::Transcript} + broadcast, as one unit.
-5. The gem's `on_turn_end` is {Agents::Runner#persist}: a task that saves through the store,
+5. The runner is the conversation's `Saver`: {Agents::Runner#save} is a task that saves through the store,
    before the conversation goes idle — or restarts a bare turn for an injection that came
    too late. After the first turn of a stamp-titled conversation the gem's titler names it,
    and the runner lands the title (`D_lazy_retro_titling`).

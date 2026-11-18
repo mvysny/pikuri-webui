@@ -143,7 +143,6 @@ store = Pikuri::Conversations::Store.new(root: state_root / 'conversations', she
 # — the agent (same wiring as bin/pikuri-tui-chat) —
 
 system_prompt = Pikuri.prompts(:'pikuri-chat', :'agent-loop')
-system_prompt += "\n\nCurrent date: #{Time.now.strftime('%Y-%m-%d')}"
 
 # Every agent's tools. One wiring for every agent this process runs, which is
 # what keeps the boot-time trifecta report below true of all of them — a
@@ -164,18 +163,14 @@ tools = lambda do |c|
   c.add_tool Pikuri::Web::SCRAPE
   c.add_tool Pikuri::Web::FETCH
 end
+wiring = PikuriWebUI::Agents::AgentWiring.new(system_prompt: system_prompt, tools: tools)
 
 # The live conversations: an agent each, built and run on threads of the gem's
 # own — never on a Sinatra request thread — one thread per turn, unbounded.
 # Load is rationed per *request* by the gem's Throttle, never per turn
-# (`D_serial_turn_executor`). A conversation's listener is its Agents::Runner,
-# which saves the turn before the gem lets it go idle.
-live = Pikuri::Conversations.new(
-  system_prompt: system_prompt,
-  configure: ->(c, _conversation) { tools.call(c) },
-  on_turn_end: ->(conversation, history) { conversation.listener.persist(history) },
-  titler: titler
-)
+# (`D_serial_turn_executor`). A conversation's listener and saver is its
+# Agents::Runner, which saves the turn before the gem lets it go idle.
+live = Pikuri::Conversations.new(titler: titler)
 
 # The serialization domain (`D_global_monitor`): route bodies and the runners'
 # bookkeeping run as tasks on this one lock. Minted here and handed to
@@ -213,7 +208,7 @@ conversation_factory = lambda do |entry|
     token_log: token_log,
     missing_connection: missing,
     lock: big_app_lock
-  ).open(live, transport: choice.transport)
+  ).open(live, transport: choice.transport, wiring: wiring)
 end
 
 registry = PikuriWebUI::Conversations::Registry.new(store: store, factory: conversation_factory, lock: big_app_lock)
