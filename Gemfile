@@ -36,7 +36,7 @@ gem 'zeitwerk', '~> 2.7'
 # (PDF text for fetch) and pikuri-web (web_search, web_scrape, fetch, and the
 # HTML extractor that renders a fetched page as Markdown). One checkout, since
 # the sibling gemspecs pin `pikuri-core = <exact version>` in lockstep.
-git 'https://codeberg.org/mvysny/pikuri.git', branch: 'master' do
+git 'https://github.com/mvysny/pikuri.git', branch: 'master' do
   gem 'pikuri-core'
   gem 'pikuri-pdf'
   gem 'pikuri-web'

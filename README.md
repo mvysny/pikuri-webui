@@ -1,10 +1,10 @@
 # pikuri-webui
 
-[![status](https://ci.codeberg.org/api/badges/17299/status.svg)](https://ci.codeberg.org/repos/17299)
+[![CI](https://github.com/mvysny/pikuri-webui/actions/workflows/ci.yml/badge.svg)](https://github.com/mvysny/pikuri-webui/actions/workflows/ci.yml)
 
-Web front-end for [pikuri](https://codeberg.org/mvysny/pikuri) — a Ruby
+Web front-end for [pikuri](https://github.com/mvysny/pikuri) — a Ruby
 LLM agent framework. The browser sibling of
-[pikuri-tui](https://codeberg.org/mvysny/pikuri-tui): same agent, same
+[pikuri-tui](https://github.com/mvysny/pikuri-tui): same agent, same
 tools, rendered as a server-driven chat page instead of a terminal.
 
 Pikuri owns the agent loop, tool execution, and LLM transport. This
@@ -49,7 +49,7 @@ go *find* one.
 ## Install
 
 ```sh
-git clone https://codeberg.org/mvysny/pikuri-webui.git
+git clone https://github.com/mvysny/pikuri-webui.git
 cd pikuri-webui
 bundle install
 ```

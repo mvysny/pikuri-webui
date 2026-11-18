@@ -1,5 +1,13 @@
 GIT
-  remote: https://codeberg.org/mvysny/pikuri.git
+  remote: https://github.com/mvysny/pikuri-workshop.git
+  revision: 42baf35dc259b0b86eb76da8c77cbf0b1c6cb571
+  branch: master
+  specs:
+    pikuri-conversations (0.1.0)
+      pikuri-core (~> 0.1)
+
+GIT
+  remote: https://github.com/mvysny/pikuri.git
   revision: f4d0a6f239dfb8e9ef204b01c006568c4e1784d7
   branch: master
   specs:
@@ -21,14 +29,6 @@ GIT
     pikuri-workspace (0.1.0)
       pikuri-core (= 0.1.0)
       reline (~> 0.6)
-
-GIT
-  remote: https://github.com/mvysny/pikuri-workshop.git
-  revision: 42baf35dc259b0b86eb76da8c77cbf0b1c6cb571
-  branch: master
-  specs:
-    pikuri-conversations (0.1.0)
-      pikuri-core (~> 0.1)
 
 GIT
   remote: https://github.com/mvysny/streaming-markdown-parser.git

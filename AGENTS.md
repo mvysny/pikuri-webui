@@ -2,9 +2,9 @@
 
 ## What this is
 
-Web front-end for [pikuri](https://codeberg.org/mvysny/pikuri) — a Ruby
+Web front-end for [pikuri](https://github.com/mvysny/pikuri) — a Ruby
 LLM agent framework. The browser sibling of
-[pikuri-tui](https://codeberg.org/mvysny/pikuri-tui): same agent, same
+[pikuri-tui](https://github.com/mvysny/pikuri-tui): same agent, same
 tools, rendered as a server-driven chat page instead of a terminal.
 
 Pikuri owns the agent loop, tool execution, and LLM transport. This
@@ -246,13 +246,13 @@ file carries its own admission rule.
 
 ## Commands
 
-pikuri comes from its Codeberg repo, and pikuri-conversations from pikuri-workshop's GitHub
-repo, at the commits `Gemfile.lock` pins; no sibling checkout is needed. To edit them
+pikuri comes from its GitHub repo, and pikuri-conversations from pikuri-workshop's, at the
+commits `Gemfile.lock` pins; no sibling checkout is needed. To edit them
 together, point Bundler's per-machine local override at a checkout.
 
 - `bundle exec rake check` — the full check (the sord signatures, the spec suite, rubocop,
   the doc tripwires), the default task, the cross-repo standard entry point, and what
-  `.woodpecker.yml` runs.
+  `.github/workflows/ci.yml` runs.
 - `bundle exec rspec spec/pikuri_webui/web/app_spec.rb` — one file; `-e 'name'` for one example.
 - `bundle exec rake sig` — regenerate `sig/pikuri_webui.rbs` after a YARD change, and commit it;
   CI fails on a stale one.

@@ -643,8 +643,8 @@ each gate nothing the outer one doesn't, and are two sizings to keep in step.
 the workshop. It ran on pikuri 0.1.0 from RubyGems once, and later on a path dependency on a
 sibling `../pikuri` checkout.
 
-**Decision.** A `git … branch: 'master'` source for each: Codeberg's pikuri for `pikuri-core`,
-`pikuri-pdf` and `pikuri-web`, GitHub's pikuri-workshop for `pikuri-conversations`.
+**Decision.** A `git … branch: 'master'` source for each: pikuri's repo for `pikuri-core`,
+`pikuri-pdf` and `pikuri-web`, pikuri-workshop's for `pikuri-conversations`.
 `Gemfile.lock` pins one commit per repo, `bundle update pikuri-core pikuri-pdf pikuri-web
 pikuri-conversations` moves both, and `rake check` verifies. The workshop pins its own pikuri by
 commit, so ours stays at or past that one.

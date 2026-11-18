@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # The doc layer on its own: `rake check` runs it too, but behind a full
+  # bundle; the tripwires need only bash and git, so a doc failure reports in
+  # seconds instead of behind the build.
+  design-tripwires:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: design/verify_design_tripwires.sh
+
+  # `rake check` = the sord signatures, the spec suite, rubocop, the doc
+  # tripwires: the same command a contributor runs locally, so CI cannot drift
+  # from it. pikuri-core / pikuri-pdf come from pikuri's git repo at the commit
+  # Gemfile.lock pins, so bundler fetches them itself.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+      - run: bundle exec rake check
+      # `rake check` regenerated sig/ from the YARD tags; a diff means a commit
+      # changed a tag without running `rake sig`.
+      - name: Fail if sig/ is out of date
+        run: git diff --exit-code sig/
