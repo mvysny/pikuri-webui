@@ -94,6 +94,13 @@ group :development do
   gem 'rubocop', '~> 1.92', require: false
   gem 'sord', '~> 7.1', require: false
   gem 'yard', '~> 0.9.45'
+
+  # Not ours: prism comes in through rbs, rubocop-ast and minitest. Held
+  # below 2 because prism 2's bundled RBI stacks two `sig`s on one `def`
+  # (an overload), and parlour 9.1.2, which sord runs over every gem's
+  # rbi/, aborts on it ("node after a sig must be a method definition"),
+  # so `rake sig` dies. Drop the line once a parlour release parses it.
+  gem 'prism', '~> 1.9'
 end
 
 group :test do
