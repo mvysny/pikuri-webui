@@ -54,23 +54,25 @@ cd pikuri-webui
 bundle install
 ```
 
-pikuri itself, and pikuri-workshop's `pikuri-conversations`, are **git
-dependencies on their master branches**, not released gems — this shell
-uses one-agent-per-conversation surface no release carries yet.
-`bundle install` fetches both at the commits `Gemfile.lock` pins;
-`bundle update pikuri-core pikuri-pdf pikuri-web pikuri-conversations`
-moves to master's tip, and `bundle exec rake check` tells you whether it
-still fits.
+pikuri itself comes from RubyGems (0.2.x), and pikuri-workshop's
+`pikuri-conversations` is a **git dependency on its master branch**,
+since the workshop has no release yet. `bundle install` fetches both at
+what `Gemfile.lock` pins; `bundle update pikuri-core pikuri-pdf
+pikuri-web pikuri-conversations` moves to the newest pikuri patch release
+and the workshop's master tip, and `bundle exec rake check` tells you
+whether it still fits.
 
-Hacking on pikuri at the same time? Point Bundler at your own checkout
-(it must be on `master`):
+Hacking on pikuri-workshop at the same time? Point Bundler at your own
+checkout (it must be on `master`):
 
 ```sh
-bundle config set local.pikuri-core ../pikuri
-bundle config set local.pikuri-pdf ../pikuri
-bundle config set local.pikuri-web ../pikuri
 bundle config set local.pikuri-conversations ../pikuri-workshop
 ```
+
+Bundler's local override works on git sources only, so for pikuri
+itself, swap the three `pikuri-*` lines in the `Gemfile` for a
+`path '../pikuri' do … end` block while you hack, and put the Gemfile
+and its lock back before committing.
 
 ## Run
 

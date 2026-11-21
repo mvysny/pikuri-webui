@@ -636,22 +636,32 @@ each gate nothing the outer one doesn't, and are two sizings to keep in step.
   (`D_max_concurrent_requests`); everything else about a connection is still
   per entry.
 
-## D_git_dep_on_pikuri_master — Why git dependencies on pikuri's and pikuri-workshop's masters rather than released gems or sibling checkouts?
+## D_pikuri_gem_sources — Why pikuri's released gems from RubyGems, but pikuri-workshop's git master?
 
-**Context.** This shell tracks unreleased surface on both repos: one agent per conversation,
-`ChatTransport#params`, the tool display strings in pikuri; the whole of pikuri-conversations in
-the workshop. It ran on pikuri 0.1.0 from RubyGems once, and later on a path dependency on a
-sibling `../pikuri` checkout.
+**Context.** This shell tracks pikuri and pikuri-workshop closely, and both are pre-1.0. It ran
+on pikuri 0.1.0 from RubyGems first, then on a path dependency on a sibling `../pikuri`
+checkout, then on both repos' git masters while it needed surface no release carried: one agent
+per conversation, `ChatTransport#params`, the tool display strings in pikuri; the whole of
+pikuri-conversations in the workshop. pikuri 0.2.0 released its half on 2026-11-22; the
+workshop has no release yet.
 
-**Decision.** A `git … branch: 'master'` source for each: pikuri's repo for `pikuri-core`,
-`pikuri-pdf` and `pikuri-web`, pikuri-workshop's for `pikuri-conversations`.
-`Gemfile.lock` pins one commit per repo, `bundle update pikuri-core pikuri-pdf pikuri-web
-pikuri-conversations` moves both, and `rake check` verifies. The workshop pins its own pikuri by
-commit, so ours stays at or past that one.
+**Decision.** pikuri's `pikuri-core`, `pikuri-pdf` and `pikuri-web` from RubyGems at
+`~> 0.2.0`; pikuri-workshop's `pikuri-conversations` from a `git … branch: 'master'` source.
+The requirement admits patch releases only, because while pikuri is 0.x a minor release
+carries breaking changes, and it is the one the workshop's gemspecs state
+(`Pikuri::Workshop::PIKURI`): a workshop master that moves on to pikuri 0.3 fails to resolve
+here instead of calling into a pikuri that lacks what it needs. `Gemfile.lock` pins pikuri's
+versions and the workshop's commit, `bundle update pikuri-core pikuri-pdf pikuri-web
+pikuri-conversations` moves both, and `rake check` verifies.
 
-**Rejected: waiting for releases.** The honest version of "wait" is "block this change on a
-release cut to unblock it", between repos with one author. Master is what this shell validates
-against in any case.
+**Rejected: pikuri's git master, as before.** It bought surface ahead of a release, and now
+nothing this shell uses waits on one. The workshop builds against pikuri's releases, so a pikuri
+commit past one is a pikuri no workshop gem was tested with, and our pin had to be kept at or
+past the workshop's by hand. A released gem also locks with a checksum; a git commit does not.
+
+**Rejected: waiting for a workshop release.** The honest version of "wait" is "block this
+change on a release cut to unblock it", between repos with one author. Master is what this
+shell validates against in any case.
 
 **Rejected: path dependencies on `../pikuri` and `../pikuri-workshop`.** A clone could not
 build alone and CI had to clone the siblings itself. The lock pinned nothing, so whatever the
@@ -664,13 +674,18 @@ keep in step.
 **Consequences.**
 
 - **A bump is a commit of its own**, the lock diff included. Each repo's `CHANGELOG.md`
-  `**Breaking:**` entries carry the migration, and `rake check` is what says it is done.
-- **Editing the repos together** is Bundler's local override, per machine and never
-  committed: `bundle config set local.pikuri-core ../pikuri` (the same for `pikuri-pdf` and
-  `pikuri-web`), and `local.pikuri-conversations ../pikuri-workshop`. The checkouts must sit
-  on `master`, and the lock then follows their HEADs.
-- **Revisit at the next releases.** Nothing here argues against a pin in principle, so when
-  releases carry this surface, going back to pinned versions is a one-line change each.
+  `**Breaking:**` entries carry the migration, and `rake check` is what says it is done. A
+  pikuri minor release also edits the `~> 0.2.0` on the three Gemfile lines, and lands with the
+  workshop commit built against it.
+- **Editing the workshop alongside** is Bundler's local override, per machine and never
+  committed: `bundle config set local.pikuri-conversations ../pikuri-workshop`. The checkout
+  must sit on `master`, and the lock then follows its HEAD.
+- **Editing pikuri alongside** takes a Gemfile edit instead, because Bundler's local override
+  applies to git sources only: the three pikuri lines become one `path '../pikuri' do … end`
+  block, which takes pikuri-html and pikuri-workspace from the checkout too, and both the
+  Gemfile and the lock go back before a commit.
+- **Revisit at the workshop's first release.** Nothing here argues against a pin in principle,
+  so `pikuri-conversations` then goes to a version requirement too, a one-line change.
 
 ## D_both_forms_in_the_block — Why does a tool block carry the short line and the raw one both, with CSS picking?
 
@@ -2603,7 +2618,7 @@ it. The boundary itself is pikuri's decision, not ours.
 ## D_pikuri_free_core — Why may no `Pikuri::*` type reach what the browser sees?
 
 **Context.** This project tracks pikuri and pikuri-workshop closely
-(`D_git_dep_on_pikuri_master`), and both are pre-1.0, so their surface
+(`D_pikuri_gem_sources`), and both are pre-1.0, so their surface
 moves under this shell by design. What that costs depends
 entirely on *where* the types are: a pikuri type in the rendering path
 prices an upgrade at a sweep of every file the browser's state flows

@@ -238,17 +238,17 @@ file carries its own admission rule.
   confirm a new probe's no-fix failure by stashing the fix.
 - **Every thread we spawn names itself** (`Thread.current.name`); the gem names its own
   (`boot <id>`, `turn <id>`, `title <id>`, `close <id>`).
-- **pikuri and pikuri-workshop are pre-1.0 and this shell tracks both masters**, so break
-  freely in step with them: migrate on their `CHANGELOG.md` `**Breaking:**` entries, with
-  pikuri-tui's HEAD as the worked example for anything ambiguous. A bump is `bundle update
-  pikuri-core pikuri-pdf pikuri-web pikuri-conversations` plus `rake check`, committed with
-  its lock. See `D_git_dep_on_pikuri_master`.
+- **pikuri and pikuri-workshop are pre-1.0, and this shell tracks pikuri's releases and the
+  workshop's master**, so break freely in step with them: migrate on their `CHANGELOG.md`
+  `**Breaking:**` entries, with pikuri-tui's HEAD as the worked example for anything
+  ambiguous. A bump is `bundle update pikuri-core pikuri-pdf pikuri-web pikuri-conversations`
+  plus `rake check`, committed with its lock. See `D_pikuri_gem_sources`.
 
 ## Commands
 
-pikuri comes from its GitHub repo, and pikuri-conversations from pikuri-workshop's, at the
-commits `Gemfile.lock` pins; no sibling checkout is needed. To edit them
-together, point Bundler's per-machine local override at a checkout.
+pikuri comes from RubyGems, and pikuri-conversations from pikuri-workshop's GitHub repo, at
+what `Gemfile.lock` pins; no sibling checkout is needed. To edit them together, see
+`D_pikuri_gem_sources`.
 
 - `bundle exec rake check` — the full check (the sord signatures, the spec suite, rubocop,
   the doc tripwires), the default task, the cross-repo standard entry point, and what

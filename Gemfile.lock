@@ -1,38 +1,10 @@
 GIT
   remote: https://github.com/mvysny/pikuri-workshop.git
-  revision: 39952641dc9886f4a3a3613d502b3bd81d793ab1
+  revision: 35287e127d72747860b3121ff6a88b29f0bda740
   branch: master
   specs:
     pikuri-conversations (0.1.0)
-      pikuri-core (~> 0.1)
-
-GIT
-  remote: https://github.com/mvysny/pikuri.git
-  revision: a676b5fdcd1ad9e2ec2795661aa9e95336192f99
-  branch: master
-  specs:
-    pikuri-core (0.1.0)
-      faraday (~> 2.9)
-      rainbow (~> 3.1)
-      ruby_llm (~> 2.2)
-      zeitwerk (~> 2.7)
-    pikuri-html (0.1.0)
-      nokogiri (~> 1.19)
-      pikuri-core (= 0.1.0)
-      reverse_markdown (~> 3.0)
-      ruby-readability (~> 0.7)
-    pikuri-pdf (0.1.0)
-      pdf-reader (~> 2.15)
-      pikuri-core (= 0.1.0)
-    pikuri-web (0.1.0)
-      faraday (~> 2.9)
-      nokogiri (~> 1.19)
-      pikuri-core (= 0.1.0)
-      pikuri-html (= 0.1.0)
-      pikuri-workspace (= 0.1.0)
-    pikuri-workspace (0.1.0)
-      pikuri-core (= 0.1.0)
-      reline (~> 0.6)
+      pikuri-core (~> 0.2.0)
 
 GEM
   remote: https://rubygems.org/
@@ -110,6 +82,28 @@ GEM
       afm (>= 0.2.1, < 2)
       hashery (~> 2.0)
       ttfunk
+    pikuri-core (0.2.0)
+      faraday (~> 2.9)
+      rainbow (~> 3.1)
+      ruby_llm (~> 2.2)
+      zeitwerk (~> 2.7)
+    pikuri-html (0.2.0)
+      nokogiri (~> 1.19)
+      pikuri-core (= 0.2.0)
+      reverse_markdown (~> 3.0)
+      ruby-readability (~> 0.7)
+    pikuri-pdf (0.2.0)
+      pdf-reader (~> 2.15)
+      pikuri-core (= 0.2.0)
+    pikuri-web (0.2.0)
+      faraday (~> 2.9)
+      nokogiri (~> 1.19)
+      pikuri-core (= 0.2.0)
+      pikuri-html (= 0.2.0)
+      pikuri-workspace (= 0.2.0)
+    pikuri-workspace (0.2.0)
+      pikuri-core (= 0.2.0)
+      reline (~> 0.6)
     prism (1.9.0)
     puma (8.0.2)
       nio4r (~> 2.0)
@@ -220,9 +214,9 @@ DEPENDENCIES
   kramdown-parser-gfm (~> 1.1)
   minitest (~> 6.0)
   pikuri-conversations!
-  pikuri-core!
-  pikuri-pdf!
-  pikuri-web!
+  pikuri-core (~> 0.2.0)
+  pikuri-pdf (~> 0.2.0)
+  pikuri-web (~> 0.2.0)
   puma (~> 8.0)
   rack-test (~> 2.1)
   rackup (~> 2.2)
@@ -283,11 +277,11 @@ CHECKSUMS
   parser (3.3.13.0) sha256=e02f9b63c2fe05b0c68f692ba4df89b3cb113b663964f75d988fbebfd6c3deca
   pdf-reader (2.16.0) sha256=bf1b5564c085264d8279bde3cf1467778b75841494d20c0fe7da3dad475f3732
   pikuri-conversations (0.1.0)
-  pikuri-core (0.1.0)
-  pikuri-html (0.1.0)
-  pikuri-pdf (0.1.0)
-  pikuri-web (0.1.0)
-  pikuri-workspace (0.1.0)
+  pikuri-core (0.2.0) sha256=65678eaacaa747b6c17b61adfa444730a4d75fcfc0620942f5e872f31cf7d8ba
+  pikuri-html (0.2.0) sha256=8364363a7b94d56e83c7578220e2d6e4fd160a2be1af69696e26d3542e19a936
+  pikuri-pdf (0.2.0) sha256=e3aab814b1de874e8b750c82d1cf936beaba7ae3148027fa51d5b3f0370ac400
+  pikuri-web (0.2.0) sha256=68c43227040cdd43304244e6c20973a99322b537d28b603f59e8c4570eaf408c
+  pikuri-workspace (0.2.0) sha256=37040203245398900648adc8ddf0da6ec5d021816c8f0821e587fc759c538c26
   prism (1.9.0) sha256=7b530c6a9f92c24300014919c9dcbc055bf4cdf51ec30aed099b06cd6674ef85
   puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb
   racc (1.8.1) sha256=4a7f6929691dbec8b5209a0b373bc2614882b55fc5d2e447a21aaa691303d62f

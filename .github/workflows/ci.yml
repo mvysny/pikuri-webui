@@ -17,8 +17,9 @@ jobs:
 
   # `rake check` = the sord signatures, the spec suite, rubocop, the doc
   # tripwires: the same command a contributor runs locally, so CI cannot drift
-  # from it. pikuri-core / pikuri-pdf come from pikuri's git repo at the commit
-  # Gemfile.lock pins, so bundler fetches them itself.
+  # from it. pikuri's gems come from RubyGems and pikuri-conversations from
+  # pikuri-workshop's git repo, at what Gemfile.lock pins, so bundler fetches
+  # them itself.
   check:
     runs-on: ubuntu-latest
     steps:

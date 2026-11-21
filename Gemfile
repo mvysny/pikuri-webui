@@ -23,29 +23,27 @@ gem 'rackup', '~> 2.2'
 # its path without per-file require_relative ceremony.
 gem 'zeitwerk', '~> 2.7'
 
-# The pikuri gems come from two repos, both on their git master rather than a
-# release, because this shell tracks unreleased surface — one agent per
-# conversation, `ChatTransport#params` (`D_llm_params_passthrough`), the tool
-# display strings the transcript's tool lines render. Gemfile.lock pins one
-# commit per repo; `bundle update pikuri-core pikuri-pdf pikuri-web
-# pikuri-conversations` moves both (`D_git_dep_on_pikuri_master`). The
-# workshop pins its own pikuri by commit: keep ours at or past it, or a
-# workshop gem may call into a pikuri that lacks what it needs.
+# The pikuri gems come from two repos: pikuri's released gems from RubyGems,
+# and pikuri-workshop's git master, which has no release yet
+# (`D_pikuri_gem_sources`). `bundle update pikuri-core pikuri-pdf pikuri-web
+# pikuri-conversations` moves both.
 #
 # pikuri itself: pikuri-core (Agent, Tool, prompts, listeners), pikuri-pdf
-# (PDF text for fetch) and pikuri-web (web_search, web_scrape, fetch, and the
-# HTML extractor that renders a fetched page as Markdown). One checkout, since
-# the sibling gemspecs pin `pikuri-core = <exact version>` in lockstep.
-git 'https://github.com/mvysny/pikuri.git', branch: 'master' do
-  gem 'pikuri-core'
-  gem 'pikuri-pdf'
-  gem 'pikuri-web'
-end
+# (PDF text for fetch) and pikuri-web (web_search, web_scrape, fetch, and,
+# through pikuri-html, the extractor that renders a fetched page as Markdown).
+# `~> 0.2.0` admits patch releases only, since while pikuri is 0.x a minor
+# release carries breaking changes; it is the requirement the workshop's
+# gemspecs state, so a workshop that moves on to pikuri 0.3 fails to resolve
+# here rather than calling into a pikuri that lacks what it needs.
+gem 'pikuri-core', '~> 0.2.0'
+gem 'pikuri-pdf', '~> 0.2.0'
+gem 'pikuri-web', '~> 0.2.0'
 
 # pikuri-workshop's pikuri-conversations: the live conversations (an agent
 # each, turns on threads of their own, mid-turn messages, cancel, the model
 # switch), the per-server request throttle and /props probe, the titler, and
 # the folder of saved conversations. What this shell used to build itself.
+# Gemfile.lock pins the commit.
 gem 'pikuri-conversations', git: 'https://github.com/mvysny/pikuri-workshop.git', branch: 'master'
 
 # Server-side Markdown → HTML for assistant/thinking content. The web
