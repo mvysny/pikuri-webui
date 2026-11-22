@@ -114,11 +114,11 @@ Every fact lives in exactly one of these; the others link to it.
   machine**, `D_chat_only_entry_point`.
 - **The boot script is wiring, not logic.** A tool added there breaks the chat-only promise;
   behaviour added there is a class that should have owned it.
-- **Flags are only what the config file has no home for.** `--turns`, `--server`, `--model`
-  and `--api-key-env` were removed deliberately and `--password` was refused outright;
+- **Flags are only what the config file has no home for.** `--turns`, `--server`, `--model`,
+  `--api-key-env`, `--port` and `--bind` were removed deliberately and `--password` was refused outright;
   re-adding one reopens a precedence rule or puts a secret in `ps`.
 - **A conversation owns its agent; a tab owns which one it views** — no sessions, no
-  accounts, single-user for good, and `--bind` defaults to 127.0.0.1. See
+  accounts, single-user for good, and `[web] bind` defaults to 127.0.0.1. See
   `D_conversation_owns_agent`, `D_single_shared_conversation`.
 - **One `[web]` password gates the port as middleware around everything**, and it is a gate,
   not accounts — no `[web]` pair means no middleware at all; never a `--password` flag
@@ -261,8 +261,8 @@ what `Gemfile.lock` pins; no sibling checkout is needed. To edit them together, 
   CI fails on a stale one.
 - `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`),
   also a CI job of its own.
-- `bin/pikuri-webui-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on
-  <http://localhost:4567>; needs `~/.config/pikuri-webui/config.toml` with at least one `[[llm]]`.
+- `bin/pikuri-webui-chat [--dev]` — the shell itself, on <http://localhost:4567> (`[web] bind` /
+  `port` move it); needs `~/.config/pikuri-webui/config.toml` with at least one `[[llm]]`.
 
 ## Skills this project follows
 

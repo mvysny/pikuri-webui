@@ -100,12 +100,14 @@ bin/pikuri-webui-chat
 and open <http://localhost:4567>. Boot without that file and it exits
 printing the block above plus the path to write it to — there are no
 `--server` / `--model` flags, because a connection lives in the file and
-nowhere else (see [Configure](#configure)). `--port` and `--bind` are this
-shell's own — `--bind` off its loopback default wants a password with it,
-see [Locking the port](#locking-the-port):
+nowhere else (see [Configure](#configure)). Where it listens lives in that
+file too. It stays on this machine unless you say otherwise, and a `bind`
+off loopback wants a password with it — see [Locking the port](#locking-the-port):
 
-```sh
-bin/pikuri-webui-chat --port 9292
+```toml
+[web]
+port = 9292          # omit for 4567
+bind = "127.0.0.1"   # the default: this machine only
 ```
 
 Ctrl+C stops it. Open browser tabs don't delay the exit.
@@ -619,6 +621,7 @@ it can read, write and delete every conversation. So gate it:
 
 ```toml
 [web]
+bind     = "0.0.0.0"   # every interface, or name one: "192.168.1.20"
 user     = "mavi"
 password = "a long passphrase"
 ```
@@ -671,7 +674,7 @@ there:
 tailscale serve --bg --set-path /pikuri-webui http://127.0.0.1:4567/pikuri-webui
 ```
 
-That keeps `--bind` on loopback, since Tailscale connects from the same
+That keeps `bind` at its loopback default, since Tailscale connects from the same
 machine. Anyone on your tailnet can reach the URL, though, so a `[web]`
 password still makes sense. Tailscale gives you HTTPS, so the password
 does not cross the network in the clear.

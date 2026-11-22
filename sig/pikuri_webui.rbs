@@ -1631,6 +1631,7 @@ module PikuriWebUI
   #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
   #   config.base_path     # => "/pikuri-webui", or "" at the root
+  #   config.bind          # => "127.0.0.1" — config.port # => 4567
   # 
   # The file carries what this shell reads and nothing else, strict
   # throughout: an unknown key anywhere raises. pikuri-tui keeps its own file
@@ -1708,16 +1709,21 @@ module PikuriWebUI
   # == The +[web]+ table
   # 
   #   [web]
+  #   bind      = "0.0.0.0"         # every interface; omit for 127.0.0.1
+  #   port      = 9292              # omit for 4567
   #   base_path = "/pikuri-webui"   # served at https://host/pikuri-webui/
   #   user      = "mavi"            # these two together, or neither
   #   password  = "a long passphrase"
   # 
-  # How the port faces the network; every key is optional. +base_path+
-  # becomes {#base_path}, the path every URL the shell serves sits under
-  # (+D_base_path_mount+). +user+ and +password+ become {#credentials}, the
-  # one pair gating the port — none of them leaves it +nil+, which is no gate
-  # at all rather than a default password, and one pair for everyone rather
-  # than accounts (+D_one_password_gate+).
+  # How the port faces the network; every key is optional. +bind+ and +port+
+  # are where Puma listens — loopback unless the file says otherwise, and
+  # never a flag, which would be a second source for the same setting
+  # (+D_own_config_file+). +base_path+ becomes {#base_path}, the path every
+  # URL the shell serves sits under (+D_base_path_mount+). +user+ and
+  # +password+ become {#credentials}, the one pair gating the port — none of
+  # them leaves it +nil+, which is no gate at all rather than a default
+  # password, and one pair for everyone rather than accounts
+  # (+D_one_password_gate+).
   # 
   # == Precedence
   # 
@@ -1758,7 +1764,7 @@ module PikuriWebUI
   # only what no limit can say, "both or neither" and the like. {.load} then
   # resolves the file's shape into the values the app reads: each {LlmTable}
   # with its {Server} looked up becomes an {Llm}, and the {WebTable} splits
-  # into {#base_path} and {#credentials}. {Server} and {Search} already match
+  # into {#bind}, {#port}, {#base_path} and {#credentials}. {Server} and {Search} already match
   # the file and pass through.
   # 
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
@@ -1772,6 +1778,8 @@ module PikuriWebUI
     DEFAULT_SHOW_THINKING: bool
     DEFAULT_TOOL_LINES: Symbol
     TOOL_LINES: ::Array[String]
+    DEFAULT_BIND: String
+    DEFAULT_PORT: Integer
     SEGMENT: Regexp
     EXAMPLE_CONFIG: String
     FILENAME: String
@@ -1803,6 +1811,10 @@ module PikuriWebUI
     # 
     # _@param_ `credentials` — the +[web]+ pair gating the app, or +nil+ for no gate. Defaults to +nil+, as a file with no pair does.
     # 
+    # _@param_ `bind` — see {#bind}
+    # 
+    # _@param_ `port` — see {#port}
+    # 
     # _@param_ `base_path` — see {#base_path}; +""+ for the root.
     def initialize: (
                       llms: ::Array[Llm],
@@ -1810,6 +1822,8 @@ module PikuriWebUI
                       ?servers: ::Array[Server],
                       ?titler_llm: Llm?,
                       ?credentials: Credentials?,
+                      ?bind: String,
+                      ?port: Integer,
                       ?base_path: String,
                       ?show_thinking: bool,
                       ?tool_lines: Symbol
@@ -1958,6 +1972,14 @@ module PikuriWebUI
     # +nil+ when the file names none — which switches the gate off rather
     # than inventing a default password.
     attr_reader credentials: Credentials?
+
+    # _@return_ — the address Puma listens on (+[web] bind+), +"127.0.0.1"+
+    # by default — a host name, an IPv4 or an IPv6 address, +"0.0.0.0"+ for
+    # every interface.
+    attr_reader bind: String
+
+    # _@return_ — the TCP port Puma listens on (+[web] port+), 4567 by default.
+    attr_reader port: Integer
 
     # _@return_ — the path the shell is served under, +"/pikuri-webui"+ —
     # never a trailing slash — or +""+ when it sits at the root.
@@ -2264,8 +2286,12 @@ module PikuriWebUI
     end
 
     # The +[web]+ table as the file writes it; {.load} splits it into
-    # {Config#base_path} and {Config#credentials}.
+    # {Config#bind}, {Config#port}, {Config#base_path} and {Config#credentials}.
     # 
+    # @!attribute [r] bind
+    #   @return [String] see {Config#bind}; non-blank
+    # @!attribute [r] port
+    #   @return [Integer] see {Config#port}; 1 to 65535
     # @!attribute [r] base_path
     #   @return [String, nil] see {Config#base_path}; as written, a trailing
     #     +/+ included
@@ -2276,18 +2302,34 @@ module PikuriWebUI
     class WebTable < Data
       extend Typemap::Constrain
 
+      # _@param_ `bind` — see {#bind}
+      # 
+      # _@param_ `port` — see {#port}
+      # 
       # _@param_ `base_path` — see {#base_path}
       # 
       # _@param_ `user` — see {#user}
       # 
       # _@param_ `password` — see {#password}
-      def initialize: (?base_path: String?, ?user: String?, ?password: String?) -> void
+      def initialize: (
+                        ?bind: String,
+                        ?port: Integer,
+                        ?base_path: String?,
+                        ?user: String?,
+                        ?password: String?
+                      ) -> void
 
       # A half-written pair raises rather than gating nothing in silence.
       # +base_path+ lands in a cookie's +Path+ and in every URL the page
       # builds, so it takes unreserved characters only, with no +.+ or +..+
       # segment and no empty one.
       def validate: () -> void
+
+      # _@return_ — see {Config#bind}; non-blank
+      attr_reader bind: String
+
+      # _@return_ — see {Config#port}; 1 to 65535
+      attr_reader port: Integer
 
       # _@return_ — see {Config#base_path}; as written, a trailing
       # +/+ included

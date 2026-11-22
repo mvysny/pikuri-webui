@@ -332,6 +332,35 @@ describe PikuriWebUI::Config do
       assert_equal 'a long passphrase', c.credentials.password
     end
 
+    it 'listens on loopback, port 4567, when the file says nothing' do
+      c = load_bare
+      assert_equal '127.0.0.1', c.bind
+      assert_equal 4567, c.port
+    end
+
+    it 'reads the address and port a file states' do
+      c = load_with("[web]\nbind = \"0.0.0.0\"\nport = 9292\n")
+      assert_equal '0.0.0.0', c.bind
+      assert_equal 9292, c.port
+    end
+
+    it 'rejects a port outside 1..65535' do
+      [0, 65_536].each do |port|
+        e = assert_raises(described_class::Error, port.to_s) { load_with("[web]\nport = #{port}\n") }
+        assert_includes e.message, "web.port: must be 1 to 65535, got #{port}"
+      end
+    end
+
+    it 'rejects a port written as a string' do
+      e = assert_raises(described_class::Error) { load_with("[web]\nport = \"9292\"\n") }
+      assert_includes e.message, 'web.port: expected Integer'
+    end
+
+    it 'rejects a blank bind' do
+      e = assert_raises(described_class::Error) { load_with("[web]\nbind = \"\"\n") }
+      assert_includes e.message, 'web.bind: must not be blank'
+    end
+
     it 'leaves credentials nil when [web] names no pair — the gate off, never a default password' do
       c = load_with("[web]\nbase_path = \"/pikuri-webui\"\n")
       assert_nil c.credentials

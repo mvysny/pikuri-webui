@@ -36,23 +36,19 @@ require 'pikuri-pdf'
 require 'pikuri-web'
 require 'pikuri_webui'
 
-# Every flag here is one the config file has no home for. Which model a
-# conversation talks to is deliberately *not* among them: connections come
-# from [[llm]] in config.toml and from nowhere else, and which one a given
-# conversation is on is that conversation's own saved state
+# Every flag here is one the config file has no home for — which leaves how
+# this one run is launched. Where it listens and which model a conversation
+# talks to are the file's ([web] and [[llm]]) and nowhere else's
 # (`D_own_config_file`).
-port = 4567
-bind = '127.0.0.1'
 dev = false
 
 parser = OptionParser.new do |opts|
   opts.banner = 'Usage: pikuri-webui-chat [options]'
   opts.separator ''
+  opts.separator 'Address and port: [web] bind / port in ~/.config/pikuri-webui/config.toml ' \
+                 "(default #{PikuriWebUI::Config::DEFAULT_BIND}:#{PikuriWebUI::Config::DEFAULT_PORT})."
+  opts.separator ''
   opts.separator 'Options:'
-  opts.on('--port PORT', Integer, "HTTP port to listen on (default: #{port})") { |v| port = v }
-  opts.on('--bind ADDR', "Address to bind (default: #{bind}; off loopback, gate it with [web] in config.toml)") do |v|
-    bind = v
-  end
   opts.on('--dev', 'Development mode: re-read views/*.erb per request, exception pages in the browser') { dev = true }
   opts.on('-h', '--help', 'Print this help and exit') do
     puts opts
@@ -263,10 +259,10 @@ PikuriWebUI::Web::App.set :tool_lines, config.tool_lines
 # fresh process — see README, "Develop".
 PikuriWebUI::Web::App.set :environment, dev ? :development : :production
 PikuriWebUI::Web::App.set :show_exceptions, dev
-PikuriWebUI::Web::App.set :bind, bind
-PikuriWebUI::Web::App.set :port, port
+PikuriWebUI::Web::App.set :bind, config.bind
+PikuriWebUI::Web::App.set :port, config.port
 
-# No [web] table means no middleware rather than a default password, so a bind
+# No [web] pair means no middleware rather than a default password, so a bind
 # off loopback is the one case where nobody at all is asked who they are —
 # hence the warning, which is advice and not a refusal: a reverse proxy doing
 # this job in front of us is a legitimate deployment (`D_one_password_gate`).
@@ -286,13 +282,14 @@ PikuriWebUI::Web::App.use PikuriWebUI::Web::Mount, config.base_path unless confi
 
 if config.credentials
   PikuriWebUI::Web::App.use PikuriWebUI::Web::Gate, config.credentials
-elsif !loopback.call(bind)
+elsif !loopback.call(config.bind)
   gate_warning = <<~WARNING
-    ⚠ WARNING: --bind #{bind} reaches past this machine and no password is set.
-      Anyone who can reach #{bind}:#{port} can read, write and delete every
-      conversation. Put a gate in ~/.config/pikuri-webui/config.toml:
+    ⚠ WARNING: [web] bind = #{config.bind.inspect} reaches past this machine and no password is set.
+      Anyone who can reach #{config.bind}:#{config.port} can read, write and delete every
+      conversation. Put a gate beside it in ~/.config/pikuri-webui/config.toml:
 
           [web]
+          bind     = #{config.bind.inspect}
           user     = "you"
           password = "a long passphrase"
 
@@ -342,7 +339,7 @@ PikuriWebUI::Web::App.set :server, :puma
 
 PikuriWebUI::Web::App.run! do
   primary = catalog.primary
-  puts "pikuri-webui listening on http://#{bind}:#{port}#{config.base_path}/ " \
+  puts "pikuri-webui listening on http://#{config.bind}:#{config.port}#{config.base_path}/ " \
        "(default connection: #{primary.model} @ #{primary.server}; #{catalog.choices.size} configured)"
   warn gate_warning if gate_warning
 end

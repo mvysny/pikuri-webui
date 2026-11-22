@@ -118,7 +118,7 @@ spares the prompt is `D_gate_cookie`.
 
 **Context.** Reaching the page from a phone means binding off loopback,
 and off loopback the port is the whole app: read, write and delete every
-conversation, plus an agent with egress. `--bind` documented that as the
+conversation, plus an agent with egress. The docs called that the
 operator's risk, which is a warning nobody can act on — there was nothing
 to configure. What is wanted is a gate on the port, not multi-user
 support: the second person is still expected to run their own process
@@ -149,8 +149,8 @@ the browser already draws.
 line is visible in `ps` and in shell history, and the file already owns
 every secret (`D_own_config_file`).
 
-**Rejected: refusing to boot off loopback without a password.** `--bind
-0.0.0.0` behind a reverse proxy that does the auth is a legitimate
+**Rejected: refusing to boot off loopback without a password.** `bind =
+"0.0.0.0"` behind a reverse proxy that does the auth is a legitimate
 deployment, and a refusal forbids it to protect against a mistake the
 warning already names.
 
@@ -1594,7 +1594,7 @@ that turns a hard kill into "why can't I open my own conversation".
 Permanent cost, hypothetical benefit.
 
 **Rejected: one `flock` on the state root at boot,** refusing a second
-instance with `--port` named in the error. The cheap version — one lock in
+instance with the port named in the error. The cheap version — one lock in
 `bin/pikuri-webui-chat` instead of per-conversation state — and it kills the
 failure outright rather than degrading it. Still rejected: it converts a
 mistake nobody makes into a startup failure everybody can hit (a stale
@@ -2127,19 +2127,19 @@ unanswered, and in practice it means testing on whatever is open.
   iOS-specific half (`dvh` against Safari's shrinking chrome, the
   on-screen keyboard, `env(safe-area-inset-*)`).
 - **A phone layout is not a phone *recommendation*, and the split is
-  deliberate.** Reaching this app from a phone means `--bind` leaving
+  deliberate.** Reaching this app from a phone means `[web] bind` leaving
   127.0.0.1 with no auth and no sessions
   (`D_single_shared_conversation`) and an unencrypted conversations
   folder — a LAN bind hands the whole history to anything on the wifi.
   The layout exposes nothing on its own, so it shipped ahead of that
   question; what must not follow from it is `README.md` starting to
   suggest the phone, or a nice phone UI becoming the argument for a
-  casual `--bind 0.0.0.0`. The options nobody has costed: a bearer token
+  casual `bind = "0.0.0.0"`. The options nobody has costed: a bearer token
   the desktop prints as a QR code, basic auth over a self-signed cert
   (iOS trust-store friction), an SSH tunnel from the phone, a
   tailnet-only bind. An honest outcome is that none of them land and the
   README keeps saying "you are exposing your conversations, here is the
-  flag".
+  key".
 - **A PWA is downstream of that same question,** and only worth it once
   it has an answer: an installed icon that opens a dead page whenever the
   desktop is asleep is worse than a bookmark. It would need a
@@ -2427,6 +2427,12 @@ history, `ENV` is inherited by every subprocess pikuri spawns, and a project-loc
 git-committable, so `--api-key`, `--api-key-env`, `--server`, `--model` and `--turns` stay gone.
 There is no built-in connection either: no `[[llm]]` raises with `EXAMPLE_CONFIG` and the path to
 write it to.
+
+The same rule took `--port` and `--bind` into `[web]`, beside the base path and the password —
+the table about how the port faces the network. A flag next to the key would be exactly the
+precedence rule above, and the off-loopback warning already pointed into this table for its fix.
+The bind default stays `127.0.0.1`. `--dev` stays a flag because it says how one run is launched,
+not where the deployment lives (`D_dev_flag_no_reload`).
 
 **Rejected: keeping the shared file and carrying the whole schema.** Its standing obligation — a
 config addition in pikuri-tui is a pikuri-webui change — is a procedure nothing enforces, and
@@ -2756,7 +2762,7 @@ browser, and its second "user" is a second tab on the same machine.
 
 **Decision.** One agent, one transcript, in-process. No sessions, no
 auth (the second half now narrowed by `D_one_password_gate`: one password
-gates the port, and sessions still do not exist). `--bind` defaults to
+gates the port, and sessions still do not exist). `[web] bind` defaults to
 `127.0.0.1`; anything else is the operator's risk and is documented as
 such. Selecting a conversation is therefore
 *server* state, changed by a POST and announced to every tab, not a

@@ -19,7 +19,7 @@ the egress the agent already has:
   aside), and reopening a saved conversation replays the block — the beacon fires again, weeks
   later.
 - **From the browser, not the server.** It reveals the reader's IP, the time they read it, and
-  that they read it at all — a read receipt. Behind `--bind` off loopback that may be a
+  that they read it at all — a read receipt. With `[web] bind` off loopback that may be a
   different machine from the one the agent runs on.
 
 What it is *not*: a way to reach data the agent cannot. The reply can only carry what the model
@@ -67,4 +67,4 @@ backs it the way it backs the rest of `D_markdown_renders_no_html`.
   would extend that entry.
 - `Q_referrer` — Independent of the choice: should the page send `Referrer-Policy: no-referrer`?
   Today a cross-origin fetch carries our origin (`http://127.0.0.1:4567`, or the LAN address
-  behind `--bind`) — small, but free to remove, and it also covers links the reader clicks.
+  `[web] bind` names) — small, but free to remove, and it also covers links the reader clicks.
