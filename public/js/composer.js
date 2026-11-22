@@ -8,7 +8,7 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  * keyboard that drives both, and what a sent buffer *means* — a message posted
  * to the conversation, or a command run.
  *
- *     initComposer({ conversation: viewing, commands: { '/new': conversations.start } });
+ *     initComposer({ base, conversation: viewing, commands: { '/new': conversations.start } });
  *
  * Markup contract: `#composer`, `#prompt` and `#slash-menu` must exist and each
  * palette row must carry its name in `data-command` — a missing one throws
@@ -18,6 +18,8 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  * Call once.
  *
  * @param {object} opts
+ * @param {string} opts.base the path the shell is served under, `data-base` —
+ *   `"/pikuri-webui"`, or empty at the root; every URL here starts with it.
  * @param {string} opts.conversation the id every send is addressed to; page
  *   state, passed down rather than resolved here.
  * @param {Record<string, () => void>} [opts.commands] one arm per name the
@@ -35,7 +37,7 @@ const picking = (text) => text.startsWith('/') && !/\s/.test(text);
  * @param {() => void} [opts.onsendfailed] a message that did not go out; the
  *   text is already back in the box by then, this is only the telling.
  */
-export const initComposer = ({ conversation, attachments, commands = {}, onunknown, onsend, onsendfailed }) => {
+export const initComposer = ({ base, conversation, attachments, commands = {}, onunknown, onsend, onsendfailed }) => {
   const form = document.getElementById('composer');
   const input = document.getElementById('prompt');
   const menu = document.getElementById('slash-menu');
@@ -107,7 +109,7 @@ export const initComposer = ({ conversation, attachments, commands = {}, onunkno
     body.set('conversation', conversation);
     body.set('prompt', text);
     files.forEach((file) => body.append('attachments[]', file, file.name));
-    const sent = await fetch('/messages', { method: 'POST', body }).then((r) => r.ok, () => false);
+    const sent = await fetch(`${base}/messages`, { method: 'POST', body }).then((r) => r.ok, () => false);
     if (sent) return;
     input.value = text;
     autogrow();

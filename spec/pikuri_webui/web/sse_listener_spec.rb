@@ -64,6 +64,15 @@ RSpec.describe PikuriWebUI::Web::SseListener do
       assert_equal %(look<div class="attachments">#{link}#{img}</a></div>), html
     end
 
+    it 'starts each image URL with the base path the shell is served under' do
+      mounted = described_class.new(transcript: transcript, broadcaster: broadcaster, conversation: 'c-1',
+                                    lock: lock, base_path: '/pikuri-webui')
+      png = Pikuri::Attachment.new(mime: 'image/png', filename: 'a.png', bytes: "\x89PNG\r\n\x1A\n".b)
+      mounted.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'look', attachments: [png]))
+
+      assert_includes transcript.to_a.fetch(0).html, 'href="/pikuri-webui/c/c-1/attachments/'
+    end
+
     it 'draws no strip for a message without images' do
       listener.on_event(Pikuri::Agent::Event::UserTurn.new(content: 'hi'))
       refute_includes transcript.to_a.fetch(0).html, 'attachments'

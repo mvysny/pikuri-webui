@@ -16,14 +16,24 @@ import { initConversations } from './conversations.js';
 // The conversation this tab reads, fixed for the life of the page. The server
 // addresses every frame to it, so nothing here filters.
 const viewing = document.documentElement.dataset.conversation;
+// The path the shell is served under, "/pikuri-webui" or empty at the root.
+// Every URL a script builds starts with it, so a feature gets it from here
+// rather than reading the attribute itself.
+const base = document.documentElement.dataset.base;
+
+// A year-long view preference, scoped to this shell's path so a host serving
+// other apps beside it never sends them ours, nor us theirs.
+const remember = (name, value) => {
+  document.cookie = `${name}=${value}; path=${base || '/'}; max-age=31536000; samesite=lax`;
+};
 
 const themeToggle = document.getElementById('theme-toggle');
 
-const statusbar = initStatusBar({ conversation: viewing });
+const statusbar = initStatusBar({ base, conversation: viewing });
 const transcript = initTranscript();
-const conversations = initConversations({ conversation: viewing });
+const conversations = initConversations({ base, conversation: viewing });
 
-const es = new EventSource(`/events?conversation=${encodeURIComponent(viewing)}`);
+const es = new EventSource(`${base}/events?conversation=${encodeURIComponent(viewing)}`);
 es.addEventListener('block', (e) => transcript.upsert(JSON.parse(e.data)));
 es.addEventListener('stream', (e) => transcript.stream(JSON.parse(e.data)));
 es.addEventListener('snapshot', (e) => transcript.apply(JSON.parse(e.data).blocks));
@@ -42,7 +52,7 @@ const applyTheme = (theme) => {
   document.documentElement.dataset.theme = theme;
   themeToggle.textContent = theme === 'dark' ? '☀ light' : '☾ dark';
   themeToggle.title = themeToggle.ariaLabel = `Switch to the ${other} theme`;
-  document.cookie = `theme=${theme}; path=/; max-age=31536000; samesite=lax`;
+  remember('theme', theme);
 };
 
 themeToggle.addEventListener('click', () =>
@@ -53,7 +63,7 @@ themeToggle.addEventListener('click', () =>
 // transcript.js owns what that means for the blocks.
 const applyThinking = (open) => {
   transcript.setThinkingDefault(open);
-  document.cookie = `thinking=${open ? 'expanded' : 'collapsed'}; path=/; max-age=31536000; samesite=lax`;
+  remember('thinking', open ? 'expanded' : 'collapsed');
 };
 
 const openThinkingPicker = () => {
@@ -73,7 +83,7 @@ const openThinkingPicker = () => {
 // switch — no walk, nothing for transcript.js to do.
 const applyTools = (form) => {
   document.documentElement.dataset.tools = form;
-  document.cookie = `tools=${form}; path=/; max-age=31536000; samesite=lax`;
+  remember('tools', form);
 };
 
 const openToolLinesPicker = () => {
@@ -111,7 +121,7 @@ const openModelPicker = () => {
       const body = new FormData();
       body.set('conversation', viewing);
       body.set('name', option.dataset.model);
-      fetch('/model', { method: 'POST', body });
+      fetch(`${base}/model`, { method: 'POST', body });
       dialog.close();
     });
   });
@@ -128,6 +138,7 @@ const reportUnknownCommand = (name) => {
 // that contract. A name the config gated out keeps its arm; it is simply never
 // rendered a row to reach it by.
 initComposer({
+  base,
   conversation: viewing,
   attachments: initAttachments({ onrefused: statusbar.say }),
   onunknown: reportUnknownCommand,

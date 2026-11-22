@@ -90,11 +90,6 @@ module PikuriWebUI
       # _@param_ `thinking` — one of {THINKING}
       def disclosed: (::Array[Transcript::Block] blocks, String thinking) -> ::Array[Transcript::Block]
 
-      # _@return_ — the {TOOL_LINES} form a browser with no cookie gets:
-      # the config file's, or `short` when the file named a form this shell
-      # has no renderer for.
-      def default_tool_lines: () -> String
-
       # The message's images, checked against the caps and typed by their bytes.
       # 
       # Halts rather than dropping a bad one: the browser checks the same caps
@@ -202,7 +197,7 @@ module PikuriWebUI
     # Still a *gate*, not accounts: one pair for everyone, no server-side
     # session, no logout, no lockout (+D_one_password_gate+). There is
     # deliberately no disabled mode either — a config file with no +[web]+
-    # table never +use+s this at all.
+    # pair never +use+s this at all.
     # 
     # == The cookie
     # 
@@ -215,6 +210,10 @@ module PikuriWebUI
     # app in regular use never meets the expiry. +GET /events+ needs no special
     # case — the browser sends the cookie on every later request, the
     # EventSource included.
+    # 
+    # Its +Path+ is the app's +SCRIPT_NAME+ — {Mount}'s prefix, when it runs
+    # outside this — so on a host serving other apps beside this one, the
+    # browser never hands this cookie to them.
     # 
     # Thread-safe.
     class Gate
@@ -281,6 +280,46 @@ module PikuriWebUI
       # 
       # _@return_ — the hex HMAC that signs it.
       def mac: (Integer expiry) -> String
+    end
+
+    # Rack middleware serving the whole app under one path, the +[web]
+    # base_path+ — a servlet's context root:
+    # 
+    #   PikuriWebUI::Web::App.use PikuriWebUI::Web::Mount, '/pikuri-webui'
+    # 
+    #   GET /pikuri-webui/c/42   # → the app, SCRIPT_NAME "/pikuri-webui", PATH_INFO "/c/42"
+    #   GET /pikuri-webui        # → the app's "/", SCRIPT_NAME "/pikuri-webui", PATH_INFO ""
+    #   GET /c/42                # → 404, saying where the app lives
+    # 
+    # Moving the prefix into +SCRIPT_NAME+ is the whole trick: Sinatra's +to+,
+    # +url+ and +redirect+ prepend it, and {Gate} scopes its cookie by it. What
+    # no request can tell — an attachment URL rendered on a turn thread, a
+    # script's +fetch+ — reads +[web] base_path+ instead.
+    # 
+    # A request without the prefix is refused rather than taken as one a proxy
+    # stripped, so one URL always means one thing (+D_base_path_mount+). The
+    # refusal is plain text naming the fix, since its likeliest reader is
+    # someone whose proxy just did that. Never a redirect back to the prefix:
+    # behind a proxy that strips, that loops.
+    # 
+    # Mounted outside {Gate}, so the gate sees the prefix and a misrouted
+    # request is answered before anyone is asked for a password.
+    # 
+    # Immutable.
+    class Mount
+      # _@param_ `app` — the Rack app to mount.
+      # 
+      # _@param_ `path` — the prefix, +"/pikuri-webui"+: absolute, no trailing slash — {Config#base_path}, which checked it.
+      def initialize: (untyped app, String path) -> void
+
+      # _@param_ `env` — the Rack environment.
+      # 
+      # _@return_ — the app's response, or a 404 for a
+      # path outside the prefix.
+      def call: (::Hash[untyped, untyped] env) -> [Integer, ::Hash[untyped, untyped], _Each[untyped]]
+
+      # _@return_ — a 404 saying where the app is.
+      def outside: () -> [Integer, ::Hash[untyped, untyped], ::Array[String]]
     end
 
     # One tool event as the two lines a transcript block carries — the short form
@@ -693,11 +732,14 @@ module PikuriWebUI
       # _@param_ `conversation` — id every frame is addressed to, so it reaches only the tabs showing this conversation. +nil+ broadcasts to everyone, which is what a throwaway listener rendering a snapshot wants — it has no subscribers at all
       # 
       # _@param_ `lock` — the domain each store-and-broadcast enters
+      # 
+      # _@param_ `base_path` — {Config#base_path}, which every image URL starts with; a block is rendered on a turn thread, with no request whose +SCRIPT_NAME+ could say it
       def initialize: (
                         transcript: Transcript,
                         broadcaster: Broadcaster,
                         lock: BigAppLock,
-                        ?conversation: String?
+                        ?conversation: String?,
+                        ?base_path: String
                       ) -> void
 
       # Dispatches one event into the transcript + SSE stream. Called from
@@ -1580,13 +1622,20 @@ module PikuriWebUI
     end
   end
 
-  # The `~/.config/pikuri/config.toml` model connections and provider
-  # keys, resolved once at boot and read from there on:
+  # This shell's own `~/.config/pikuri-webui/config.toml` — model connections,
+  # provider keys and how the port faces the network — resolved once at boot
+  # and read from there on:
   # 
   #   config = PikuriWebUI::Config.load
   #   config.primary_llm   # => Llm(name:, server:, model:, api_key:, context_window:)
   #   config.servers       # => [Server(id:, url:, api_key:, max_concurrent_requests:)]
   #   config.search        # => Search(brave_key:, exa_key:, engines:)
+  #   config.base_path     # => "/pikuri-webui", or "" at the root
+  # 
+  # The file carries what this shell reads and nothing else, strict
+  # throughout: an unknown key anywhere raises. pikuri-tui keeps its own file
+  # under +~/.config/pikuri/+, so a key one shell grows never stops the other
+  # from booting (+D_own_config_file+).
   # 
   # == +[[server]]+ and +[[llm]]+
   # 
@@ -1628,16 +1677,9 @@ module PikuriWebUI
   #   show_thinking = false     # start with reasoning blocks collapsed
   #   tool_lines    = "verbose" # start on the raw argument dump
   # 
-  # Transcript density, one table for every pikuri shell because the
-  # preference is per *person* far more than per shell. Both keys are read
-  # here, as the *starting* value a browser with no preference of its own
-  # sees: a `/thinking` or `/toollines` pick writes a cookie that outranks
-  # the file from then on (+D_ui_cookie_over_config+).
-  # 
-  # pikuri-tui owns what grows in this table, so it is the one table that is
-  # lenient: {UiTable} says +unknown :ignore+, so Typemap drops a key this
-  # shell does not read, silently, and +tool_lines+ is checked to be a String,
-  # never against a list of forms (+D_schema_complete_config+).
+  # Both keys are the *starting* value a browser with no preference of its
+  # own sees: a `/thinking` or `/toollines` pick writes a cookie that
+  # outranks the file from then on (+D_ui_cookie_over_config+).
   # 
   # == The +[titler]+ table, and +[[llm]]+ +params+
   # 
@@ -1666,31 +1708,32 @@ module PikuriWebUI
   # == The +[web]+ table
   # 
   #   [web]
-  #   user     = "mavi"
-  #   password = "a long passphrase"
+  #   base_path = "/pikuri-webui"   # served at https://host/pikuri-webui/
+  #   user      = "mavi"            # these two together, or neither
+  #   password  = "a long passphrase"
   # 
-  # The one password gating the port, resolved into {#credentials}. No +[web]+
-  # leaves it +nil+, which is no gate at all rather than a default password —
-  # and one pair for everyone rather than accounts (+D_one_password_gate+).
-  # Both keys are required once the table exists.
+  # How the port faces the network; every key is optional. +base_path+
+  # becomes {#base_path}, the path every URL the shell serves sits under
+  # (+D_base_path_mount+). +user+ and +password+ become {#credentials}, the
+  # one pair gating the port — none of them leaves it +nil+, which is no gate
+  # at all rather than a default password, and one pair for everyone rather
+  # than accounts (+D_one_password_gate+).
   # 
   # == Precedence
   # 
-  # Lowest to highest: built-in defaults → +/etc/xdg/pikuri/config.toml+
+  # Lowest to highest: built-in defaults → +/etc/xdg/pikuri-webui/config.toml+
   # (each +$XDG_CONFIG_DIRS+ entry, earlier = higher) →
-  # +$XDG_CONFIG_HOME/pikuri/config.toml+ (default +~/.config+) →
-  # +overrides:+. Tables merge key-by-key, so a system file can supply
-  # +search.brave_key+ while the user file adds +exa_key+; arrays (the
-  # +[[server]]+, +[[llm]]+ and +[[code.mcp]]+ lists) replace wholesale,
-  # nearest file wins.
+  # +$XDG_CONFIG_HOME/pikuri-webui/config.toml+ (default +~/.config+). Tables
+  # merge key-by-key, so a system file can supply +search.brave_key+ while the
+  # user file adds +exa_key+; arrays (the +[[server]]+ and +[[llm]]+ lists)
+  # replace wholesale, nearest file wins.
   # 
   # +server+ references resolve *after* the whole merge. That is what lets a
   # user file add one +[[llm]]+ against a system file's +[[server]]+ instead
-  # of re-pasting the block, secrets included — the duplication this schema
-  # exists to remove. The consequence, since arrays replace: a nearer file
-  # that declares +[[server]]+ at all replaces every farther one, which can
-  # leave a farther file's +[[llm]]+ dangling. That raises; it never falls
-  # back.
+  # of re-pasting the block, secrets included. The consequence, since arrays
+  # replace: a nearer file that declares +[[server]]+ at all replaces every
+  # farther one, which can leave a farther file's +[[llm]]+ dangling. That
+  # raises; it never falls back.
   # 
   # No project-local layer, deliberately: a config file inside the repo
   # would be git-committable, and a literal {Llm#api_key} or {Search}
@@ -1712,45 +1755,39 @@ module PikuriWebUI
   # runtime from +sig/pikuri_webui.rbs+, which +rake sig+ generates, so a stale
   # +sig/+ means stale config types (+D_config_through_typemap+). Typemap's
   # limits add non-blank names and unique ids; a class's +validate+ keeps
-  # only what no limit can say, "exactly one of +command+ / +url+" and the
-  # like. {.load} then resolves the file's shape
-  # into the values the app reads: each {LlmTable} with its {Server} looked up
-  # becomes an {Llm}, each {McpTable} with its auth sugar folded into
-  # +headers+ becomes an {McpServer}. {Server}, {Search} and {Credentials}
-  # already match the file and pass through.
-  # 
-  # The schema is the *whole* pikuri-shell schema, not the subset this host
-  # reads — {#sandbox}, {#confirm} and {#mcp} are validated and exposed
-  # with nothing wired to them. Trimming it would break the file: pikuri-tui
-  # writes +[code]+ / +[[code.mcp]]+ / +[ui]+ into the same path, and an
-  # unknown top-level key raises.
+  # only what no limit can say, "both or neither" and the like. {.load} then
+  # resolves the file's shape into the values the app reads: each {LlmTable}
+  # with its {Server} looked up becomes an {Llm}, and the {WebTable} splits
+  # into {#base_path} and {#credentials}. {Server} and {Search} already match
+  # the file and pass through.
   # 
   # Names no +Pikuri::*+ constant, so it sits on the Pikuri-free side of
   # the seam (AGENTS.md). {Llm}'s fields match
-  # +ChatTransport.from_openai_server+'s keyword arguments, {Search}'s
-  # match +Pikuri::Web::Search.build+'s and {McpServer}'s match
-  # +Mcp::Registry+'s entries, which keeps the bin's translation a
+  # +ChatTransport.from_openai_server+'s keyword arguments and {Search}'s
+  # match +Pikuri::Web::Search.build+'s, which keeps the bin's translation a
   # pass-through.
   # 
   # Immutable.
   class Config
-    DEFAULT_SANDBOX: bool
-    DEFAULT_CONFIRM: bool
     DEFAULT_SHOW_THINKING: bool
     DEFAULT_TOOL_LINES: Symbol
+    TOOL_LINES: ::Array[String]
+    SEGMENT: Regexp
     EXAMPLE_CONFIG: String
     FILENAME: String
     XDG_SUBDIR: String
+    PIKURI_TUI_SUBDIR: String
     MAPPER: Typemap::Mapper
 
-    # Load and resolve the layered configuration.
-    # 
-    # _@param_ `overrides` — CLI overrides; +nil+ values are ignored (treated as "flag not given"). Recognized keys: +:sandbox+, +:confirm+ — the coding switches, for a sibling shell that wires them (`D_chat_only_entry_point`). Nothing about a *connection* is overridable: no server, no model and no key. A secret must never travel on the command line (visible in +ps+ and shell history), and server/model would be a second source of truth for something the file already owns (`D_schema_complete_config`).
+    # Load and resolve the layered configuration. Nothing is overridable from
+    # the command line: a secret there is visible in +ps+ and shell history,
+    # and anything else would be a second source for what the file owns
+    # (`D_own_config_file`).
     # 
     # _@param_ `env` — environment consulted for +XDG_CONFIG_HOME+ / +XDG_CONFIG_DIRS+. Defaults to +ENV+; injectable for tests.
     # 
     # _@return_ — the resolved configuration.
-    def self.load: (?overrides: ::Hash[Symbol, bool?], ?env: untyped) -> Config
+    def self.load: (?env: untyped) -> Config
 
     # _@param_ `llms` — one or more model connections (never empty).
     # 
@@ -1758,28 +1795,22 @@ module PikuriWebUI
     # 
     # _@param_ `search` — web-search provider keys (fields may be nil).
     # 
-    # _@param_ `sandbox` — resolved sandbox switch (parsed, unwired).
-    # 
-    # _@param_ `confirm` — resolved confirmer switch (parsed, unwired).
-    # 
-    # _@param_ `mcp` — MCP servers (parsed, unwired; may be empty).
-    # 
     # _@param_ `show_thinking` — resolved +[ui]+ reasoning-block default.
     # 
     # _@param_ `tool_lines` — resolved +[ui]+ tool-line form.
     # 
     # _@param_ `titler_llm` — the connection titles are written on, or +nil+ for no titling. Defaults to +nil+ so a config built in code opts in the same way a file does.
     # 
-    # _@param_ `credentials` — the +[web]+ pair gating the app, or +nil+ for no gate. Defaults to +nil+, as a file with no +[web]+ does.
+    # _@param_ `credentials` — the +[web]+ pair gating the app, or +nil+ for no gate. Defaults to +nil+, as a file with no pair does.
+    # 
+    # _@param_ `base_path` — see {#base_path}; +""+ for the root.
     def initialize: (
                       llms: ::Array[Llm],
                       search: Search,
-                      sandbox: bool,
-                      confirm: bool,
-                      mcp: ::Array[McpServer],
                       ?servers: ::Array[Server],
                       ?titler_llm: Llm?,
                       ?credentials: Credentials?,
+                      ?base_path: String,
                       ?show_thinking: bool,
                       ?tool_lines: Symbol
                     ) -> void
@@ -1796,6 +1827,11 @@ module PikuriWebUI
     # 
     # _@return_ — candidate file paths, lowest priority first
     def self.candidate_paths: (untyped env) -> ::Array[String]
+
+    # _@param_ `env` — environment, for +XDG_CONFIG_HOME+
+    # 
+    # _@return_ — the user's config root, +~/.config+ by default
+    def self.config_home: (untyped env) -> String
 
     # Advise (non-fatally, through {PikuriWebUI.logger}) when a file carrying
     # a literal secret is group/other-accessible — a plaintext secret should
@@ -1814,9 +1850,8 @@ module PikuriWebUI
     # _@param_ `parsed` — one file's raw TOML
     # 
     # _@return_ — true when the parsed file carries any literal secret
-    # (a +[[server]]+ +api_key+, a +[web]+ +password+, a +[search]+
-    # +brave_key+/+exa_key+, or an +[[code.mcp]]+
-    # +bearer_token+/+basic_auth+/+headers+/+env+).
+    # (a +[[server]]+ +api_key+, a +[web]+ +password+, or a +[search]+
+    # +brave_key+/+exa_key+).
     def self.holds_secret?: (::Hash[String, Object] parsed) -> bool
 
     # Parse one file, wrapping any failure (read error, TOML syntax) in
@@ -1885,7 +1920,9 @@ module PikuriWebUI
 
     # Covers both "no config file at all" and "a file that defines no
     # connection" — the same hole with the same fix, so one message with the
-    # path to write it to.
+    # path to write it to. A pikuri-tui file where this shell's used to be
+    # read is named too, since that is the hole the first boot after the move
+    # falls into.
     # 
     # _@param_ `any_loaded` — whether any file was read, which is the only difference between the two cases.
     # 
@@ -1905,22 +1942,11 @@ module PikuriWebUI
     # _@return_ — the web-search provider keys (fields may be nil).
     attr_reader search: Search
 
-    # _@return_ — sandbox switch (flag > file > default).
-    attr_reader sandbox: bool
-
-    # _@return_ — confirmer switch (flag > file > default).
-    attr_reader confirm: bool
-
-    # _@return_ — MCP servers, declaration order.
-    attr_reader mcp: ::Array[McpServer]
-
     # _@return_ — whether reasoning blocks start shown (+[ui]+ > default).
     attr_reader show_thinking: bool
 
-    # _@return_ — the tool-line form to start on (+[ui]+ > default) —
-    # whatever the file said, symbolized, so an unrecognized form arrives
-    # here unresolved. **The reader falls back**, as {Web::App} does for an
-    # unknown +theme+ cookie; the vocabulary belongs to whoever renders it.
+    # _@return_ — the tool-line form to start on (+[ui]+ > default), one
+    # of {TOOL_LINES}.
     attr_reader tool_lines: Symbol
 
     # _@return_ — the connection conversation titles are written on
@@ -1932,6 +1958,10 @@ module PikuriWebUI
     # +nil+ when the file names none — which switches the gate off rather
     # than inventing a default password.
     attr_reader credentials: Credentials?
+
+    # _@return_ — the path the shell is served under, +"/pikuri-webui"+ —
+    # never a trailing slash — or +""+ when it sits at the root.
+    attr_reader base_path: String
 
     # Raised for any unreadable / malformed / schema-invalid config file.
     # Carries a human-readable message naming the offending key or file.
@@ -2078,76 +2108,6 @@ module PikuriWebUI
       attr_reader params: ::Hash[String, Object]
     end
 
-    # One MCP server definition; exactly one of {#command} (local stdio
-    # subprocess) / {#url} (remote HTTP) is non-nil. Parsed and validated
-    # but wired to nothing — this host binds no MCP tools yet.
-    # 
-    # +bearer_token+ / +basic_auth+ are TOML-level sugar rather than
-    # fields: {McpTable#resolve} folds them into {#headers}, so this exposes
-    # only the one hash +Registry::HttpEntry+ consumes 1:1.
-    # 
-    # @!attribute [r] id
-    #   @return [String] unique id the LLM uses to call +mcp_connect+.
-    # @!attribute [r] command
-    #   @return [Array<String>, nil] full argv to spawn a stdio server
-    #     (exe first), or +nil+ for an HTTP server.
-    # @!attribute [r] url
-    #   @return [String, nil] endpoint URL of an HTTP server, or +nil+ for
-    #     a stdio server.
-    # @!attribute [r] headers
-    #   @return [Hash{String => String}] HTTP headers sent on every request
-    #     to an HTTP server (auth + custom), frozen. Always empty for a
-    #     stdio server.
-    # @!attribute [r] env
-    #   @return [Hash{String => String}] extra environment variables for a
-    #     stdio server's subprocess (merged over the inherited
-    #     environment), frozen. Always empty for an HTTP server.
-    class McpServer < Data
-      # _@param_ `id` — see {#id}
-      # 
-      # _@param_ `command` — see {#command}
-      # 
-      # _@param_ `url` — see {#url}
-      # 
-      # _@param_ `headers` — see {#headers}; frozen here
-      # 
-      # _@param_ `env` — see {#env}; frozen here
-      def initialize: (
-                        id: String,
-                        ?command: ::Array[String]?,
-                        ?url: String?,
-                        ?headers: ::Hash[String, String],
-                        ?env: ::Hash[String, String]
-                      ) -> void
-
-      # _@return_ — true for a local-subprocess (stdio) server.
-      def stdio?: () -> bool
-
-      # _@return_ — true for a remote HTTP server.
-      def http?: () -> bool
-
-      # _@return_ — unique id the LLM uses to call +mcp_connect+.
-      attr_reader id: String
-
-      # _@return_ — full argv to spawn a stdio server
-      # (exe first), or +nil+ for an HTTP server.
-      attr_reader command: ::Array[String]?
-
-      # _@return_ — endpoint URL of an HTTP server, or +nil+ for
-      # a stdio server.
-      attr_reader url: String?
-
-      # _@return_ — HTTP headers sent on every request
-      # to an HTTP server (auth + custom), frozen. Always empty for a
-      # stdio server.
-      attr_reader headers: ::Hash[String, String]
-
-      # _@return_ — extra environment variables for a
-      # stdio server's subprocess (merged over the inherited
-      # environment), frozen. Always empty for an HTTP server.
-      attr_reader env: ::Hash[String, String]
-    end
-
     # The web-search selection: which engines to search with, and the keys
     # the paid ones need. Every field is +nil+ when omitted, leaving pikuri's
     # own default — DuckDuckGo plus whichever key was configured. There is
@@ -2190,9 +2150,7 @@ module PikuriWebUI
     end
 
     # The +[web]+ table's pair, checked against the +Authorization+ header of
-    # every request (+D_one_password_gate+). Both keys are required: a
-    # half-written table resolving to no gate would gate nothing and say
-    # nothing.
+    # every request (+D_one_password_gate+).
     # 
     # @!attribute [r] user
     #   @return [String] the name the browser's own prompt asks for; non-blank.
@@ -2200,8 +2158,6 @@ module PikuriWebUI
     #   @return [String] the password, stored literally — the same file and the
     #     same +chmod 600+ advisory a +[[server]]+ api_key earns; non-blank.
     class Credentials < Data
-      extend Typemap::Constrain
-
       # _@return_ — the name the browser's own prompt asks for; non-blank.
       attr_reader user: String
 
@@ -2275,140 +2231,12 @@ module PikuriWebUI
       attr_reader params: ::Hash[String, Object]
     end
 
-    # A +[[code.mcp]]+ entry's +basic_auth+ table.
-    # 
-    # @!attribute [r] username
-    #   @return [String] non-blank
-    # @!attribute [r] password
-    #   @return [String]
-    class BasicAuth < Data
-      extend Typemap::Constrain
-
-      # _@return_ — the +Authorization+ value, strict (newline-free) Base64
-      # through +Array#pack+, so no +base64+ require
-      def header: () -> String
-
-      # _@return_ — non-blank
-      attr_reader username: String
-
-      attr_reader password: String
-    end
-
-    # One +[[code.mcp]]+ table as the file writes it; {#resolve} turns it into
-    # an {McpServer}.
-    # 
-    # +bearer_token+ and +basic_auth+ are sugar for an +Authorization+ header,
-    # so they exclude each other and an +Authorization+ entry in +headers+.
-    # 
-    # @!attribute [r] id
-    #   @return [String] see {McpServer#id}
-    # @!attribute [r] command
-    #   @return [Array<String>, nil] see {McpServer#command}
-    # @!attribute [r] url
-    #   @return [String, nil] see {McpServer#url}
-    # @!attribute [r] bearer_token
-    #   @return [String, nil] becomes +Authorization: Bearer …+
-    # @!attribute [r] basic_auth
-    #   @return [BasicAuth, nil] becomes +Authorization: Basic …+
-    # @!attribute [r] headers
-    #   @return [Hash{String => String}, nil] extra HTTP headers, sent verbatim
-    # @!attribute [r] env
-    #   @return [Hash{String => String}, nil] see {McpServer#env}
-    class McpTable < Data
-      extend Typemap::Constrain
-
-      # _@param_ `id` — see {#id}
-      # 
-      # _@param_ `command` — see {#command}
-      # 
-      # _@param_ `url` — see {#url}
-      # 
-      # _@param_ `bearer_token` — see {#bearer_token}
-      # 
-      # _@param_ `basic_auth` — see {#basic_auth}
-      # 
-      # _@param_ `headers` — see {#headers}
-      # 
-      # _@param_ `env` — see {#env}
-      def initialize: (
-                        id: String,
-                        ?command: ::Array[String]?,
-                        ?url: String?,
-                        ?bearer_token: String?,
-                        ?basic_auth: BasicAuth?,
-                        ?headers: ::Hash[String, String]?,
-                        ?env: ::Hash[String, String]?
-                      ) -> void
-
-      # _@param_ `raw` — see {Server.entry_name}
-      # 
-      # _@return_ — its +id+
-      def self.entry_name: (::Hash[String, Object] raw) -> Object
-
-      def validate: () -> void
-
-      # _@return_ — this entry with its auth sugar folded into +headers+
-      def resolve: () -> McpServer
-
-      # _@return_ — see {McpServer#id}
-      attr_reader id: String
-
-      # _@return_ — see {McpServer#command}
-      attr_reader command: ::Array[String]?
-
-      # _@return_ — see {McpServer#url}
-      attr_reader url: String?
-
-      # _@return_ — becomes +Authorization: Bearer …+
-      attr_reader bearer_token: String?
-
-      # _@return_ — becomes +Authorization: Basic …+
-      attr_reader basic_auth: BasicAuth?
-
-      # _@return_ — extra HTTP headers, sent verbatim
-      attr_reader headers: ::Hash[String, String]?
-
-      # _@return_ — see {McpServer#env}
-      attr_reader env: ::Hash[String, String]?
-    end
-
-    # The +[code]+ table.
-    # 
-    # @!attribute [r] sandbox
-    #   @return [Boolean] see {Config#sandbox}; +overrides:+ outrank it
-    # @!attribute [r] confirm
-    #   @return [Boolean] see {Config#confirm}; +overrides:+ outrank it
-    # @!attribute [r] mcp
-    #   @return [Array<McpTable>] the +[[code.mcp]]+ entries, ids unique
-    class CodeTable < Data
-      extend Typemap::Constrain
-
-      # _@param_ `sandbox` — see {#sandbox}
-      # 
-      # _@param_ `confirm` — see {#confirm}
-      # 
-      # _@param_ `mcp` — see {#mcp}
-      def initialize: (?sandbox: bool, ?confirm: bool, ?mcp: ::Array[McpTable]) -> void
-
-      # _@return_ — see {Config#sandbox}; +overrides:+ outrank it
-      attr_reader sandbox: bool
-
-      # _@return_ — see {Config#confirm}; +overrides:+ outrank it
-      attr_reader confirm: bool
-
-      # _@return_ — the +[[code.mcp]]+ entries, ids unique
-      attr_reader mcp: ::Array[McpTable]
-    end
-
-    # The +[ui]+ table; a key it has no member for is dropped, never raised
-    # on, so one pikuri-tui adds cannot stop this shell from booting (the
-    # class header has the why).
+    # The +[ui]+ table.
     # 
     # @!attribute [r] show_thinking
     #   @return [Boolean] see {Config#show_thinking}
     # @!attribute [r] tool_lines
-    #   @return [String] see {Config#tool_lines}; any String, its vocabulary
-    #     being pikuri-tui's
+    #   @return [String] see {Config#tool_lines}; one of {TOOL_LINES}
     class UiTable < Data
       extend Typemap::Constrain
 
@@ -2420,8 +2248,7 @@ module PikuriWebUI
       # _@return_ — see {Config#show_thinking}
       attr_reader show_thinking: bool
 
-      # _@return_ — see {Config#tool_lines}; any String, its vocabulary
-      # being pikuri-tui's
+      # _@return_ — see {Config#tool_lines}; one of {TOOL_LINES}
       attr_reader tool_lines: String
     end
 
@@ -2436,6 +2263,43 @@ module PikuriWebUI
       attr_reader llm: String
     end
 
+    # The +[web]+ table as the file writes it; {.load} splits it into
+    # {Config#base_path} and {Config#credentials}.
+    # 
+    # @!attribute [r] base_path
+    #   @return [String, nil] see {Config#base_path}; as written, a trailing
+    #     +/+ included
+    # @!attribute [r] user
+    #   @return [String, nil] see {Credentials#user}
+    # @!attribute [r] password
+    #   @return [String, nil] see {Credentials#password}
+    class WebTable < Data
+      extend Typemap::Constrain
+
+      # _@param_ `base_path` — see {#base_path}
+      # 
+      # _@param_ `user` — see {#user}
+      # 
+      # _@param_ `password` — see {#password}
+      def initialize: (?base_path: String?, ?user: String?, ?password: String?) -> void
+
+      # A half-written pair raises rather than gating nothing in silence.
+      # +base_path+ lands in a cookie's +Path+ and in every URL the page
+      # builds, so it takes unreserved characters only, with no +.+ or +..+
+      # segment and no empty one.
+      def validate: () -> void
+
+      # _@return_ — see {Config#base_path}; as written, a trailing
+      # +/+ included
+      attr_reader base_path: String?
+
+      # _@return_ — see {Credentials#user}
+      attr_reader user: String?
+
+      # _@return_ — see {Credentials#password}
+      attr_reader password: String?
+    end
+
     # The whole file, every table at its default when the file leaves it out.
     # 
     # @!attribute [r] server
@@ -2444,14 +2308,12 @@ module PikuriWebUI
     #   @return [Array<LlmTable>] the +[[llm]]+ entries, names unique
     # @!attribute [r] search
     #   @return [Search] the +[search]+ table
-    # @!attribute [r] code
-    #   @return [CodeTable] the +[code]+ table
     # @!attribute [r] ui
     #   @return [UiTable] the +[ui]+ table
     # @!attribute [r] titler
     #   @return [TitlerTable, nil] the +[titler]+ table; +nil+ switches titling off
     # @!attribute [r] web
-    #   @return [Credentials, nil] the +[web]+ table; +nil+ switches the gate off
+    #   @return [WebTable] the +[web]+ table
     class Root < Data
       extend Typemap::Constrain
 
@@ -2460,8 +2322,6 @@ module PikuriWebUI
       # _@param_ `llm` — see {#llm}
       # 
       # _@param_ `search` — see {#search}
-      # 
-      # _@param_ `code` — see {#code}
       # 
       # _@param_ `ui` — see {#ui}
       # 
@@ -2472,10 +2332,9 @@ module PikuriWebUI
                         ?server: ::Array[Server],
                         ?llm: ::Array[LlmTable],
                         ?search: Search,
-                        ?code: CodeTable,
                         ?ui: UiTable,
                         ?titler: TitlerTable?,
-                        ?web: Credentials?
+                        ?web: WebTable
                       ) -> void
 
       # _@return_ — the +[[server]]+ entries, ids unique
@@ -2487,17 +2346,14 @@ module PikuriWebUI
       # _@return_ — the +[search]+ table
       attr_reader search: Search
 
-      # _@return_ — the +[code]+ table
-      attr_reader code: CodeTable
-
       # _@return_ — the +[ui]+ table
       attr_reader ui: UiTable
 
       # _@return_ — the +[titler]+ table; +nil+ switches titling off
       attr_reader titler: TitlerTable?
 
-      # _@return_ — the +[web]+ table; +nil+ switches the gate off
-      attr_reader web: Credentials?
+      # _@return_ — the +[web]+ table
+      attr_reader web: WebTable
     end
   end
 

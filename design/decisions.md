@@ -124,11 +124,11 @@ to configure. What is wanted is a gate on the port, not multi-user
 support: the second person is still expected to run their own process
 under their own OS account (`D_single_shared_conversation`).
 
-**Decision.** One `user`/`password` pair in the shared config file's
-`[web]` table, checked by `Rack::Auth::Basic` wrapped around the whole
-app. No `[web]` means no middleware at all, so the loopback default
-prompts nobody; a bind off loopback with no `[web]` prints a warning
-under Puma's banner and starts anyway. The browser's own prompt is the
+**Decision.** One `user`/`password` pair in the config file's `[web]`
+table, checked by `Rack::Auth::Basic` wrapped around the whole app. No
+pair means no middleware at all, so the loopback default prompts nobody;
+a bind off loopback with no pair prints a warning under Puma's banner and
+starts anyway. The browser's own prompt is the
 entire UI — no login page, no session, no logout, no lockout — and the
 credentials it caches for the origin are replayed on the EventSource
 too, so `GET /events` needs nothing.
@@ -147,7 +147,7 @@ the browser already draws.
 
 **Rejected: a `--password` flag or an env var.** A secret on the command
 line is visible in `ps` and in shell history, and the file already owns
-every secret (`D_schema_complete_config`).
+every secret (`D_own_config_file`).
 
 **Rejected: refusing to boot off loopback without a password.** `--bind
 0.0.0.0` behind a reverse proxy that does the auth is a legitimate
@@ -167,10 +167,6 @@ front of `public/` as well as the routes.
   SSE connection included. That is the accepted trade on a trusted LAN
   and the reason the warning names TLS; nothing here should ever be
   called "secure" without it.
-- `[web]` is a new top-level table in a file three shells share, and
-  their loaders raise on an unknown key — so pikuri-tui carries `web` in
-  its allowlist, shape-checked and logged as unread, the same bargain it
-  takes with `[titler]` (`D_schema_complete_config`).
 - The deferred remember-me cookie was needed, and shipped:
   `D_gate_cookie`. The trigger fired on the first iPhone that tried it.
 
@@ -190,8 +186,8 @@ frontend/service reading:
 - `Util` — knows nothing about this app.
 
 `Config` and `BigAppLock` stay at the root because neither belongs to a half:
-`Config` is read before anything else exists and carries the whole cross-shell
-file schema (`D_schema_complete_config`), and `BigAppLock` is *the* one global
+`Config` is read before anything else exists and carries the config file's
+schema (`D_own_config_file`), and `BigAppLock` is *the* one global
 mechanism (`D_global_monitor`) that every namespace asserts into. Filing either
 under a namespace would assert an ownership that does not exist.
 
@@ -277,9 +273,8 @@ already ~1.2 s, of which most is prefill and HTTP. What is rejected is
 *hardcoding* one, not *allowing* one: the whole point of this entry is that the
 file chooses.
 
-**Rejected: a `[web] title_model` key.** Titling is not web-specific and the
-config file is shared by every pikuri shell (`D_schema_complete_config`), so
-the table is top-level.
+**Rejected: a `[web] title_model` key.** Titling is not web-specific — `[web]`
+is how the port faces the network — so the table is top-level.
 
 **Rejected: a flat `titler = "name"`.** A table gives a later word cap or
 explicit off-switch a home without a second top-level key.
@@ -328,7 +323,7 @@ expensive here: **silently not applied**, which is the 4000-character essay
 above. A key that promises portability and quietly does not apply is worse than
 a key that says exactly what it sends. Sugar can still be added later, in the
 shell's config parser rather than as semantics in `ChatTransport` — at the cost
-of being written twice (`D_schema_complete_config`).
+of being written twice, once per shell (`D_own_config_file`).
 
 **Rejected: `reasoning_effort`.** Accepted by the server and then effectively
 ignored — `"none"` and `"low"` both still emitted a full reasoning block
@@ -369,15 +364,6 @@ expired, and the upstream change turned out to be a field plus one
 `with_params` call. Keep the lesson, not the deferral: validate the config
 spelling against a real server *before* spending a change in the library that
 two shells depend on.
-
-**Consequence — pikuri-tui stops booting until its allowlists widen.** Both
-shells' parsers are strict over the one shared file, so `[titler]` and `params`
-raise `unknown top-level key(s)` / `llm[i]: unknown key(s)` there. Accepted
-deliberately, and fixed upstream as two allowlist entries that shell *carries*
-and reads nothing from — the standing obligation of
-`D_schema_complete_config` running the other way. There is no local escape: a
-project-local overlay or an `ENV` override is exactly what that decision
-forbids.
 
 **Consequence — the silent failure is the *server's* now, and it is the one the
 canary still watches.** The adapter's rot paths (a middleware reorder, a body
@@ -507,8 +493,7 @@ explicitly" argument no longer holds.
 **Context.** Two pressures arrived together.
 
 The schema was authored in pikuri-tui
-(`../pikuri-tui`, `Shared::Config`) and lands here by
-`D_schema_complete_config`'s standing obligation, not by our choice: every
+(`../pikuri-tui`, `Shared::Config`) and ported here: every
 `[[llm]]` used to repeat its whole connection, so four models on one provider
 meant the same URL and the same key written four times. The box and the model
 are now separate tables, joined by an `id`.
@@ -527,7 +512,7 @@ check, and `Agents::ModelCatalog#servers` (whose only caller was the boot loop) 
 delete.
 
 **Rejected: keeping `--turns` as an override on top of the file.** The
-precedence rule `D_schema_complete_config` exists to prevent, for a key the
+precedence rule `D_own_config_file` exists to prevent, for a key the
 file now has a home for.
 
 **Rejected: `Shared::RequestPermits` as a class here too.** pikuri-tui extracted
@@ -553,8 +538,8 @@ user reads it, not in a default that silently contradicts `/props`.
   `D_upstream_request_throttle` rejected *"dropping `--turns` and trusting
   auto-sizing alone"* on the `context_window` argument above — upstream's fix,
   not a change of our mind, is what retired it. And
-  `D_schema_complete_config`'s consequence that *"a first run against a stock
-  llama.cpp needs no file at all"* is gone: there is no built-in connection,
+  the old promise that *"a first run against a stock llama.cpp needs no file
+  at all"* is gone: there is no built-in connection,
   and `README.md`'s quick start now opens with the file to write.
 - **The default changed, not just the spelling.** `--turns` defaulted to 1 and
   the loop ran unconditionally, so *every* server was sized at 1. Omitting
@@ -923,7 +908,7 @@ same keep-the-`<details>` path, so a reader's clicks survive it.
 
 ## D_ui_cookie_over_config — Why may a `[ui]` cookie outrank the config file when nothing else may?
 
-**Context.** `D_schema_complete_config` states it flatly: "anything the
+**Context.** `D_own_config_file` states it flatly: "anything the
 file has a home for comes from the file and nowhere else — no flag, no
 `ENV`, no project-local overlay — so there is never a precedence rule
 between an override, the file and a conversation's saved model."
@@ -933,7 +918,7 @@ outranks it looks exactly like the thing that sentence forbids.
 **Decision.** The file supplies the **starting value**; a `/thinking`
 pick writes a cookie that outranks it from then on, per browser. The
 resolving distinction, and the reason this needed writing down rather
-than assuming: **`D_schema_complete_config` governs the server's
+than assuming: **`D_own_config_file` governs the server's
 configuration** — a connection, a key, a switch the agent runs on. A
 density preference is *view state*, which `AGENTS.md` already partitions
 to the browser ("each browser owns its own view state"). The file says
@@ -1297,7 +1282,7 @@ silent in {Web::SseListener}.
   fallback and the note would describe a deviation from nothing.
 - **`--server` / `--model` were removed ahead of this**, so there is no
   precedence rule between a flag, the file and a conversation's saved model.
-  See the amendment to `D_schema_complete_config`.
+  See `D_own_config_file`.
 - **The catalog is a constructor argument, not a second wiring** — one factory
   still means one tool set, so the boot trifecta report stays true of every
   agent.
@@ -2311,7 +2296,7 @@ almost exactly — cookie as the store, resolved server-side into a `:root`
 attribute so the first paint is right, app.js rewriting both in place, an
 unknown value falling back. The one place it *had* to differ: `thinking`'s
 fallback is a **config value** (`[ui] show_thinking`) rather than a
-constant, because that key exists in the shared config file and a shell
+constant, because that key exists in the config file and a shell
 that ignored it would be lying about honoring the file. So
 "presentational cookie" has two shapes — one with a default nobody can
 configure, one whose default the file owns — and the difference is
@@ -2415,111 +2400,83 @@ whatever it is, it is a decision rather than an accident of layout. This
 folder is also the reset: `rm -r` on it returns the shell to first-run
 state and touches nothing else.
 
-## D_schema_complete_config — Why one config file for every pikuri shell, carrying the whole schema?
+## D_own_config_file — Why does this shell read a config file of its own, carrying only what it reads?
 
-**Context.** A machine can run pikuri-tui and pikuri-webui side by side,
-and both want the same model connections and the same search-provider
-keys. The loader raises on an unknown top-level key.
+Reverses the shared `~/.config/pikuri/config.toml` this shell used to read beside pikuri-tui.
 
-**Decision.** {Config} reads the same layered
-`~/.config/pikuri/config.toml` as the TUI and carries the **whole**
-schema — `[code]`, `[[code.mcp]]` and all — even though this host wires
-none of it. It names no `Pikuri` constant and logs through
-`PikuriWebUI.logger`, staying on the Pikuri-free side of the seam
-(`D_pikuri_free_core`). Secrets (`[[llm]].api_key`, `[search]` provider
-keys) come from that file and from nowhere else; `--api-key-env` was
-dropped in the same change.
+**Context.** One file gave both shells one place for the connections and keys they both want,
+and cost a schema neither owned. Each loader raises on an unknown key, so each shell carried every
+table the other grew — `[code]`, `[[code.mcp]]` and pikuri-tui's `[ui]` keys here, `[web]` and
+`[titler]` there — and a key added on one side stopped the other from booting until a cross-repo
+sweep caught up. It happened in both directions: `[ui]` broke this shell, `[titler]` and `params`
+broke pikuri-tui. `[ui]` went lenient to survive it, and
+`tool_lines` could not be checked against the forms `style.css` renders, the vocabulary being the
+other shell's.
 
-**Rejected: trimming the schema to the sections this host reads.** It
-would make the file *reject* one the TUI wrote — the strict-key check
-turns every section we don't consume into a parse error, so the
-"one file, every shell" property is only bought by carrying sections we
-ignore.
+**Decision.** `$XDG_CONFIG_HOME/pikuri-webui/config.toml`, layered over
+`/etc/xdg/pikuri-webui/config.toml`, and nothing else. {Config} carries the tables this shell
+reads, strict throughout: an unknown key anywhere raises with its path, a table only pikuri-tui
+reads included, and `[ui] tool_lines` must name a form `style.css` can show. The folder is named
+after the project, not after the script as the state root is (`D_per_shell_state_root`): a config
+file has no saved data to strand, so it takes the name a user would guess.
 
-**Rejected: CLI flags, `ENV`, and a project-local file as secret
-sources.** A flag is visible in `ps` and in shell history; `ENV` is
-inherited by every subprocess pikuri spawns; a project-local file is
-git-committable. There is deliberately no `--api-key` flag and there
-should never be one.
+Kept from the shared file: anything the file has a home for comes from the file and nowhere
+else — no flag, no `ENV`, no project-local overlay — so there is never a precedence rule between
+an override, the file and a conversation's saved model. A flag is visible in `ps` and shell
+history, `ENV` is inherited by every subprocess pikuri spawns, and a project-local file is
+git-committable, so `--api-key`, `--api-key-env`, `--server`, `--model` and `--turns` stay gone.
+There is no built-in connection either: no `[[llm]]` raises with `EXAMPLE_CONFIG` and the path to
+write it to.
 
-**Amended: `--server` and `--model` dropped too, so a connection has
-exactly one source.** They overlaid the primary `[[llm]]`
-via `Config.apply_llm_overrides`, which meant a connection had two
-sources and a precedence rule between them — and the per-conversation
-model picker was about to add a third, saved one, turning the rule into
-a three-way question ("I booted `--model Z`, then opened an old
-conversation — what am I talking to?"). Removing the flags deletes the
-question rather than documenting it. Consequences: pointing the shell at
-a different server now requires writing `~/.config/pikuri/config.toml`,
-which is a handful of lines and a thing the user does once.
-`Config.load(overrides:)` survives for `:sandbox` / `:confirm`, which a
-sibling shell may wire (`D_chat_only_entry_point`).
+**Rejected: keeping the shared file and carrying the whole schema.** Its standing obligation — a
+config addition in pikuri-tui is a pikuri-webui change — is a procedure nothing enforces, and
+each time it was missed the symptom was a shell that would not start.
 
-**Amended: there is no zero-config case any more.** This entry used to
-close by noting that `Config.default_llm` covered the defaults, "so a first
-run against a stock llama.cpp needs no file at all". That built-in was a
-second, invisible connection source — the very thing dropping the flags was
-meant to end — and it went with the `[[server]]` port. No file, or a file
-with no `[[llm]]`, now raises with `EXAMPLE_CONFIG` and the path to write it
-to. See `D_max_concurrent_requests`.
+**Rejected: reading the old file as a fallback.** A second location is a second source, with a
+precedence rule between the two. The no-connection raise names `~/.config/pikuri/config.toml`
+when one is there instead: the raise is the migration, as it is for a pre-`[[server]]` file.
 
-**Rejected as an alternative to dropping them: keeping the flags and
-writing the precedence down** (saved wins on reopen; the flag is the
-default for new conversations). It costs no code, but it leaves a shell
-whose behaviour needs a paragraph to explain — complexity *plus*
-documentation of that complexity, where removal leaves neither.
+**Consequences.** A machine running both shells writes its connections and keys twice — the
+duplication the shared file existed to remove, accepted for two shells that now boot
+independently.
 
-**No longer a divergence from pikuri-tui.** This shell dropped the flags
-first, on the argument that a TUI invoked ad-hoc many times a day gets real
-value from one where a long-lived server does not. The TUI followed: none of
-its three bins takes `--server` / `--model` now, and the file is the single
-source in both projects.
+## D_base_path_mount — Why does `[web] base_path` mount the app, rather than trust a proxy to strip the prefix?
 
-**Amended: the schema drifted and broke boot, so strictness is now
-asymmetric.** pikuri-tui added a `[ui]` transcript-density table
-(`show_thinking`, `tool_lines`); `validate_top!` here still allowed only
-`llm` / `search` / `code`, so anyone who set a density preference in the
-TUI got `unknown top-level key(s): ui` and *could not start pikuri-webui at
-all*. Exactly the failure the "Rejected: trimming the schema" paragraph
-above forbids — carrying the whole schema is not a one-time act, it is a
-standing obligation to whatever the sibling shell adds next.
+**Context.** One HTTPS name on a tailnet serves several apps by path, `https://host/pikuri-webui/`,
+and `tailscale serve --set-path` strips the mount point before proxying unless the target names it
+again (`R_tailscale_serve_path`). Every URL the page carried was root-absolute, so the first click
+left the mount whichever way the proxy was set.
 
-The fix is not just `ui` in the allow-list, because the naive version
-re-breaks on the next key and the TUI's own `[ui]` rdoc already names it
-("the conversation pane's `markdown:` flag … the natural third entry").
-So validation now splits by *who owns the growth*:
+**Decision.** `base_path` is a context root: {Web::Mount} serves the app under it and only under
+it, moving the prefix from `PATH_INFO` into `SCRIPT_NAME`. The proxy sends the prefix on
+(`tailscale serve --set-path /pikuri-webui http://127.0.0.1:4567/pikuri-webui`), and the same URL
+works straight on the port. Every URL starts with the prefix, taken from whatever knows it:
 
-- **Tables this shell consumes** (`[[llm]]`, `[search]`) stay strict —
-  unknown keys raise. We own the meaning, so a typo is our error to
-  report.
-- **Inside a table we merely carry** (`[ui]`), an unknown key is logged
-  and ignored. The sibling shell defines the keys and will catch the
-  typo; raising here only breaks the shared file.
-- **A value whose vocabulary is not ours** (`tool_lines`) is
-  shape-checked and passed through unresolved, the way `search.engines`
-  already is. A copy of the form list here would reject a legal file the
-  day a third form ships. `Config#tool_lines`'s *reader* falls back on a
-  form it does not recognize — the pattern `Web::App` already uses for the
-  `theme` cookie.
+- markup and redirects through Sinatra's `url` / `to`, off `SCRIPT_NAME`;
+- script-built ones off `data-base`, which `app.js` reads once and hands each feature;
+- the image links {Web::SseListener} renders on a turn thread, where no request is there to ask,
+  off {Config#base_path};
+- cookie paths — the gate's off `SCRIPT_NAME`, the view preferences' off `data-base` — so a host
+  serving other apps beside this one never hands them ours;
+- the manifest, whose URLs are relative to itself. Its `id` is omitted: `"/"` resolves against the
+  origin and would claim the whole host, while the default, `start_url`, is the same `/` at the root.
 
-**Consequences.** Top-level strictness is deliberately *kept*: a brand-new
-pikuri-tui table still breaks boot here. Loosening it would silently
-swallow a typo'd `[serach]` along with the Brave key inside it, and a new
-top-level section is a visible feature event far likelier to prompt a
-cross-repo sweep than one more key in a table that already exists. So the
-standing obligation remains a **procedure**: a config-schema addition in
-pikuri-tui is a pikuri-webui change. The guard is the `cross-shell schema`
-describe in `spec/pikuri_webui/config_spec.rb` — the test that existed for
-this and missed it, now carrying the `[ui]` case; a pikuri upgrade should
-read pikuri-tui's `Shared::Config` allow-list against ours.
+A request outside the prefix is a plain-text 404 naming the fix — never a redirect to the prefix,
+which loops behind a proxy that strips it.
 
-The `markdown` key that rdoc names is the worked example of how little
-carrying costs: when the TUI ships it, it lands here as a *carried* key and
-nothing more, because this shell has no such flag at all — kramdown always
-runs on `:assistant` and `:thinking` prose. Schema-completeness obliges us
-to accept the file, never to grow the feature behind a key; that would be a
-decision of its own, and the toggle would be a `[ui]` cookie under
-`D_ui_cookie_over_config` before it were ever a config read.
+**Rejected: routing at `/` and treating `base_path` as the public prefix only** (the proxy strips,
+the app prepends). Every link a direct visit to the port renders would then point at a path the
+app does not answer, and which way a deployment works would hang on a proxy setting the app cannot
+see — Tailscale sends no `X-Forwarded-Prefix` to learn it from.
+
+**Rejected: accepting a request with or without the prefix.** One more mode to explain, and a
+prefix whose first segment is also a route's (`/c`, `/js`) becomes ambiguous.
+
+**Consequences.** A root-absolute URL works in development and breaks only behind the proxy, so
+`client_contract_spec.rb` fails any script URL, navigation or cookie path not built on `base`. A
+path is not an origin: cookies scoped by path stop the browser sending ours to a sibling app, but
+a script on a sibling path is same-origin with this page, and the gate and the CSP are all that
+stand between them.
 
 ## D_diagnostics_to_stderr — Why do diagnostics stay on stderr rather than reaching the browser?
 
@@ -2656,7 +2613,7 @@ occasionally means a small unwrapping that would be unnecessary if the
 event travelled whole. That cost is the decision, not an oversight.
 {Config} deliberately stays on the Pikuri-free side even though it is
 server-side, because its schema is the *file's*, not pikuri's
-(`D_schema_complete_config`) — the boundary licenses pikuri types where
+(`D_own_config_file`) — the boundary licenses pikuri types where
 they help, it does not require them.
 
 ## D_stream_blocks_once — Why send a streamed reply's finished blocks once, and only re-send its tail?
@@ -3011,21 +2968,15 @@ reaches, though the server-side half now also sits in one task), and
 
 **Context.** {Config} checked its TOML with hand-written `is_a?` tests and unknown-key lists,
 about 150 lines restating what the value objects' YARD tags already said — and pikuri-tui's
-`Shared::Config`, which reads the same file (`D_schema_complete_config`), had just moved off the
-same code.
+`Shared::Config` had just moved off the same code.
 
 **Decision.** Typemap maps the merged Hash onto `Data` classes shaped like the file (`Root`,
 `LlmTable`, `McpTable`, `BasicAuth`, `CodeTable`, `UiTable`, `TitlerTable`; `Server`, `Search`
 and `Credentials` as they were) and checks each value against its YARD type, read back from
 `sig/pikuri_webui.rbs`. A type is written once, in the doc comment; `constrain` adds the limits a
 type can't say — ranges, `not_blank:`, `not_empty:`, `unique_by:` — and a class's `validate`
-keeps only what no limit can, such as `[[code.mcp]]`'s stdio/HTTP exclusivity. The same classes and the same Typemap pin
-as pikuri-tui, so a schema change ports between the two by copying.
-
-**Kept from before: `[ui]` stays lenient.** Typemap's `unknown: :ignore` is per load, not per
-table, so {Config} drops the `[ui]` keys `UiTable` has no member for, with a log line, before
-mapping; and `tool_lines` is typed `String` with no `in:` list. Both for the reason
-`D_schema_complete_config` gives: pikuri-tui owns what grows there.
+keeps only what no limit can, such as `[web]`'s both-or-neither pair. A table both shells read is
+the same class under the same Typemap pin, so a schema change ports between the two by copying.
 
 **Rejected: `constrain type:` lines and no `rbs` at runtime.** Every type would be written twice,
 in YARD and in `constrain`, and the two would drift.

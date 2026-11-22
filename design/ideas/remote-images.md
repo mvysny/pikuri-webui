@@ -41,9 +41,8 @@ Our own attachments (`/c/:id/attachments/…`) are same-origin and unaffected by
   the CSP must still allow `https:`, so the protection lives in markup alone — and it is a new
   piece of client mechanics with its own per-block state, which a re-render or a snapshot
   would reset (`D_details_survive_rewrites` is the warning there).
-- **D. Host allowlist** (`[ui] image_hosts = ["upload.wikimedia.org"]`). A config key is a
-  pikuri-tui change too (`D_schema_complete_config`), and an allowlisted host that serves
-  user-controlled paths (most image hosts) is an open door again.
+- **D. Host allowlist** (`[ui] image_hosts = ["upload.wikimedia.org"]`). An allowlisted host
+  that serves user-controlled paths (most image hosts) is an open door again.
 - **E. Proxy through our server** (`/img?url=…`). Hides the reader's IP, but the URL — the
   payload — still reaches the attacker, and the server becomes a fetcher of arbitrary URLs.
   Listed to be rejected.

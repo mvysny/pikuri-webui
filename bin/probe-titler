@@ -7,7 +7,7 @@
 #   bin/probe-titler              # the eight openers
 #   bin/probe-titler --attacks    # and six attempts to talk it out of titling
 #
-# Reads ~/.config/pikuri/config.toml like the shell does, and drives
+# Reads ~/.config/pikuri-webui/config.toml like the shell does, and drives
 # pikuri-conversations' Pikuri::Conversations::Titler — the one the shell
 # titles with — rather than a private copy of it, so what
 # this reports is the shipped path, caps and </think> strip included, and it cannot

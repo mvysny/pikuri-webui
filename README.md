@@ -77,7 +77,7 @@ and its lock back before committing.
 ## Run
 
 There is no built-in connection, so start by writing
-`~/.config/pikuri/config.toml`:
+`~/.config/pikuri-webui/config.toml`:
 
 ```toml
 [[server]]
@@ -258,7 +258,7 @@ without wading through the rest.
 already on screen to match. Reasoning is never thrown away: folding it only
 folds it, and reopening a saved conversation gets it back either way.
 
-Which way they start also comes from the config file, shared with pikuri-tui:
+Which way they start also comes from the config file:
 
 ```toml
 [ui]
@@ -302,7 +302,7 @@ want the arguments exactly as the model wrote them. Both forms are always
 in the page, so the switch is instant and changes nothing on the server —
 the tab beside you keeps whichever form it was on.
 
-Which form you start on comes from the same shared config file:
+Which form you start on comes from the config file too:
 
 ```toml
 [ui]
@@ -509,10 +509,17 @@ normal.
 
 ## Configure
 
-Connections and API keys come from `~/.config/pikuri/config.toml` — the
-same file pikuri-tui reads, so one file configures every pikuri shell.
-There is no `--api-key` flag: a secret on the command line is visible in
-`ps` and shell history.
+Connections and API keys come from `~/.config/pikuri-webui/config.toml`,
+this shell's own file. There is no `--api-key` flag: a secret on the
+command line is visible in `ps` and shell history.
+
+> [!NOTE]
+> pikuri-webui used to share `~/.config/pikuri/config.toml` with
+> pikuri-tui. It no longer reads that file at all, and boot says so when it
+> finds one there and nothing here. Copy the tables this shell uses —
+> `[[server]]`, `[[llm]]`, `[search]`, `[titler]`, `[ui]`, `[web]` — into
+> the new file. Anything else (`[code]`, `[[code.mcp]]`) is pikuri-tui's,
+> and an unknown key is a boot error here.
 
 A `[[server]]` is a box; an `[[llm]]` is a model running on one, naming it
 by `id`. Splitting them means several models on one provider state its URL
@@ -562,7 +569,7 @@ engine whose key you did not set aborts at boot.
 literal key or password is group/other-readable. The first `[[llm]]` is the connection
 a conversation starts on when it has no saved one of its own; every other
 entry is a `/model` away. Layering runs
-`/etc/xdg/pikuri/config.toml` → `$XDG_CONFIG_HOME/pikuri/config.toml`.
+`/etc/xdg/pikuri-webui/config.toml` → `$XDG_CONFIG_HOME/pikuri-webui/config.toml`.
 `server` references resolve after that merge, so a user file can add one
 `[[llm]]` against a system file's `[[server]]` instead of re-pasting the
 block — but since arrays replace wholesale, a file that declares
@@ -623,7 +630,7 @@ for a password on every launch. The cookie is signed with the password
 itself, so changing the password in the file logs every browser out
 again.
 
-Both keys are required together; without the table there is no password
+Both keys are required together; without them there is no password
 at all (and no prompt), which is why binding off loopback without one
 prints a warning at boot and starts anyway — you may well have a reverse
 proxy in front doing this job already.
@@ -640,6 +647,38 @@ their own OS account.
 > that is usually an acceptable trade; anywhere else, put TLS in front of
 > it (a reverse proxy) or reach it over a private overlay such as
 > Tailscale or WireGuard.
+
+### Serving it under a path
+
+To share one HTTPS name with other apps — `https://host/pikuri-webui/` —
+give it a base path:
+
+```toml
+[web]
+base_path = "/pikuri-webui"
+```
+
+The shell then lives *only* under that path, on its own port as well:
+<http://localhost:4567/pikuri-webui/>, and every link, script, image and
+cookie it hands out stays under it. Anything outside the path is a 404
+saying where the shell is.
+
+The proxy in front has to pass the path through rather than strip it.
+`tailscale serve` strips it unless the target names it again, so repeat it
+there:
+
+```sh
+tailscale serve --bg --set-path /pikuri-webui http://127.0.0.1:4567/pikuri-webui
+```
+
+That keeps `--bind` on loopback, since Tailscale connects from the same
+machine. Anyone on your tailnet can reach the URL, though, so a `[web]`
+password still makes sense. Tailscale gives you HTTPS, so the password
+does not cross the network in the clear.
+
+A path is not an origin. The browser keeps this shell's cookies to its
+own path, but a page under another path on the same host is same-origin
+with this one and can script it. Only put apps you trust beside it.
 
 ## Layout
 

@@ -1,11 +1,11 @@
-# Research — Open WebUI
+# Research — Open WebUI, and what sits in front
 
 What the things we don't own actually do. About *them*, never us: a sentence starting "we chose"
 is a `D_`. `## R_<slug> — <title>`, one claim per bullet, one provenance marker per claim —
 **[docs]**, **[src]**, **[verified <date>, <version>]**, **[unverified]** (a hypothesis; a design
 built on it says so). A claim is earned by its provenance, or by having cost real work to find
-out. Checked against [Open WebUI](https://github.com/open-webui/open-webui) as documented in
-August 2026; a version-sensitive claim names what it was seen on. Cite by slug, `R_<slug>`, never
+out. The Open WebUI entries were checked against [Open WebUI](https://github.com/open-webui/open-webui)
+as documented in August 2026; a version-sensitive claim names what it was seen on. Cite by slug, `R_<slug>`, never
 by position; `grep '^## R_' design/research.md` is the index. The first entry is the ruler: every
 later one trims to its length — which is how long this file gets, so keep it short.
 
@@ -60,3 +60,15 @@ later one trims to its length — which is how long this file gets, so keep it s
 - [RAG](https://docs.openwebui.com/features/chat-conversations/rag/) injects retrieved document
   content into the message context with no provenance separation, so indirect injection rides in
   through the retrieval pipeline — the same leg the documents sit behind. **[docs]**
+
+## R_tailscale_serve_path — `tailscale serve --set-path` strips the mount point unless the target repeats it
+
+- A proxied request loses its mount point before it reaches the backend: `https://host/foo/bar`
+  arrives as `/bar` for target `http://127.0.0.1:4567` — `serveWebHandler`'s
+  `http.StripPrefix`, "Trim the mount point from the URL path before proxying. (#6571)".
+  **[src]** `ipn/ipnlocal/serve.go`, main, November 2026
+- A target carrying a path gets it joined back on, so target `http://127.0.0.1:4567/foo` receives
+  `/foo/bar`: the proxy's `Rewrite` calls Go's `httputil.ProxyRequest.SetURL`, which prefixes the
+  target's path. **[src]** for the call, **[docs]** for the join; **[unverified]** on a running node.
+- It sets `X-Forwarded-Host`, `X-Forwarded-For`, and `X-Forwarded-Proto: https` over TLS, passes
+  `Host` through, and sets no `X-Forwarded-Prefix`. **[src]**

@@ -36,11 +36,11 @@ require 'pikuri-pdf'
 require 'pikuri-web'
 require 'pikuri_webui'
 
-# Every flag here is one this shell alone owns and the config file has no
-# home for. Which model a conversation talks to is deliberately *not* among
-# them: connections come from [[llm]] in config.toml and from nowhere else,
-# and which one a given conversation is on is that conversation's own saved
-# state (`D_schema_complete_config`).
+# Every flag here is one the config file has no home for. Which model a
+# conversation talks to is deliberately *not* among them: connections come
+# from [[llm]] in config.toml and from nowhere else, and which one a given
+# conversation is on is that conversation's own saved state
+# (`D_own_config_file`).
 port = 4567
 bind = '127.0.0.1'
 dev = false
@@ -68,11 +68,11 @@ rescue OptionParser::InvalidOption, OptionParser::MissingArgument => e
   exit 2
 end
 
-# Load the layered config (XDG search path, shared with pikuri-tui) and
-# overlay the CLI flags. There is no --api-key flag: a key must never
-# travel on the command line (visible in ps / shell history) — it comes
-# only from the config file. Boot-time, before Puma binds, so a bad file
-# is a plain warn + exit rather than a server that serves a broken agent.
+# Load the layered config (~/.config/pikuri-webui/, this shell's own). There
+# is no --api-key flag: a key must never travel on the command line (visible
+# in ps / shell history) — it comes only from the config file. Boot-time,
+# before Puma binds, so a bad file is a plain warn + exit rather than a
+# server that serves a broken agent.
 begin
   config = PikuriWebUI::Config.load
   # Asked here rather than left to Search.build below, so an unusable
@@ -190,7 +190,8 @@ conversation_factory = lambda do |entry|
 
   transcript = PikuriWebUI::Web::Transcript.new(lock: big_app_lock)
   sse_listener = PikuriWebUI::Web::SseListener.new(
-    transcript: transcript, broadcaster: broadcaster, conversation: entry.id, lock: big_app_lock
+    transcript: transcript, broadcaster: broadcaster, conversation: entry.id, lock: big_app_lock,
+    base_path: config.base_path
   )
   token_log = Pikuri::Agent::Listener::TokenLog.new
 
@@ -279,13 +280,17 @@ end
 # the operator's eye already is, instead of scrolling past above it.
 gate_warning = nil
 
+# Used first, so it is the outermost layer: the gate behind it scopes its cookie
+# by the prefix this moves into SCRIPT_NAME (`D_base_path_mount`).
+PikuriWebUI::Web::App.use PikuriWebUI::Web::Mount, config.base_path unless config.base_path.empty?
+
 if config.credentials
   PikuriWebUI::Web::App.use PikuriWebUI::Web::Gate, config.credentials
 elsif !loopback.call(bind)
   gate_warning = <<~WARNING
     ⚠ WARNING: --bind #{bind} reaches past this machine and no password is set.
       Anyone who can reach #{bind}:#{port} can read, write and delete every
-      conversation. Put a gate in ~/.config/pikuri/config.toml:
+      conversation. Put a gate in ~/.config/pikuri-webui/config.toml:
 
           [web]
           user     = "you"
@@ -337,7 +342,7 @@ PikuriWebUI::Web::App.set :server, :puma
 
 PikuriWebUI::Web::App.run! do
   primary = catalog.primary
-  puts "pikuri-webui listening on http://#{bind}:#{port} " \
+  puts "pikuri-webui listening on http://#{bind}:#{port}#{config.base_path}/ " \
        "(default connection: #{primary.model} @ #{primary.server}; #{catalog.choices.size} configured)"
   warn gate_warning if gate_warning
 end

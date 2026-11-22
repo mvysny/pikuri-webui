@@ -3,7 +3,7 @@
  * starting a fresh conversation — plus the phone's drawer, which is how that
  * same list is reached under the 40rem breakpoint.
  *
- *     const conversations = initConversations({ conversation: viewing });
+ *     const conversations = initConversations({ base, conversation: viewing });
  *     es.addEventListener('conversations', conversations.refresh);
  *     initComposer({ commands: { '/new': conversations.start } });
  *
@@ -24,11 +24,13 @@
  * the `matchMedia` change listener — both are meant to live as long as the page.
  *
  * @param {object} opts
+ * @param {string} opts.base the path the shell is served under, `data-base` —
+ *   `"/pikuri-webui"`, or empty at the root; every URL here starts with it.
  * @param {string} opts.conversation the id this tab reads, which marks its own
  *   row and decides where a delete leaves the tab.
  * @returns {{refresh: () => Promise<void>, start: () => void}}
  */
-export const initConversations = ({ conversation }) => {
+export const initConversations = ({ base, conversation }) => {
   const sidebar = document.getElementById('sidebar');
   const chat = document.getElementById('chat');
   const openBtn = document.getElementById('drawer-open');
@@ -42,7 +44,7 @@ export const initConversations = ({ conversation }) => {
    * @returns {Promise<void>} resolves once the new rows are in the page.
    */
   const refresh = () =>
-    fetch(`/conversations?viewing=${encodeURIComponent(conversation)}`)
+    fetch(`${base}/conversations?viewing=${encodeURIComponent(conversation)}`)
       .then((r) => r.text())
       .then((html) => { sidebar.innerHTML = html; });
 
@@ -54,9 +56,9 @@ export const initConversations = ({ conversation }) => {
     const body = new FormData();
     // What the new conversation inherits its connection from.
     body.set('viewing', conversation);
-    fetch('/conversations', { method: 'POST', body })
+    fetch(`${base}/conversations`, { method: 'POST', body })
       .then((r) => (r.ok ? r.text() : Promise.reject(r.status)))
-      .then((id) => { location.href = `/c/${encodeURIComponent(id)}`; })
+      .then((id) => { location.href = `${base}/c/${encodeURIComponent(id)}`; })
       .catch(() => {});
   };
 
@@ -98,8 +100,8 @@ export const initConversations = ({ conversation }) => {
     if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
     fetch(e.target.action, { method: 'POST', redirect: 'manual' }).then(() => {
       // Deleting what this tab reads leaves it on a page that no longer exists;
-      // `/` picks the newest conversation left, or mints one.
-      if (row.querySelector('.conversation').classList.contains('current')) location.href = '/';
+      // The root picks the newest conversation left, or mints one.
+      if (row.querySelector('.conversation').classList.contains('current')) location.href = `${base}/`;
       else refresh();
     });
   });

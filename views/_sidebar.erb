@@ -16,7 +16,7 @@
 <ul class="conversations">
   <% conversations.each do |c| %>
   <li>
-    <a href="/c/<%= c[:id] %>"
+    <a href="<%= url("/c/#{c[:id]}", false) %>"
        class="conversation<%= ' current' if c[:current] %><%= ' unsupported' unless c[:supported] %>"
        aria-current="<%= c[:current] ? 'page' : 'false' %>"
        title="<%= c[:title] %>">
@@ -26,7 +26,7 @@
       <span class="conversation-busy" aria-label="a turn is running here" title="a turn is running here">●</span>
       <% end %>
     </a>
-    <form method="post" action="/conversations/<%= c[:id] %>/delete">
+    <form method="post" action="<%= url("/conversations/#{c[:id]}/delete", false) %>">
       <button type="submit" class="conversation-delete"
               aria-label="Delete the conversation <%= c[:title] %>"
               title="<%= c[:busy] ? 'a turn is running here' : 'Delete this conversation' %>"

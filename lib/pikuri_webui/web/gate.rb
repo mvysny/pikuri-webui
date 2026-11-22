@@ -22,7 +22,7 @@ module PikuriWebUI
     # Still a *gate*, not accounts: one pair for everyone, no server-side
     # session, no logout, no lockout (+D_one_password_gate+). There is
     # deliberately no disabled mode either — a config file with no +[web]+
-    # table never +use+s this at all.
+    # pair never +use+s this at all.
     #
     # == The cookie
     #
@@ -35,6 +35,10 @@ module PikuriWebUI
     # app in regular use never meets the expiry. +GET /events+ needs no special
     # case — the browser sends the cookie on every later request, the
     # EventSource included.
+    #
+    # Its +Path+ is the app's +SCRIPT_NAME+ — {Mount}'s prefix, when it runs
+    # outside this — so on a host serving other apps beside this one, the
+    # browser never hands this cookie to them.
     #
     # Thread-safe.
     class Gate
@@ -136,10 +140,11 @@ module PikuriWebUI
       # @return [Array(Integer, Hash, #each)] +response+ with a fresh cookie set.
       def with_cookie(response, env, now)
         status, headers, body = response
+        request = Rack::Request.new(env)
         Rack::Utils.set_cookie_header!(
           headers, COOKIE,
-          value: mint(now), path: '/', max_age: WINDOW, httponly: true, same_site: :lax,
-          secure: Rack::Request.new(env).ssl?
+          value: mint(now), path: request.script_name.empty? ? '/' : request.script_name, max_age: WINDOW,
+          httponly: true, same_site: :lax, secure: request.ssl?
         )
         [status, headers, body]
       end

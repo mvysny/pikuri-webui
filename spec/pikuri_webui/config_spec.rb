@@ -34,7 +34,7 @@ describe PikuriWebUI::Config do
 
   TOML
 
-  # Write config.toml under dir/pikuri/ (the XDG layout) and return its path,
+  # Write config.toml under dir/pikuri-webui/ (the XDG layout) and return its path,
   # prefixing MINIMAL unless the body brings its own connection — so an
   # example about [ui] or [search] states only the table it is about.
   def write_config(dir, body)
@@ -57,21 +57,20 @@ describe PikuriWebUI::Config do
     { 'XDG_CONFIG_HOME' => home, 'XDG_CONFIG_DIRS' => dirs }
   end
 
-  # Load a file that states nothing but a connection, with the given
-  # overrides — every other setting is then at its built-in default.
-  def load_bare(**overrides)
+  # Load a file that states nothing but a connection — every other setting is
+  # then at its built-in default.
+  def load_bare
     with_dirs do |home, _|
       write_config(home, '')
-      described_class.load(overrides: overrides, env: env_for(home))
+      described_class.load(env: env_for(home))
     end
   end
 
   describe 'defaults (a connection and nothing else)' do
-    it 'defaults the coding switches on and the mcp list empty' do
+    it 'serves at the root, ungated' do
       c = load_bare
-      assert c.sandbox
-      assert c.confirm
-      assert_empty c.mcp
+      assert_equal '', c.base_path
+      assert_nil c.credentials
     end
 
     it 'leaves both search provider keys nil, and the engine selection unset' do
@@ -88,38 +87,30 @@ describe PikuriWebUI::Config do
     it 'raises with the example config and the path to write it to' do
       err = assert_raises(described_class::Error) { described_class.load(env: env_for('/nonexistent')) }
       assert_includes err.message, 'no config file found'
-      assert_includes err.message, '/nonexistent/pikuri/config.toml'
+      assert_includes err.message, '/nonexistent/pikuri-webui/config.toml'
       assert_includes err.message, described_class::EXAMPLE_CONFIG
+      refute_includes err.message, 'pikuri-tui'
     end
 
     it 'raises the same way for a file that defines no [[llm]]' do
       with_dirs do |home, _|
-        write_exact_config(home, "[code]\nsandbox = false\n")
+        write_exact_config(home, "[ui]\nshow_thinking = false\n")
         err = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
         assert_includes err.message, 'no [[llm]] is defined'
         assert_includes err.message, described_class::EXAMPLE_CONFIG
       end
     end
-  end
 
-  describe 'CLI overrides (highest precedence)' do
-    it 'ignores connection keys — a server/model never comes from the command line' do
-      c = load_bare(server: 'http://host:9', model: 'm2')
-      assert_equal 'http://localhost:8080', c.primary_llm.server
-      assert_equal 'qwen', c.primary_llm.model
-    end
-
-    it 'treats false sandbox/confirm overrides as real values (not "absent")' do
-      c = load_bare(sandbox: false, confirm: false)
-      refute c.sandbox
-      refute c.confirm
-    end
-
-    it 'wins over a file value' do
+    # The first boot after the move: the connections are still sitting in the
+    # file this shell used to share, and nothing reads it any more.
+    it "names pikuri-tui's file when one is where this shell's used to be" do
       with_dirs do |home, _|
-        write_config(home, "[code]\nsandbox = true\n")
-        c = described_class.load(overrides: { sandbox: false }, env: env_for(home))
-        refute c.sandbox
+        tui = File.join(home, 'pikuri', 'config.toml')
+        FileUtils.mkdir_p(File.dirname(tui))
+        File.write(tui, MINIMAL)
+        err = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes err.message, "#{tui} is pikuri-tui's and is not read here"
+        assert_includes err.message, "Write #{home}/pikuri-webui/config.toml"
       end
     end
   end
@@ -212,92 +203,6 @@ describe PikuriWebUI::Config do
         assert_equal %w[local spare], c.servers.map(&:id)
         assert_nil c.servers[0].max_concurrent_requests
         assert_equal 2, c.servers[1].max_concurrent_requests
-      end
-    end
-
-    it 'builds stdio and http MCP servers' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [[code.mcp]]
-          id = "playwright"
-          command = ["docker", "run", "-i", "--rm", "mcp/playwright"]
-
-          [[code.mcp]]
-          id = "remote"
-          url = "https://mcp.example.com/v1"
-        TOML
-        c = described_class.load(env: env_for(home))
-        assert_equal 2, c.mcp.size
-        assert c.mcp[0].stdio?
-        assert_equal %w[docker run -i --rm mcp/playwright], c.mcp[0].command
-        assert c.mcp[1].http?
-        assert_equal 'https://mcp.example.com/v1', c.mcp[1].url
-        assert_empty c.mcp[0].headers
-        assert_empty c.mcp[1].headers
-        assert_empty c.mcp[0].env
-        assert_empty c.mcp[1].env
-      end
-    end
-
-    it 'reads an env table for a stdio MCP server' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [[code.mcp]]
-          id = "github"
-          command = ["github-mcp"]
-          [code.mcp.env]
-          GITHUB_TOKEN = "ghp-123"
-        TOML
-        c = described_class.load(env: env_for(home))
-        assert_equal({ 'GITHUB_TOKEN' => 'ghp-123' }, c.mcp[0].env)
-      end
-    end
-
-    it 'turns a bearer_token into an Authorization header' do
-      with_dirs do |home, _|
-        write_config(home, "[[code.mcp]]\nid = \"remote\"\nurl = \"https://x\"\nbearer_token = \"sk-123\"")
-        c = described_class.load(env: env_for(home))
-        assert_equal({ 'Authorization' => 'Bearer sk-123' }, c.mcp[0].headers)
-      end
-    end
-
-    it 'turns basic_auth into a base64 Authorization header' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [[code.mcp]]
-          id = "remote"
-          url = "https://x"
-          [code.mcp.basic_auth]
-          username = "user"
-          password = "pass"
-        TOML
-        c = described_class.load(env: env_for(home))
-        # base64("user:pass") == "dXNlcjpwYXNz"
-        assert_equal({ 'Authorization' => 'Basic dXNlcjpwYXNz' }, c.mcp[0].headers)
-      end
-    end
-
-    it 'merges custom headers alongside auth' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [[code.mcp]]
-          id = "remote"
-          url = "https://x"
-          bearer_token = "t"
-          [code.mcp.headers]
-          "X-Api-Key" = "abc"
-        TOML
-        c = described_class.load(env: env_for(home))
-        assert_equal({ 'X-Api-Key' => 'abc', 'Authorization' => 'Bearer t' }, c.mcp[0].headers)
-      end
-    end
-
-    it 'warns about loose perms when an MCP entry carries a secret' do
-      with_dirs do |home, _|
-        path = write_config(home, "[[code.mcp]]\nid = \"remote\"\nurl = \"https://x\"\nbearer_token = \"t\"")
-        File.chmod(0o644, path)
-        out = capture_log { described_class.load(env: env_for(home)) }
-        assert_includes out, 'chmod 600'
       end
     end
 
@@ -410,10 +315,10 @@ describe PikuriWebUI::Config do
     end
   end
 
-  # The [web] gate. Both keys or neither: a half-written table that quietly
-  # gated nothing is the one failure this feature cannot have, so every
-  # incomplete shape below raises rather than resolving to nil.
-  describe '[web] credentials' do
+  # How the port faces the network. The pair is both keys or neither: a
+  # half-written one that quietly gated nothing is the one failure the gate
+  # cannot have, so a lone half raises rather than resolving to nil.
+  describe '[web]' do
     def load_with(body)
       with_dirs do |home, _|
         write_config(home, body)
@@ -427,22 +332,38 @@ describe PikuriWebUI::Config do
       assert_equal 'a long passphrase', c.credentials.password
     end
 
-    it 'leaves credentials nil when no [web] names one — the gate off, never a default password' do
-      assert_nil load_bare.credentials
+    it 'leaves credentials nil when [web] names no pair — the gate off, never a default password' do
+      c = load_with("[web]\nbase_path = \"/pikuri-webui\"\n")
+      assert_nil c.credentials
+      assert_equal '/pikuri-webui', c.base_path
     end
 
-    it 'rejects a [web] table missing either half' do
-      { "[web]\nuser = \"mavi\"\n" => 'web.password: required',
-        "[web]\npassword = \"a long passphrase\"\n" => 'web.user: required',
-        "[web]\n" => 'web.user: required' }.each do |body, message|
+    it 'rejects a pair missing either half' do
+      ["[web]\nuser = \"mavi\"\n", "[web]\npassword = \"a long passphrase\"\n"].each do |body|
         e = assert_raises(described_class::Error) { load_with(body) }
-        assert_includes e.message, message
+        assert_includes e.message, 'set `user` and `password` together, or neither'
       end
     end
 
     it 'rejects a blank password' do
       e = assert_raises(described_class::Error) { load_with("[web]\nuser = \"mavi\"\npassword = \"  \"\n") }
       assert_includes e.message, 'web.password: must not be blank'
+    end
+
+    it 'drops a trailing slash, so "/" is the root' do
+      assert_equal '/pikuri-webui', load_with("[web]\nbase_path = \"/pikuri-webui/\"\n").base_path
+      assert_equal '/a/b', load_with("[web]\nbase_path = \"/a/b\"\n").base_path
+      assert_equal '', load_with("[web]\nbase_path = \"/\"\n").base_path
+    end
+
+    # It is written into a cookie's Path and into every URL the page builds,
+    # so nothing in it may need escaping in any of them.
+    it 'rejects a base_path that is not a plain absolute path' do
+      ['pikuri-webui', '', '//x', '/a//b', '/a/../b', '/.', '/a b', '/a;b', '/a?b', '/%41'].each do |path|
+        e = assert_raises(described_class::Error, path) { load_with("[web]\nbase_path = #{path.inspect}\n") }
+        assert_includes e.message, '`base_path` must be an absolute path such as "/pikuri-webui"'
+        assert_includes e.message, "got #{path.inspect}"
+      end
     end
 
     it 'rejects an unknown [web] key' do
@@ -454,27 +375,85 @@ describe PikuriWebUI::Config do
 
     it 'rejects web written as an array of tables' do
       e = assert_raises(described_class::Error) { load_with("[[web]]\nuser = \"m\"\npassword = \"p\"\n") }
-      assert_includes e.message, 'web: expected Credentials, got an array of one Credentials; write [web], not [[web]]'
+      assert_includes e.message, 'web: expected WebTable, got an array of one WebTable; write [web], not [[web]]'
+    end
+  end
+
+  describe '[ui]' do
+    it 'reads both starting values' do
+      with_dirs do |home, _|
+        write_config(home, <<~TOML)
+          [ui]
+          show_thinking = false
+          tool_lines = "verbose"
+        TOML
+        c = described_class.load(env: env_for(home))
+        refute c.show_thinking
+        assert_equal :verbose, c.tool_lines
+      end
+    end
+
+    it 'defaults both keys when the table is absent' do
+      c = load_bare
+      assert c.show_thinking
+      assert_equal :short, c.tool_lines
+    end
+
+    # Each form App checks a cookie against has to load from the file too, or
+    # a `/toollines` pick could name a form the file cannot.
+    it 'accepts every form App renders' do
+      PikuriWebUI::Web::App::TOOL_LINES.each do |form|
+        with_dirs do |home, _|
+          write_config(home, "[ui]\ntool_lines = #{form.inspect}\n")
+          assert_equal form.to_sym, described_class.load(env: env_for(home)).tool_lines
+        end
+      end
+    end
+
+    it 'rejects a tool_lines form nothing renders' do
+      with_dirs do |home, _|
+        write_config(home, "[ui]\ntool_lines = \"banana\"\n")
+        e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes e.message, 'ui.tool_lines: must be one of "short", "verbose", got "banana"'
+      end
+    end
+
+    it 'rejects a [ui] key this shell does not read' do
+      with_dirs do |home, _|
+        write_config(home, "[ui]\nshow_thinking = false\nmarkdown = false\n")
+        e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+        assert_includes e.message, 'ui.markdown: unknown key'
+      end
+    end
+  end
+
+  # pikuri-tui keeps its own file now, so a table only it reads is a typo here
+  # like any other unknown key.
+  it 'rejects the [code] table pikuri-tui reads' do
+    with_dirs do |home, _|
+      write_config(home, "[code]\nsandbox = false\n")
+      e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
+      assert_includes e.message, 'code: unknown key'
     end
   end
 
   describe 'layering (XDG_CONFIG_DIRS < XDG_CONFIG_HOME)' do
-    it 'deep-merges tables so a higher layer adding mcp keeps the lower layer sandbox' do
+    it 'deep-merges tables so a higher layer adding a key keeps the lower layer\'s' do
       with_dirs do |home, sys|
-        write_config(sys, "[code]\nsandbox = false\n") # lower priority
-        write_config(home, "[[code.mcp]]\nid = \"x\"\nurl = \"u\"\n") # higher priority
+        write_config(sys, "[web]\nbase_path = \"/pikuri-webui\"\n") # lower priority
+        write_config(home, "[web]\nuser = \"mavi\"\npassword = \"p\"\n") # higher priority
         c = described_class.load(env: env_for(home, dirs: sys))
-        refute c.sandbox            # survives from the system file
-        assert_equal 1, c.mcp.size  # added by the user file
+        assert_equal '/pikuri-webui', c.base_path # survives from the system file
+        assert_equal 'mavi', c.credentials.user # added by the user file
       end
     end
 
     it 'lets the higher layer override a scalar from the lower layer' do
       with_dirs do |home, sys|
-        write_config(sys, "[code]\nconfirm = true\n")
-        write_config(home, "[code]\nconfirm = false\n")
+        write_config(sys, "[ui]\nshow_thinking = true\n")
+        write_config(home, "[ui]\nshow_thinking = false\n")
         c = described_class.load(env: env_for(home, dirs: sys))
-        refute c.confirm
+        refute c.show_thinking
       end
     end
 
@@ -489,73 +468,10 @@ describe PikuriWebUI::Config do
     end
   end
 
-  describe 'cross-shell schema' do
-    it 'accepts a file carrying the sections only pikuri-tui reads' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [code]
-          sandbox = false
-
-          [[code.mcp]]
-          id = "gh"
-          url = "https://mcp.example.com"
-        TOML
-        c = described_class.load(env: env_for(home))
-        assert_equal 'Local', c.primary_llm.name
-        refute c.sandbox
-        assert_equal 1, c.mcp.size
-      end
-    end
-
-    # The regression this describe existed for and missed: pikuri-tui grew a
-    # [ui] table, this shell raised on the unknown top-level key, and anyone
-    # who had set a density preference in the TUI could not boot the web shell
-    # at all.
-    it 'reads the [ui] density table pikuri-tui writes' do
-      with_dirs do |home, _|
-        write_config(home, <<~TOML)
-          [ui]
-          show_thinking = false
-          tool_lines = "verbose"
-        TOML
-        c = described_class.load(env: env_for(home))
-        refute c.show_thinking
-        assert_equal :verbose, c.tool_lines
-      end
-    end
-
-    it 'defaults the [ui] keys when the table is absent' do
-      c = load_bare
-      assert c.show_thinking
-      assert_equal :short, c.tool_lines
-    end
-
-    # Permissive on purpose: pikuri-tui owns what grows in [ui] and its own
-    # rdoc already names `markdown` as the next key. Raising here would be the
-    # same boot failure with a later date.
-    it 'ignores a [ui] key this shell does not read' do
-      with_dirs do |home, _|
-        write_config(home, "[ui]\nshow_thinking = false\nmarkdown = false\n")
-        c = described_class.load(env: env_for(home))
-        refute c.show_thinking
-      end
-    end
-
-    # Shape-checked, never matched against a copy of the vocabulary — a copy
-    # would reject a legal file the day pikuri-tui adds a third form. The
-    # reader falls back instead, as App does for an unknown `theme` cookie.
-    it 'carries an unrecognized tool_lines form through to its reader' do
-      with_dirs do |home, _|
-        write_config(home, "[ui]\ntool_lines = \"banana\"\n")
-        assert_equal :banana, described_class.load(env: env_for(home)).tool_lines
-      end
-    end
-  end
-
   describe 'load logging (PikuriWebUI.logger)' do
     it 'logs each config file it reads, in load order' do
       with_dirs do |home, sys|
-        sys_path  = write_exact_config(sys, "[code]\nsandbox = false\n")
+        sys_path  = write_exact_config(sys, "[ui]\nshow_thinking = false\n")
         home_path = write_config(home, '')
         out = capture_log { described_class.load(env: env_for(home, dirs: sys)) }
         assert_includes out, "loaded #{sys_path}"
@@ -625,48 +541,6 @@ describe PikuriWebUI::Config do
       end
     end
 
-    it 'rejects env on an HTTP MCP server' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\nurl = \"u\"\nenv = { A = \"b\" }")
-      assert_includes e.message, 'stdio servers'
-    end
-
-    it 'rejects a non-string env value' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\ncommand = [\"a\"]\nenv = { A = 1 }")
-      assert_includes e.message, 'code.mcp[0] "x".env.A: expected String, got 1; quote it to make it a string'
-    end
-
-    it 'rejects auth/headers keys on a stdio MCP server' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\ncommand = [\"a\"]\nbearer_token = \"t\"")
-      assert_includes e.message, 'HTTP servers'
-    end
-
-    it 'rejects both bearer_token and basic_auth on one server' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\nurl = \"u\"\nbearer_token = \"t\"\n" \
-                       "[code.mcp.basic_auth]\nusername = \"u\"\npassword = \"p\"")
-      assert_includes e.message, 'at most one'
-    end
-
-    it 'rejects a bearer_token that also sets Authorization via headers' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\nurl = \"u\"\nbearer_token = \"t\"\n" \
-                       "[code.mcp.headers]\nAuthorization = \"Bearer other\"")
-      assert_includes e.message, 'conflicts'
-    end
-
-    it 'rejects basic_auth without a username' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\nurl = \"u\"\n[code.mcp.basic_auth]\npassword = \"p\"")
-      assert_includes e.message, 'username'
-    end
-
-    it 'rejects an MCP entry with both command and url' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"\ncommand = [\"a\"]\nurl = \"u\"")
-      assert_includes e.message, 'exactly one'
-    end
-
-    it 'rejects an MCP entry with neither command nor url' do
-      e = expect_error("[[code.mcp]]\nid = \"x\"")
-      assert_includes e.message, 'exactly one'
-    end
-
     # MINIMAL ends inside its [[llm]] table, so appending a line adds a key to
     # that entry — an example about one key states only that key.
     def expect_llm_error(line) = expect_error(MINIMAL + line)
@@ -694,11 +568,6 @@ describe PikuriWebUI::Config do
     it 'rejects duplicate server ids' do
       e = expect_error("#{MINIMAL}\n[[server]]\nid = \"local\"\nurl = \"http://other\"\n")
       assert_includes e.message, 'server[1] "local".id: duplicate of server[0], both "local"'
-    end
-
-    it 'rejects duplicate mcp ids' do
-      e = expect_error("[[code.mcp]]\nid = \"a\"\nurl = \"u\"\n[[code.mcp]]\nid = \"a\"\nurl = \"u2\"")
-      assert_includes e.message, 'code.mcp[1] "a".id: duplicate of code.mcp[0], both "a"'
     end
 
     # After MINIMAL, not before it: a bare key written below a [[llm]] table
@@ -752,24 +621,6 @@ describe PikuriWebUI::Config do
         e = assert_raises(described_class::Error) { described_class.load(env: env_for(home)) }
         assert_includes e.message, 'llm: expected Array[LlmTable], got a single LlmTable; write [[llm]], not [llm]'
       end
-    end
-
-    it 'rejects [[code.mcp]] written as a plain table' do
-      e = expect_error("[code.mcp]\nid = \"a\"\nurl = \"u\"")
-      assert_includes e.message, 'code.mcp: expected Array[McpTable], got a single McpTable; ' \
-                                 'write [[code.mcp]], not [code.mcp]'
-    end
-
-    # The permissions check reads the raw TOML before the schema does, so it
-    # must not assume a table's shape either.
-    it 'rejects [code] written as an array of tables' do
-      e = expect_error("[[code]]\nsandbox = false")
-      assert_includes e.message, 'code: expected CodeTable, got an array of one CodeTable; write [code], not [[code]]'
-    end
-
-    it 'rejects a non-boolean sandbox' do
-      e = expect_error("[code]\nsandbox = \"yes\"")
-      assert_includes e.message, 'code.sandbox: expected bool, got "yes"'
     end
 
     it 'rejects a non-boolean ui.show_thinking' do

@@ -35,8 +35,13 @@
      names, so a flip is a single attribute write and no block re-renders;
      there is no JS behind it beyond that write. See design/decisions.md
      D_both_forms_in_the_block. -->
+<!-- `data-base` is the path the shell is served under ([web] base_path) —
+     "/pikuri-webui", or empty at the root. Every URL the scripts build starts
+     with it, as every URL below does via `url`: one page, whatever path a
+     proxy mounts it at (D_base_path_mount). -->
 <html lang="en" data-theme="<%= theme %>" data-thinking="<%= thinking %>"
-      data-tools="<%= tools %>" data-conversation="<%= conversation %>">
+      data-tools="<%= tools %>" data-conversation="<%= conversation %>"
+      data-base="<%= request.script_name %>">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
@@ -51,14 +56,14 @@
        `theme-color` is rendered per theme rather than left to the manifest, so
        iOS's status bar matches the palette the cookie actually resolved to;
        the manifest's own value can only ever be the dark default. -->
-  <link rel="icon" href="/images/favicon.svg" type="image/svg+xml">
-  <link rel="icon" href="/images/icon-32.png" sizes="32x32" type="image/png">
-  <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
-  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="<%= url('/images/favicon.svg', false) %>" type="image/svg+xml">
+  <link rel="icon" href="<%= url('/images/icon-32.png', false) %>" sizes="32x32" type="image/png">
+  <link rel="apple-touch-icon" href="<%= url('/images/apple-touch-icon.png', false) %>">
+  <link rel="manifest" href="<%= url('/manifest.webmanifest', false) %>">
   <meta name="theme-color" content="<%= theme == 'light' ? '#fbfbfa' : '#1e1f22' %>">
   <meta name="apple-mobile-web-app-title" content="pikuri">
 
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="<%= url('/style.css', false) %>">
 </head>
 <body>
   <!-- The conversation column, and the phone's drawer. The chrome sits *around*
@@ -268,6 +273,6 @@
   <!-- A module, so app.js, composer.js and dom.js each get their own scope and
        no neighbour can quietly become a bag of globals. No build step is
        involved: the browser resolves the imports itself. -->
-  <script type="module" src="/js/app.js"></script>
+  <script type="module" src="<%= url('/js/app.js', false) %>"></script>
 </body>
 </html>

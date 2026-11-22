@@ -71,12 +71,16 @@ module PikuriWebUI
       #   everyone, which is what a throwaway listener rendering a snapshot
       #   wants — it has no subscribers at all
       # @param lock [BigAppLock] the domain each store-and-broadcast enters
-      def initialize(transcript:, broadcaster:, lock:, conversation: nil)
+      # @param base_path [String] {Config#base_path}, which every image URL
+      #   starts with; a block is rendered on a turn thread, with no request
+      #   whose +SCRIPT_NAME+ could say it
+      def initialize(transcript:, broadcaster:, lock:, conversation: nil, base_path: '')
         super()
         @transcript = transcript
         @broadcaster = broadcaster
         @lock = lock
         @conversation = conversation
+        @base_path = base_path
         @assistant = nil
         @thinking = nil
         @thinking_streamed = false
@@ -195,7 +199,8 @@ module PikuriWebUI
 
         links = attachments.map do |attachment|
           url = Util::MarkdownRenderer.escape(
-            "/c/#{ERB::Util.url_encode(@conversation)}/attachments/#{ERB::Util.url_encode(Pikuri::Conversations::HistoryFile.stored_name(attachment))}"
+            "#{@base_path}/c/#{ERB::Util.url_encode(@conversation)}/attachments/" \
+            "#{ERB::Util.url_encode(Pikuri::Conversations::HistoryFile.stored_name(attachment))}"
           )
           name = Util::MarkdownRenderer.escape(Pikuri::Sanitizer.sanitize(attachment.filename.to_s).text)
           %(<a href="#{url}" target="_blank" rel="noopener" title="#{name}">) +

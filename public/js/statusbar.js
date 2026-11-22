@@ -7,7 +7,7 @@
  *
  * and is driven frame by frame from the server:
  *
- *     const statusbar = initStatusBar({ conversation: viewing });
+ *     const statusbar = initStatusBar({ base, conversation: viewing });
  *     es.addEventListener('status', (e) => statusbar.update(JSON.parse(e.data)));
  *
  * The bar is also where the *intended* connection is kept: the two model spans
@@ -24,12 +24,14 @@
  * Call once.
  *
  * @param {object} opts
+ * @param {string} opts.base the path the shell is served under, `data-base` —
+ *   `"/pikuri-webui"`, or empty at the root; every URL here starts with it.
  * @param {string} opts.conversation the id a cancel is addressed to.
  * @returns {{update: (frame: object) => void, say: (text: string) => void,
  *   intendedModel: () => string, missingModel: () => string}} the handle the
  *   page's SSE fan-out and its /model dialog drive the bar through.
  */
-export const initStatusBar = ({ conversation }) => {
+export const initStatusBar = ({ base, conversation }) => {
   const state = document.getElementById('status-state');
   const pending = document.getElementById('status-pending');
   const model = document.getElementById('status-model');
@@ -41,7 +43,7 @@ export const initStatusBar = ({ conversation }) => {
   cancelBtn.addEventListener('click', () => {
     const body = new FormData();
     body.set('conversation', conversation);
-    fetch('/cancel', { method: 'POST', body });
+    fetch(`${base}/cancel`, { method: 'POST', body });
   });
 
   return {

@@ -52,12 +52,24 @@ RSpec.describe 'the client/server contract' do
   # Both the fetches and the EventSource: a route this shell no longer answers
   # is the same bug whichever verb reaches for it.
   it 'calls only routes the app answers' do
-    paths = client_js.scan(/(?:fetch|new EventSource)\(\s*['"`](\/[^'"`?${]*)/).flatten.uniq
+    paths = client_js.scan(%r{(?:fetch|new EventSource)\(\s*`\$\{base\}(/[^`?$]*)}).flatten.uniq
     refute_empty paths, 'the route scan found nothing — the client changed shape, fix the pattern'
 
     patterns = PikuriWebUI::Web::App.routes.values.flatten(1).map(&:first)
     missing = paths.reject { |path| patterns.any? { |pattern| pattern.match(path) } }
     assert_equal [], missing, "the client calls #{missing.join(', ')}; App has no route matching"
+  end
+
+  # A root-absolute URL works at the root and leaves the mount under a
+  # [web] base_path, so the breakage shows only once deployed behind a proxy
+  # (D_base_path_mount). The fetch above, a navigation and a cookie's path all
+  # count; a delete form's own +action+ is the server's and already carries it.
+  it 'builds every URL on the base path index.erb renders' do
+    bare = client_js.scan(%r{(?:fetch\(|EventSource\(|location\.href\s*=\s*|path=)\s*['"`]?/}).uniq
+    assert_equal [], bare, 'the client builds a URL that ignores data-base'
+
+    assert_includes index_erb, 'data-base="<%= request.script_name %>"'
+    assert_includes client_js, 'document.documentElement.dataset.base'
   end
 
   it 'queries only classes the templates render' do

@@ -141,8 +141,7 @@ RSpec.describe PikuriWebUI::Web::App do
   let(:registry) { FakeRegistry.new([live], lock: lock) }
   # What `[ui] show_thinking` resolved to at boot; the config default.
   let(:show_thinking) { true }
-  # Ditto `[ui] tool_lines`, which unlike show_thinking is not validated
-  # against this shell's vocabulary — so a nonsense value has to reach here.
+  # Ditto `[ui] tool_lines`.
   let(:tool_lines) { :short }
   # Only the image examples reach it; they bring a real one on a temp root.
   let(:store) { nil }
@@ -182,6 +181,42 @@ RSpec.describe PikuriWebUI::Web::App do
       get '/'
       assert_equal 303, last_response.status
       assert_equal 1, registry.created
+    end
+  end
+
+  # What Web::Mount hands the app under a [web] base_path: the prefix in
+  # SCRIPT_NAME, the rest in PATH_INFO. Every URL the page carries has to start
+  # with it, or the first click leaves the mount.
+  context 'mounted under a base path' do
+    let(:mounted) { { 'SCRIPT_NAME' => '/pikuri-webui' } }
+
+    it 'redirects / to the newest conversation under the prefix' do
+      get '/', {}, mounted
+      assert_equal "http://example.org/pikuri-webui/c/#{live.id}", last_response.headers['Location']
+    end
+
+    it 'renders every link, asset and the base the scripts build on under the prefix' do
+      get "/c/#{live.id}", {}, mounted
+      body = last_response.body
+
+      assert_includes body, 'data-base="/pikuri-webui"'
+      assert_includes body, 'href="/pikuri-webui/style.css"'
+      assert_includes body, 'src="/pikuri-webui/js/app.js"'
+      assert_includes body, 'href="/pikuri-webui/manifest.webmanifest"'
+      assert_includes body, %(href="/pikuri-webui/c/#{live.id}")
+      assert_includes body, %(action="/pikuri-webui/conversations/#{live.id}/delete")
+      refute_match %r{(?:href|src|action)="/(?!pikuri-webui/)}, body
+    end
+
+    it 'renders the sidebar on its own under the prefix too' do
+      get "/conversations?viewing=#{live.id}", {}, mounted
+      assert_includes last_response.body, %(href="/pikuri-webui/c/#{live.id}")
+    end
+
+    it 'leaves data-base empty at the root' do
+      visit_live
+      assert_includes last_response.body, 'data-base=""'
+      assert_includes last_response.body, 'href="/style.css"'
     end
   end
 
@@ -438,18 +473,6 @@ RSpec.describe PikuriWebUI::Web::App do
         set_cookie 'tools=terse'
         visit_live
         assert_includes last_response.body, 'data-tools="short"'
-      end
-
-      # `Config` checks this key's shape and not its vocabulary
-      # on purpose, so the reader is the only thing between a typo in the
-      # shared config file and an unstyled page showing both forms at once.
-      context 'when the config file named a form this shell cannot render' do
-        let(:tool_lines) { :terse }
-
-        it 'falls back to short rather than rendering it' do
-          visit_live
-          assert_includes last_response.body, 'data-tools="short"'
-        end
       end
 
       it 'offers both forms in the picker the command opens' do

@@ -121,8 +121,12 @@ Every fact lives in exactly one of these; the others link to it.
   accounts, single-user for good, and `--bind` defaults to 127.0.0.1. See
   `D_conversation_owns_agent`, `D_single_shared_conversation`.
 - **One `[web]` password gates the port as middleware around everything**, and it is a gate,
-  not accounts — no `[web]` means no middleware at all; never a `--password` flag (visible in
-  `ps`), never a default password. See `D_one_password_gate`.
+  not accounts — no `[web]` pair means no middleware at all; never a `--password` flag
+  (visible in `ps`), never a default password. See `D_one_password_gate`.
+- **`[web] base_path` is a context root: {Web::Mount} serves the app under it and only under
+  it** — never trusting a proxy to strip it, never redirecting into it. Every URL and cookie
+  path starts with it: `url` in markup, `data-base` in scripts, {Config#base_path} where no
+  request exists. See `D_base_path_mount`.
 - **The cookie a passed prompt mints is signed with the configured password itself, never
   stored**, so a changed password invalidates every outstanding one. See `D_gate_cookie`.
 - **Reasoning is collapsible per block and never hidden** — `<details>` is `:thinking`'s
@@ -144,11 +148,10 @@ Every fact lives in exactly one of these; the others link to it.
   the plate colour in `bin/regen-icons`, and `index.erb`'s `theme-color`, which the browser
   reads before any stylesheet. Argue for a third; don't assume it. See `D_theme_cookie`,
   `D_icon_plate`.
-- **One config file for every pikuri shell, and a connection has exactly one source.**
-  {Config} carries the *whole* schema including sections this host never reads; no flag, no
-  `ENV`, no project-local overlay, so there is never a precedence rule. Schema-completeness
-  is a *standing* obligation: a config addition in pikuri-tui is a pikuri-webui change. See
-  `D_schema_complete_config`.
+- **Its own config file, `~/.config/pikuri-webui/config.toml`, and a connection has exactly
+  one source.** {Config} carries only what this shell reads, strict throughout — pikuri-tui
+  keeps its own file; no flag, no `ENV`, no project-local overlay, no fallback to the old
+  shared file, so there is never a precedence rule. See `D_own_config_file`.
 - **A `[ui]` view preference is the one thing the file does not own outright** — it sets the
   starting value and a per-browser cookie outranks it. See `D_ui_cookie_over_config`.
 - **An `[[llm]]`'s `params` reaches the server verbatim** — never a `thinking = false`
@@ -183,11 +186,11 @@ file carries its own admission rule.
   replayed.
 - `lib/pikuri_webui/util/` — {Util}: knows nothing about this app, and the admission test is
   meant to fail things.
-- `lib/pikuri_webui/{config,big_app_lock,version}.rb` — the root: {Config} (the whole shared
+- `lib/pikuri_webui/{config,big_app_lock,version}.rb` — the root: {Config} (this shell's
   TOML schema, Pikuri-free), {BigAppLock} (the serialization domain), `VERSION`.
 - `bin/pikuri-webui-chat` — boot: config, catalog, permit sizing, the tool wiring, the live
-  list, the one conversation factory, the domain, the trifecta report, the gate, Puma and its
-  shutdown hook.
+  list, the one conversation factory, the domain, the trifecta report, the mount and the gate,
+  Puma and its shutdown hook.
 - `bin/probe-titler`, `bin/regen-icons` — maintainer tools, run by hand; each holds what it
   generates (the title corpus; the icon sizes and plate colour).
 - `views/index.erb`, `views/_sidebar.erb` — the page shell (both layouts, `#slash-menu`, the
@@ -259,7 +262,7 @@ what `Gemfile.lock` pins; no sibling checkout is needed. To edit them together, 
 - `design/verify_design_tripwires.sh` — the doc tripwires alone (`rake design_tripwires`),
   also a CI job of its own.
 - `bin/pikuri-webui-chat [--port N] [--bind ADDR] [--dev]` — the shell itself, on
-  <http://localhost:4567>; needs `~/.config/pikuri/config.toml` with at least one `[[llm]]`.
+  <http://localhost:4567>; needs `~/.config/pikuri-webui/config.toml` with at least one `[[llm]]`.
 
 ## Skills this project follows
 

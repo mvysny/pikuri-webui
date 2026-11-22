@@ -74,8 +74,8 @@ module PikuriWebUI
       # Whether reasoning blocks start open, carried by the `thinking` cookie
       # and user-editable like `theme`, so an unknown value falls back. Unlike
       # the theme it falls back to a *configured* value, not a constant —
-      # `[ui] show_thinking` is the shared config file's say in what a browser
-      # with no preference of its own sees (`D_ui_cookie_over_config`).
+      # `[ui] show_thinking` is the config file's say in what a browser with no
+      # preference of its own sees (`D_ui_cookie_over_config`).
       #
       # @return [Array<String>]
       THINKING = %w[expanded collapsed].freeze
@@ -87,10 +87,8 @@ module PikuriWebUI
 
       # The two tool-line forms style.css can show, carried by the `tools`
       # cookie — every block ships both and CSS picks
-      # (`D_both_forms_in_the_block`). Same shape as {THINKING}, one wrinkle
-      # deeper: `show_thinking` is a boolean and cannot be nonsense, while
-      # `[ui] tool_lines` is validated for shape and not for vocabulary, so it
-      # can name a form nothing here renders. Hence {#default_tool_lines}.
+      # (`D_both_forms_in_the_block`). Same shape as {THINKING}; {Config} holds
+      # `[ui] tool_lines` to the same pair, so its value needs no fallback.
       #
       # @return [Array<String>]
       TOOL_LINES = %w[short verbose].freeze
@@ -185,7 +183,7 @@ module PikuriWebUI
           blocks: disclosed(snapshot[:blocks], thinking),
           theme: THEMES.include?(cookie) ? cookie : DEFAULT_THEME,
           thinking: thinking,
-          tools: TOOL_LINES.include?(tools) ? tools : default_tool_lines,
+          tools: TOOL_LINES.include?(tools) ? tools : settings.tool_lines.to_s,
           commands: SlashCommand.catalog(connections: settings.models.size),
           models: settings.models
         )
@@ -378,14 +376,6 @@ module PikuriWebUI
         return blocks if thinking == 'expanded'
 
         blocks.map { |block| block.with(html: Disclosure.collapse(block.html)) }
-      end
-
-      # @return [String] the {TOOL_LINES} form a browser with no cookie gets:
-      #   the config file's, or `short` when the file named a form this shell
-      #   has no renderer for.
-      def default_tool_lines
-        configured = settings.tool_lines.to_s
-        TOOL_LINES.include?(configured) ? configured : 'short'
       end
 
       # The message's images, checked against the caps and typed by their bytes.
